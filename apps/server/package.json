@@ -1,0 +1,31 @@
+{
+  "name": "@neural-core/server",
+  "version": "0.1.0",
+  "description": "NeuralCore REST API + WebSocket server",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/swagger": "^9.5.0",
+    "@fastify/swagger-ui": "^5.2.2",
+    "@neural-core/core": "workspace:*",
+    "drizzle-orm": "^0.40.0",
+    "fastify": "^5.2.1",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@neural-core/tsconfig": "workspace:*",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.4",
+    "typescript": "5.7.3"
+  }
+}

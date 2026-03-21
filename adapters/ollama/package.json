@@ -1,0 +1,24 @@
+{
+  "name": "@neural-core/adapter-ollama",
+  "version": "0.1.0",
+  "description": "Ollama transparent proxy — injects NeuralCore memory into all Ollama requests",
+  "main": "./dist/proxy.js",
+  "bin": {
+    "neural-core-ollama": "./dist/proxy.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/proxy.ts",
+    "start": "node dist/proxy.js",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@neural-core/tsconfig": "workspace:*",
+    "tsx": "^4.19.4",
+    "typescript": "5.7.3"
+  }
+}

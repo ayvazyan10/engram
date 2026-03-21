@@ -1,0 +1,17 @@
+{
+  "name": "@neural-core/adapter-openclaw",
+  "version": "0.1.0",
+  "description": "OpenClaw integration adapter — connects NeuralCore memory to the OpenClaw agent system",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@neural-core/tsconfig": "workspace:*",
+    "tsx": "^4.19.4",
+    "typescript": "5.7.3"
+  }
+}
