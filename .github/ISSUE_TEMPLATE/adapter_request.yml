@@ -1,0 +1,41 @@
+name: Adapter Request
+description: Request or propose an integration with a new AI tool
+labels: ["adapter", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Want Engram to work with a new AI tool, framework, or platform? Tell us about it.
+
+  - type: input
+    id: tool
+    attributes:
+      label: Tool / platform name
+      placeholder: "e.g. LM Studio, llama.cpp, Anthropic API, OpenAI API, Jan, ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: how-it-works
+    attributes:
+      label: How the tool works
+      description: Briefly describe the tool's API or integration point (HTTP, SDK, CLI, etc.)
+    validations:
+      required: true
+
+  - type: textarea
+    id: integration-idea
+    attributes:
+      label: How memory should integrate
+      description: Where should Engram inject context, and where should responses be stored?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: willing-to-build
+    attributes:
+      label: Are you willing to build this?
+      options:
+        - label: "Yes, I'd like to submit a PR"
+        - label: "I can help test but not build"
+        - label: "I'm just requesting it"

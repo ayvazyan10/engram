@@ -1,10 +1,10 @@
 {
-  "name": "@neural-core/mcp",
+  "name": "@engram/mcp",
   "version": "0.1.0",
-  "description": "MCP Server — connects NeuralCore brain to Claude Code and any MCP client",
+  "description": "MCP Server — connects Engram brain to Claude Code and any MCP client",
   "main": "./dist/server.js",
   "bin": {
-    "neural-core-mcp": "./dist/server.js"
+    "engram-mcp": "./dist/server.js"
   },
   "scripts": {
     "build": "tsc",
@@ -16,12 +16,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",
-    "@neural-core/core": "workspace:*",
+    "@engram/core": "workspace:*",
     "uuid": "^11.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@neural-core/tsconfig": "workspace:*",
+    "@engram/tsconfig": "workspace:*",
     "@types/uuid": "^10.0.0",
     "typescript": "5.7.3"
   }

@@ -13,8 +13,8 @@ export function getDb(dbPath?: string): ReturnType<typeof drizzle<typeof schema>
 
   const resolvedPath =
     dbPath ??
-    process.env['NEURAL_CORE_DB_PATH'] ??
-    path.join(process.cwd(), 'neuralcore.db');
+    process.env['ENGRAM_DB_PATH'] ??
+    path.join(process.cwd(), 'engram.db');
 
   _sqlite = new Database(resolvedPath);
 

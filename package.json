@@ -1,5 +1,5 @@
 {
-  "name": "neural-core",
+  "name": "engram",
   "private": true,
   "version": "0.1.0",
   "description": "Universal AI Brain — persistent memory and cognition layer for any AI model",
@@ -10,13 +10,13 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "e2e": "turbo run e2e",
-    "db:generate": "pnpm --filter @neural-core/core drizzle-kit generate",
-    "db:migrate": "pnpm --filter @neural-core/core drizzle-kit migrate",
+    "db:generate": "pnpm --filter @engram/core drizzle-kit generate",
+    "db:migrate": "pnpm --filter @engram/core drizzle-kit migrate",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
-    "@neural-core/eslint-config": "workspace:*",
-    "@neural-core/tsconfig": "workspace:*",
+    "@engram/eslint-config": "workspace:*",
+    "@engram/tsconfig": "workspace:*",
     "@types/node": "22",
     "prettier": "3.5.2",
     "turbo": "2.3.3",

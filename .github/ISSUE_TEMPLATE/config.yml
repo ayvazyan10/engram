@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/your-org/engram/discussions
+    about: Ask questions, share ideas, or show what you built with Engram
+  - name: Security vulnerability
+    url: https://github.com/your-org/engram/security/advisories/new
+    about: Report a security issue privately

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * NeuralCore × Ollama Transparent Proxy
+ * Engram × Ollama Transparent Proxy
  *
  * Sits between your Ollama client and Ollama server.
- * Intercepts requests, injects NeuralCore memory context, stores responses.
+ * Intercepts requests, injects Engram memory context, stores responses.
  *
  * Usage:
  *   node dist/proxy.js
@@ -13,8 +13,8 @@
  * Environment:
  *   OLLAMA_PROXY_PORT=11435       (default: 11435)
  *   OLLAMA_TARGET=http://localhost:11434  (default)
- *   NEURAL_CORE_API=http://localhost:3001 (default)
- *   NEURAL_CORE_MAX_TOKENS=1500   (context tokens to inject, default: 1500)
+ *   ENGRAM_API=http://localhost:3001 (default)
+ *   ENGRAM_MAX_TOKENS=1500   (context tokens to inject, default: 1500)
  */
 
 import http from 'http';
@@ -23,16 +23,16 @@ import { URL } from 'url';
 
 const PROXY_PORT = parseInt(process.env['OLLAMA_PROXY_PORT'] ?? '11435', 10);
 const OLLAMA_TARGET = process.env['OLLAMA_TARGET'] ?? 'http://localhost:11434';
-const NEURAL_CORE_API = process.env['NEURAL_CORE_API'] ?? 'http://localhost:3001';
-const MAX_TOKENS = parseInt(process.env['NEURAL_CORE_MAX_TOKENS'] ?? '1500', 10);
+const ENGRAM_API = process.env['ENGRAM_API'] ?? 'http://localhost:3001';
+const MAX_TOKENS = parseInt(process.env['ENGRAM_MAX_TOKENS'] ?? '1500', 10);
 
 /**
- * Call NeuralCore /api/recall with the user's query.
- * Returns formatted context string (empty string if NeuralCore is unavailable).
+ * Call Engram /api/recall with the user's query.
+ * Returns formatted context string (empty string if Engram is unavailable).
  */
 async function recallContext(query: string): Promise<string> {
   try {
-    const response = await fetch(`${NEURAL_CORE_API}/api/recall`, {
+    const response = await fetch(`${ENGRAM_API}/api/recall`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, maxTokens: MAX_TOKENS, source: 'ollama' }),
@@ -43,17 +43,17 @@ async function recallContext(query: string): Promise<string> {
     const data = await response.json() as { context?: string };
     return data.context ?? '';
   } catch {
-    // NeuralCore unavailable — passthrough mode
+    // Engram unavailable — passthrough mode
     return '';
   }
 }
 
 /**
- * Store a memory in NeuralCore.
+ * Store a memory in Engram.
  */
 async function storeMemory(content: string, source: string = 'ollama'): Promise<void> {
   try {
-    await fetch(`${NEURAL_CORE_API}/api/memory`, {
+    await fetch(`${ENGRAM_API}/api/memory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content, type: 'episodic', source }),
@@ -80,7 +80,7 @@ function extractUserQuery(body: Record<string, unknown>): string {
 }
 
 /**
- * Inject NeuralCore context into the Ollama request.
+ * Inject Engram context into the Ollama request.
  */
 function injectContext(body: Record<string, unknown>, context: string): Record<string, unknown> {
   if (!context) return body;
@@ -141,7 +141,7 @@ const proxy = http.createServer(async (req, res) => {
           if (context) {
             const injected = injectContext(parsed, context);
             requestBody = Buffer.from(JSON.stringify(injected));
-            console.info(`[NeuralCore] Injected ${context.length} chars of context`);
+            console.info(`[Engram] Injected ${context.length} chars of context`);
           }
         }
       } catch {
@@ -211,7 +211,7 @@ const proxy = http.createServer(async (req, res) => {
     });
 
     proxyReq.on('error', (err) => {
-      console.error('[NeuralCore] Proxy error:', err.message);
+      console.error('[Engram] Proxy error:', err.message);
       res.writeHead(502);
       res.end('Bad Gateway: Ollama unavailable');
     });
@@ -222,10 +222,10 @@ const proxy = http.createServer(async (req, res) => {
 });
 
 proxy.listen(PROXY_PORT, () => {
-  console.info(`NeuralCore × Ollama Proxy`);
+  console.info(`Engram × Ollama Proxy`);
   console.info(`  Listening:    http://localhost:${PROXY_PORT}`);
   console.info(`  Ollama target: ${OLLAMA_TARGET}`);
-  console.info(`  NeuralCore:   ${NEURAL_CORE_API}`);
+  console.info(`  Engram:   ${ENGRAM_API}`);
   console.info('');
   console.info('Usage: OLLAMA_HOST=http://localhost:11435 ollama run llama3');
 });

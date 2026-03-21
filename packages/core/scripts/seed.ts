@@ -8,10 +8,10 @@ import { fileURLToPath } from 'url';
 import { NeuralBrain } from '../src/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, '..', 'neuralcore.db');
+const dbPath = path.join(__dirname, '..', 'engram.db');
 
 async function seed() {
-  console.info('Seeding NeuralCore database...');
+  console.info('Seeding Engram database...');
   console.info(`DB path: ${dbPath}`);
 
   const brain = new NeuralBrain({ dbPath, defaultSource: 'seed-script' });
@@ -30,8 +30,8 @@ async function seed() {
 
   await brain.store({
     type: 'semantic',
-    concept: 'NeuralCore',
-    content: 'NeuralCore is a universal AI brain — a persistent memory and cognition layer that gives any AI model human-like memory across sessions, systems, and restarts.',
+    concept: 'Engram',
+    content: 'Engram is a universal AI brain — a persistent memory and cognition layer that gives any AI model human-like memory across sessions, systems, and restarts.',
     tags: ['project', 'ai', 'memory'],
     importance: 0.9,
   });
@@ -70,7 +70,7 @@ async function seed() {
 
   await brain.store({
     type: 'episodic',
-    content: 'User clarified that NeuralCore should be a universal AI brain that integrates with Claude Code, Ollama, OpenClaw, and other AI systems via MCP and REST API.',
+    content: 'User clarified that Engram should be a universal AI brain that integrates with Claude Code, Ollama, OpenClaw, and other AI systems via MCP and REST API.',
     source: 'claude-code',
     tags: ['requirements', 'vision'],
     importance: 0.9,

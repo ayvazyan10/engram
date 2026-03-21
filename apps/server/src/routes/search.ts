@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { brain } from '../index.js';
-import type { MemoryType } from '@neural-core/core';
+import type { MemoryType } from '@engram/core';
 
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/search — semantic search

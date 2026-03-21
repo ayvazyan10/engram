@@ -25,7 +25,7 @@ import type { RecallOptions, RecallResult } from './retrieval/ContextAssembler.j
 import { VectorSearch } from './retrieval/VectorSearch.js';
 
 export interface BrainConfig {
-  /** Path to SQLite database file. Defaults to ./neuralcore.db */
+  /** Path to SQLite database file. Defaults to ./engram.db */
   dbPath?: string;
   /** Default source tag for stored memories */
   defaultSource?: string;

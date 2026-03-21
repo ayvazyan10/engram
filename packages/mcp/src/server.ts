@@ -1,27 +1,27 @@
 #!/usr/bin/env node
 /**
- * NeuralCore MCP Server
+ * Engram MCP Server
  *
- * Exposes NeuralCore brain capabilities as MCP tools for Claude Code
+ * Exposes Engram brain capabilities as MCP tools for Claude Code
  * and any MCP-compatible AI client.
  *
  * Run: node dist/server.js
  * Or add to ~/.claude/settings.json:
- *   { "mcpServers": { "neural-core": { "command": "node", "args": ["/path/to/dist/server.js"] } } }
+ *   { "mcpServers": { "engram": { "command": "node", "args": ["/path/to/dist/server.js"] } } }
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { NeuralBrain } from '@neural-core/core';
+import { NeuralBrain } from '@engram/core';
 import { z } from 'zod';
 
 const brain = new NeuralBrain({
-  dbPath: process.env['NEURAL_CORE_DB_PATH'],
+  dbPath: process.env['ENGRAM_DB_PATH'],
   defaultSource: 'claude-code',
 });
 
 const server = new McpServer({
-  name: 'neural-core',
+  name: 'engram',
   version: '0.1.0',
 });
 
@@ -283,7 +283,7 @@ async function ensureInitialized(): Promise<void> {
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('NeuralCore MCP server running on stdio');
+  console.error('Engram MCP server running on stdio');
 }
 
 main().catch((err: unknown) => {

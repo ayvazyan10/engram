@@ -1,16 +1,16 @@
 /**
- * NeuralCore × OpenClaw Adapter
+ * Engram × OpenClaw Adapter
  *
- * Provides OpenClaw agents with access to NeuralCore's persistent memory.
+ * Provides OpenClaw agents with access to Engram's persistent memory.
  *
  * Usage in OpenClaw agents:
- *   import { NeuralCoreClient } from '@neural-core/adapter-openclaw';
- *   const memory = new NeuralCoreClient();
+ *   import { EngramClient } from '@engram/adapter-openclaw';
+ *   const memory = new EngramClient();
  *   const context = await memory.recall('what did the user ask about last time?');
  *
- * Configuration: Set NEURAL_CORE_API environment variable or pass url to constructor.
+ * Configuration: Set ENGRAM_API environment variable or pass url to constructor.
  * Or add to ~/.openclaw/openclaw.json:
- *   { "neuralCore": { "url": "http://localhost:3001" } }
+ *   { "engram": { "url": "http://localhost:3001" } }
  */
 
 export interface RecallResult {
@@ -35,7 +35,7 @@ export interface MemoryStats {
   bySource: Record<string, number>;
 }
 
-export class NeuralCoreClient {
+export class EngramClient {
   private readonly baseUrl: string;
   private readonly source: string;
   private readonly defaultTimeout: number;
@@ -43,7 +43,7 @@ export class NeuralCoreClient {
   constructor(options: { url?: string; source?: string; timeoutMs?: number } = {}) {
     this.baseUrl =
       options.url ??
-      process.env['NEURAL_CORE_API'] ??
+      process.env['ENGRAM_API'] ??
       'http://localhost:3001';
     this.source = options.source ?? 'openclaw';
     this.defaultTimeout = options.timeoutMs ?? 5000;
@@ -104,7 +104,7 @@ export class NeuralCoreClient {
   }
 
   /**
-   * Check if NeuralCore is reachable.
+   * Check if Engram is reachable.
    */
   async ping(): Promise<boolean> {
     try {
@@ -119,7 +119,7 @@ export class NeuralCoreClient {
     const response = await fetch(`${this.baseUrl}${path}`, {
       signal: AbortSignal.timeout(this.defaultTimeout),
     });
-    if (!response.ok) throw new Error(`NeuralCore API error: ${response.status}`);
+    if (!response.ok) throw new Error(`Engram API error: ${response.status}`);
     return response.json();
   }
 
@@ -130,24 +130,24 @@ export class NeuralCoreClient {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.defaultTimeout),
     });
-    if (!response.ok) throw new Error(`NeuralCore API error: ${response.status}`);
+    if (!response.ok) throw new Error(`Engram API error: ${response.status}`);
     return response.json();
   }
 }
 
 /**
  * Convenience function: recall context and format for injection.
- * Returns empty string if NeuralCore is unavailable (graceful degradation).
+ * Returns empty string if Engram is unavailable (graceful degradation).
  */
 export async function withMemory(
   query: string,
   options: { url?: string; source?: string; maxTokens?: number } = {}
 ): Promise<string> {
   try {
-    const client = new NeuralCoreClient({ url: options.url, source: options.source });
+    const client = new EngramClient({ url: options.url, source: options.source });
     const result = await client.recall(query, options.maxTokens);
     return result.context;
   } catch {
-    return ''; // NeuralCore unavailable — continue without memory
+    return ''; // Engram unavailable — continue without memory
   }
 }

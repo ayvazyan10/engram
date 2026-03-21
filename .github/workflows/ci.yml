@@ -42,9 +42,9 @@ jobs:
           pnpm db:generate
           pnpm db:migrate
         env:
-          NEURAL_CORE_DB_PATH: /tmp/neuralcore-test.db
+          ENGRAM_DB_PATH: /tmp/engram-test.db
 
       - name: Test
         run: pnpm turbo run test
         env:
-          NEURAL_CORE_DB_PATH: /tmp/neuralcore-test.db
+          ENGRAM_DB_PATH: /tmp/engram-test.db

@@ -1,7 +1,7 @@
 import type { Config } from 'drizzle-kit';
 import path from 'path';
 
-const dbPath = process.env.NEURAL_CORE_DB_PATH ?? path.join(process.cwd(), 'neuralcore.db');
+const dbPath = process.env.ENGRAM_DB_PATH ?? path.join(process.cwd(), 'engram.db');
 
 export default {
   schema: './src/db/schema.ts',

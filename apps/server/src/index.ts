@@ -1,6 +1,5 @@
 import Fastify from 'fastify';
-import { NeuralBrain } from '@neural-core/core';
-import { createServer } from 'http';
+import { NeuralBrain } from '@engram/core';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
@@ -16,7 +15,7 @@ const HOST = process.env['HOST'] ?? '0.0.0.0';
 
 // Shared brain instance (initialized once)
 export const brain = new NeuralBrain({
-  dbPath: process.env['NEURAL_CORE_DB_PATH'],
+  dbPath: process.env['ENGRAM_DB_PATH'],
   defaultSource: 'rest-api',
 });
 
@@ -25,7 +24,7 @@ export let io: SocketIOServer;
 
 async function start() {
   // Initialize brain
-  console.info('Initializing NeuralCore brain...');
+  console.info('Initializing Engram brain...');
   await brain.initialize();
   console.info('Brain initialized.');
 
@@ -40,7 +39,7 @@ async function start() {
   // Swagger
   await app.register(swagger, {
     openapi: {
-      info: { title: 'NeuralCore API', description: 'Universal AI Brain REST API', version: '0.1.0' },
+      info: { title: 'Engram API', description: 'Universal AI Brain REST API', version: '0.1.0' },
       tags: [
         { name: 'memory', description: 'Memory CRUD operations' },
         { name: 'search', description: 'Semantic search and recall' },
@@ -58,10 +57,13 @@ async function start() {
   await app.register(searchRoutes, { prefix: '/api' });
   await app.register(graphRoutes, { prefix: '/api' });
 
-  // Create HTTP server for Socket.io
-  const httpServer = createServer(app.server);
+  // Start Fastify — it creates and owns the HTTP server
+  await app.listen({ port: PORT, host: HOST });
+  console.info(`Engram API running at http://${HOST}:${PORT}`);
+  console.info(`Swagger docs: http://${HOST}:${PORT}/docs`);
 
-  io = new SocketIOServer(httpServer, {
+  // Attach Socket.io to Fastify's underlying HTTP server
+  io = new SocketIOServer(app.server, {
     cors: { origin: '*' },
   });
 
@@ -72,14 +74,7 @@ async function start() {
       console.info(`WebSocket disconnected: ${socket.id}`);
     });
   });
-
-  // Start
-  await app.ready();
-  httpServer.listen(PORT, HOST, () => {
-    console.info(`NeuralCore API running at http://${HOST}:${PORT}`);
-    console.info(`Swagger docs: http://${HOST}:${PORT}/docs`);
-    console.info(`WebSocket: ws://${HOST}:${PORT}/neural`);
-  });
+  console.info(`WebSocket: ws://${HOST}:${PORT}/neural`);
 }
 
 // Graceful shutdown

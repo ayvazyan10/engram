@@ -7,18 +7,18 @@ services:
     ports:
       - '5432:5432'
     environment:
-      POSTGRES_DB: neuralcore
-      POSTGRES_USER: neuralcore
+      POSTGRES_DB: engram
+      POSTGRES_USER: engram
       POSTGRES_PASSWORD: dev_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U neuralcore']
+      test: ['CMD-SHELL', 'pg_isready -U engram']
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # NeuralCore REST API
+  # Engram REST API
   api:
     build:
       context: .
@@ -26,7 +26,7 @@ services:
     ports:
       - '3001:3001'
     environment:
-      NEURAL_CORE_DB_PATH: /data/neuralcore.db
+      ENGRAM_DB_PATH: /data/engram.db
       NODE_ENV: production
     volumes:
       - api_data:/data
@@ -39,7 +39,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # NeuralCore Web Dashboard
+  # Engram Web Dashboard
   web:
     build:
       context: .

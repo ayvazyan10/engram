@@ -1,7 +1,7 @@
 {
-  "name": "@neural-core/adapter-openclaw",
+  "name": "@engram/adapter-openclaw",
   "version": "0.1.0",
-  "description": "OpenClaw integration adapter — connects NeuralCore memory to the OpenClaw agent system",
+  "description": "OpenClaw integration adapter — connects Engram memory to the OpenClaw agent system",
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -10,7 +10,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "devDependencies": {
-    "@neural-core/tsconfig": "workspace:*",
+    "@engram/tsconfig": "workspace:*",
     "tsx": "^4.19.4",
     "typescript": "5.7.3"
   }

@@ -1,5 +1,5 @@
 {
-  "name": "@neural-core/eslint-config",
+  "name": "@engram/eslint-config",
   "version": "0.0.1",
   "private": true,
   "main": "index.js",
