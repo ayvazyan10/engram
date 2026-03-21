@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/your-org/engram/main/apps/web/public/logo.svg" alt="Engram Logo" width="80" height="80">
+<img src="https://raw.githubusercontent.com/ayvazyan10/engram/main/apps/web/public/logo.svg" alt="Engram Logo" width="80" height="80">
 
 # Engram
 
 **Universal AI Brain — persistent memory and cognition layer for any AI model**
 
-[![CI](https://github.com/your-org/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/engram/actions/workflows/ci.yml)
+[![CI](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml)
 [![npm @engram/core](https://img.shields.io/npm/v/@engram/core?label=%40engram%2Fcore&color=6366f1)](https://www.npmjs.com/package/@engram/core)
 [![npm @engram/mcp](https://img.shields.io/npm/v/@engram/mcp?label=%40engram%2Fmcp&color=6366f1)](https://www.npmjs.com/package/@engram/mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -87,7 +87,7 @@ Any app ─────REST─────────→ ┘
 ### Install
 
 ```bash
-git clone https://github.com/your-org/engram
+git clone https://github.com/ayvazyan10/engram
 cd engram
 pnpm install
 ```

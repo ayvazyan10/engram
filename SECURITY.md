@@ -10,7 +10,7 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, open a [GitHub Security Advisory](https://github.com/your-org/engram/security/advisories/new) or email the maintainers directly.
+Instead, open a [GitHub Security Advisory](https://github.com/ayvazyan10/engram/security/advisories/new) or email the maintainers directly.
 
 Include:
 

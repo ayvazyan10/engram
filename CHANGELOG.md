@@ -47,4 +47,4 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
-[0.1.0]: https://github.com/your-org/engram/releases/tag/v0.1.0
+[0.1.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.1.0

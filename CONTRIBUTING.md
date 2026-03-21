@@ -18,7 +18,7 @@ Thank you for your interest in contributing! Engram is an open-source project an
 ## Development setup
 
 ```bash
-git clone https://github.com/your-org/engram
+git clone https://github.com/ayvazyan10/engram
 cd engram
 pnpm install
 pnpm turbo run build
@@ -134,4 +134,4 @@ ESLint runs via `pnpm turbo run lint`. Fix issues before opening a PR.
 
 ## Questions?
 
-Open a [GitHub Discussion](https://github.com/your-org/engram/discussions) — not an issue — for questions, ideas, and general conversation.
+Open a [GitHub Discussion](https://github.com/ayvazyan10/engram/discussions) — not an issue — for questions, ideas, and general conversation.
