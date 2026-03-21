@@ -1,0 +1,71 @@
+version: '3.9'
+
+services:
+  # PostgreSQL with pgvector extension for production-like dev
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_DB: neuralcore
+      POSTGRES_USER: neuralcore
+      POSTGRES_PASSWORD: dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U neuralcore']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # NeuralCore REST API
+  api:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    ports:
+      - '3001:3001'
+    environment:
+      NEURAL_CORE_DB_PATH: /data/neuralcore.db
+      NODE_ENV: production
+    volumes:
+      - api_data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost:3001/api/health']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # NeuralCore Web Dashboard
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - '5173:80'
+    depends_on:
+      - api
+
+  # Ollama (optional — for local LLM with memory)
+  # Uncomment to enable:
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - '11434:11434'
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  api_data:
+  # ollama_data:
