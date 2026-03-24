@@ -149,6 +149,184 @@ Output:
 
 ---
 
+#### `decay_sweep`
+
+Run a memory decay sweep — evaluate all memories and archive stale ones.
+
+```
+Input:
+  dryRun  boolean  optional  — preview without modifying (default: false)
+
+Output:
+  { scannedCount, archivedCount, decayedCount, protectedCount, consolidatedCount, durationMs }
+```
+
+---
+
+#### `decay_policy`
+
+View or update the memory decay policy configuration.
+
+```
+Input:
+  action               "get"|"update"  required
+  halfLifeDays         number          optional — Ebbinghaus half-life in days
+  archiveThreshold     number          optional — retention score floor (0–1)
+  importanceDecayRate  number          optional — daily importance reduction
+  importanceFloor      number          optional — minimum importance
+  consolidationEnabled boolean         optional — enable/disable auto-consolidation
+
+Output:
+  { policy: { ... }, message: "..." }
+```
+
+---
+
+#### `check_contradictions`
+
+Check a memory for contradictions, or list all unresolved contradictions.
+
+```
+Input:
+  memoryId  string  optional  — if provided, checks that memory; if omitted, lists all unresolved
+
+Output:
+  { hasContradictions, contradictions: [...], candidatesChecked, latencyMs }
+```
+
+---
+
+#### `resolve_contradiction`
+
+Resolve a contradiction between two memories.
+
+```
+Input:
+  sourceId  string  required  — first memory ID
+  targetId  string  required  — second memory ID
+  strategy  string  required  — keep_newest | keep_oldest | keep_important | keep_both | manual
+
+Output:
+  { resolved, keptId, archivedId }
+```
+
+---
+
+#### `embedding_status`
+
+Get embedding model status — current model, stale/legacy counts.
+
+```
+Input: (none)
+
+Output:
+  { currentModel, currentDimension, totalEmbedded, currentModelCount, staleCount, legacyCount, needsReEmbed }
+```
+
+---
+
+#### `re_embed`
+
+Re-embed memories with the current model. Use after switching embedding models.
+
+```
+Input:
+  onlyStale  boolean  optional  — only re-embed stale/legacy memories (default: true)
+  batchSize  number   optional  — batch size 1–100 (default: 32)
+
+Output:
+  { total, processed, failed, failedIds, durationMs, model }
+```
+
+---
+
+#### `index_status`
+
+Get vector index status — how it was loaded, entry count, persistence info.
+
+```
+Input: (none)
+
+Output:
+  { loadedFrom, entryCount, dimension, indexPath, indexFileExists, incrementalCount, initDurationMs }
+```
+
+---
+
+#### `list_tags`
+
+Get the tag cloud, or get memories for a specific tag.
+
+```
+Input:
+  tag    string  optional  — if provided, returns memories with this tag; if omitted, returns tag cloud
+  limit  number  optional  — max memories when filtering by tag (default: 50)
+
+Output:
+  { count, tags: [{ tag, count }] }  — or —  { tag, count, memories: [...] }
+```
+
+---
+
+#### `tag_memory`
+
+Add or remove a tag on a memory.
+
+```
+Input:
+  memoryId  string  required  — memory ID to tag/untag
+  tag       string  required  — tag to add or remove
+  action    string  optional  — "add" (default) or "remove"
+
+Output:
+  { id, tags: [...] }
+```
+
+---
+
+#### `webhook_subscribe`
+
+Subscribe a URL to receive HTTP callbacks on memory events.
+
+```
+Input:
+  url          string    required  — HTTP(S) URL to receive POST requests
+  events       string[]  required  — events: stored, forgotten, decayed, consolidated, contradiction
+  secret       string    optional  — shared secret for HMAC-SHA256 signing
+  description  string    optional  — human-readable description
+
+Output:
+  { id, url, events, active }
+```
+
+---
+
+#### `webhook_list`
+
+List all webhook subscriptions.
+
+```
+Input: (none)
+
+Output:
+  { count, webhooks: [{ id, url, events, active, failCount }] }
+```
+
+---
+
+#### `plugin_list`
+
+List all registered plugins with their hooks and metadata.
+
+```
+Input: (none)
+
+Output:
+  { count, plugins: [{ id, name, version, hooks, registeredAt }] }
+```
+
+---
+
 ### Recommended workflow for Claude Code sessions
 
 ```

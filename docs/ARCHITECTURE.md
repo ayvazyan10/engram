@@ -19,7 +19,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
 │  MCP Server  │  │  Ollama Proxy    │  │   REST API :4901      │
 │  @engram/mcp     │  │  @engram/adapter-    │  │   @engram/server          │
 │              │  │  ollama          │  │   Fastify 5           │
-│  6 MCP tools │  │  :11435→:11434   │  │   + Socket.io /neural │
+│ 18 MCP tools │  │  :11435→:11434   │  │   + Socket.io /neural │
 └──────┬───────┘  └────────┬─────────┘  └──────────┬────────────┘
        │                   │                        │
        └──────────────┬────┘────────────────────────┘
