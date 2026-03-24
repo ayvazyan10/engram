@@ -314,9 +314,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 Key areas where help is especially welcome:
 
 - **New adapters** — LM Studio, llama.cpp, Anthropic API, OpenAI API
-- **PostgreSQL + pgvector** — production database support
 - **Mobile / browser** — lightweight browser-side memory client
 - **Multi-modal embeddings** — images, audio alongside text
+- **pgvector native search** — use PostgreSQL's vector index instead of in-memory HNSW
 
 ---
 
