@@ -90,7 +90,7 @@ See `adapters/ollama/` for a proxy pattern and `adapters/openclaw/` for a librar
 
 ```typescript
 // Minimal adapter pattern
-const context = await fetch('http://localhost:3001/api/recall', {
+const context = await fetch('http://localhost:4901/api/recall', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ query: userMessage, maxTokens: 2000 }),
@@ -98,7 +98,7 @@ const context = await fetch('http://localhost:3001/api/recall', {
 
 // inject `context` into system prompt, run your AI
 
-await fetch('http://localhost:3001/api/memory', {
+await fetch('http://localhost:4901/api/memory', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ content: `User: ${userMessage}\nAssistant: ${response}`, type: 'episodic' }),

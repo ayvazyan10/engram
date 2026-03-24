@@ -29,7 +29,11 @@
     "lz4js": "^0.2.0",
     "uuid": "^11.1.0"
   },
+  "optionalDependencies": {
+    "pg": "^8.13.0"
+  },
   "devDependencies": {
+    "@types/pg": "^8.11.0",
     "@engram/tsconfig": "workspace:*",
     "@types/better-sqlite3": "^7.6.12",
     "@types/uuid": "^10.0.0",

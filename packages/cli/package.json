@@ -1,0 +1,25 @@
+{
+  "name": "@engram/cli",
+  "version": "0.1.0",
+  "description": "Engram CLI — store, search, recall, and manage AI memories from the terminal",
+  "type": "module",
+  "bin": {
+    "engram": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@engram/core": "workspace:*",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@engram/tsconfig": "workspace:*",
+    "tsx": "^4.19.4",
+    "typescript": "5.7.3"
+  }
+}

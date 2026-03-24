@@ -1,38 +1,51 @@
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import path from 'path';
-import * as schema from './schema.js';
+/**
+ * Database client — backwards-compatible wrapper over the adapter layer.
+ *
+ * getDb() and closeDb() maintain the same API as before.
+ * Internally they delegate to the DatabaseAdapter which supports
+ * both SQLite (default) and PostgreSQL (opt-in).
+ */
 
-export type { Memory, NewMemory, MemoryType, RelationshipType, MemoryConnection, NewMemoryConnection, Session, NewSession, ContextAssembly, NewContextAssembly } from './schema.js';
+import { getDatabase, closeDatabase, getDialect, schema } from './adapter.js';
+import type { DatabaseDialect, AdapterConfig, DatabaseConnection } from './adapter.js';
 
-let _db: ReturnType<typeof drizzle<typeof schema>> | null = null;
-let _sqlite: Database.Database | null = null;
+export type { Memory, NewMemory, MemoryType, RelationshipType, MemoryConnection, NewMemoryConnection, Session, NewSession, ContextAssembly, NewContextAssembly, Webhook, NewWebhook } from './schema.js';
 
-export function getDb(dbPath?: string): ReturnType<typeof drizzle<typeof schema>> {
-  if (_db) return _db;
+// Re-export the drizzle type for backwards compat
+// Both SQLite and PostgreSQL drizzle instances expose the same query API
+import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
-  const resolvedPath =
-    dbPath ??
-    process.env['ENGRAM_DB_PATH'] ??
-    path.join(process.cwd(), 'engram.db');
-
-  _sqlite = new Database(resolvedPath);
-
-  // Enable WAL mode for better write performance
-  _sqlite.pragma('journal_mode = WAL');
-  _sqlite.pragma('synchronous = NORMAL');
-  _sqlite.pragma('cache_size = 10000');
-  _sqlite.pragma('foreign_keys = ON');
-
-  _db = drizzle(_sqlite, { schema });
-  return _db;
+/**
+ * Get the drizzle ORM instance.
+ *
+ * @param dbPath Optional SQLite path (backwards compat). Ignored in PostgreSQL mode.
+ */
+export function getDb(dbPath?: string): DrizzleDb {
+  const conn = getDatabase(dbPath);
+  return conn.db as DrizzleDb;
 }
 
+/**
+ * Close the database connection.
+ */
 export function closeDb(): void {
-  _sqlite?.close();
-  _db = null;
-  _sqlite = null;
+  closeDatabase();
 }
 
-export { schema };
+/**
+ * Get the current database dialect.
+ */
+export function getDatabaseDialect(): DatabaseDialect {
+  return getDialect();
+}
 
+/**
+ * Get the full database connection with metadata.
+ */
+export function getDatabaseConnection(config?: AdapterConfig): DatabaseConnection {
+  return getDatabase(config);
+}
+
+export { schema, getDatabase, closeDatabase, getDialect };
+export type { DatabaseDialect, AdapterConfig, DatabaseConnection };

@@ -24,7 +24,7 @@ services:
       context: .
       dockerfile: apps/server/Dockerfile
     ports:
-      - '3001:3001'
+      - '4901:4901'
     environment:
       ENGRAM_DB_PATH: /data/engram.db
       NODE_ENV: production
@@ -34,7 +34,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost:3001/api/health']
+      test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost:4901/api/health']
       interval: 10s
       timeout: 5s
       retries: 3
@@ -45,7 +45,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     ports:
-      - '5173:80'
+      - '4902:80'
     depends_on:
       - api
 

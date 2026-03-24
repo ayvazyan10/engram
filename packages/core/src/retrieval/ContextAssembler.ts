@@ -20,6 +20,32 @@ import { KnowledgeGraph } from '../graph/KnowledgeGraph.js';
 import { scoreMemory } from './ImportanceScorer.js';
 import { VectorSearch } from './VectorSearch.js';
 
+/** Phase of the streaming recall pipeline */
+export type RecallPhase = 'vector' | 'graph' | 'complete';
+
+/** A single chunk emitted during streaming recall */
+export interface RecallChunk {
+  /** Phase that produced this chunk */
+  phase: RecallPhase;
+  /** The memory with its scores */
+  memory: RecalledMemory;
+  /** Running total of memories yielded so far */
+  rank: number;
+  /** Partial context string assembled so far (updated each chunk) */
+  contextSoFar: string;
+}
+
+/** Final event emitted when streaming recall completes */
+export interface RecallStreamComplete {
+  phase: 'complete';
+  /** Full assembled context */
+  context: string;
+  /** All memories in final scored order */
+  memories: RecalledMemory[];
+  /** Total latency */
+  latencyMs: number;
+}
+
 export interface RecallOptions {
   /** Maximum number of tokens to include in assembled context (approx 4 chars/token) */
   maxTokens?: number;
@@ -37,6 +63,8 @@ export interface RecallOptions {
   source?: string;
   /** Session ID for logging */
   sessionId?: string;
+  /** If true, recall across all namespaces regardless of brain's namespace setting */
+  crossNamespace?: boolean;
 }
 
 export interface RecalledMemory {
@@ -61,7 +89,8 @@ export interface RecallResult {
 export class ContextAssembler {
   constructor(
     private readonly vectorSearch: VectorSearch,
-    private readonly graph: KnowledgeGraph
+    private readonly graph: KnowledgeGraph,
+    private readonly namespace?: string
   ) {}
 
   async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
@@ -75,6 +104,7 @@ export class ContextAssembler {
       graphDepth = 2,
       source,
       sessionId,
+      crossNamespace,
     } = options;
 
     const db = getDb();
@@ -82,8 +112,8 @@ export class ContextAssembler {
     // Step 1: Embed the query
     const queryVec = await embed(query);
 
-    // Step 2: Vector search
-    const vectorResults = this.vectorSearch.search(queryVec, topK, threshold, types);
+    // Step 2: Vector search (namespace-scoped when configured)
+    const vectorResults = this.vectorSearch.search(queryVec, topK, threshold, types, this.namespace, crossNamespace);
     const candidateIds = new Set(vectorResults.map((r) => r.id));
 
     // Step 3: Graph expansion
@@ -119,6 +149,8 @@ export class ContextAssembler {
         if (record && !record.archivedAt) {
           // Apply source filter
           if (sources && record.source && !sources.includes(record.source)) continue;
+          // Apply namespace filter
+          if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
           records.push(record);
         }
       }
@@ -201,6 +233,197 @@ export class ContextAssembler {
         score: s.score,
         similarity: s.similarity,
         source: s.record.source,
+      })),
+      latencyMs,
+    };
+  }
+
+  /**
+   * Streaming recall — yields memories progressively as they're found and scored.
+   *
+   * Phase 1 (vector): High-confidence vector search results, yielded immediately.
+   * Phase 2 (graph): Graph-expanded neighbors, scored and yielded.
+   * Phase 3 (complete): Final event with full assembled context.
+   *
+   * @param query The recall query
+   * @param options Standard recall options
+   * @yields RecallChunk for each memory, then RecallStreamComplete
+   */
+  async *recallStream(
+    query: string,
+    options: RecallOptions = {}
+  ): AsyncGenerator<RecallChunk | RecallStreamComplete> {
+    const startTime = Date.now();
+    const {
+      maxTokens = 2000,
+      sources,
+      types,
+      threshold = 0.3,
+      topK = 20,
+      graphDepth = 2,
+      source,
+      sessionId,
+      crossNamespace,
+    } = options;
+
+    const db = getDb();
+    const maxChars = maxTokens * 4;
+    let totalChars = 0;
+    let rank = 0;
+
+    // Track all yielded memories for final context and dedup
+    const yieldedIds = new Set<string>();
+    const allYielded: Array<{ record: Memory; score: number; similarity: number }> = [];
+
+    // Step 1: Embed query
+    const queryVec = await embed(query);
+
+    // Step 2: Vector search — yield results immediately as Phase 1
+    const vectorResults = this.vectorSearch.search(queryVec, topK, threshold, types, this.namespace, crossNamespace);
+
+    for (const vr of vectorResults) {
+      if (totalChars >= maxChars) break;
+
+      const [record] = await db
+        .select()
+        .from(schema.memories)
+        .where(eq(schema.memories.id, vr.id))
+        .limit(1);
+
+      if (!record || record.archivedAt) continue;
+      if (sources && record.source && !sources.includes(record.source)) continue;
+      if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
+
+      const score = scoreMemory({
+        similarity: vr.similarity,
+        createdAt: record.createdAt,
+        lastAccessedAt: record.lastAccessedAt,
+        importance: record.importance,
+        accessCount: record.accessCount,
+      });
+
+      yieldedIds.add(record.id);
+      allYielded.push({ record, score, similarity: vr.similarity });
+      totalChars += record.content.length;
+      rank++;
+
+      const recalled: RecalledMemory = {
+        id: record.id,
+        type: record.type as MemoryType,
+        content: record.content,
+        summary: record.summary,
+        score,
+        similarity: vr.similarity,
+        source: record.source,
+      };
+
+      yield {
+        phase: 'vector',
+        memory: recalled,
+        rank,
+        contextSoFar: formatContext(allYielded.map((y) => y.record)),
+      };
+    }
+
+    // Step 3: Graph expansion — yield new neighbors as Phase 2
+    const graphNeighbors = this.graph.expand(
+      vectorResults.slice(0, 10).map((r) => r.id),
+      graphDepth
+    );
+
+    for (const neighbor of graphNeighbors) {
+      if (yieldedIds.has(neighbor.id)) continue;
+      if (totalChars >= maxChars) break;
+
+      const [record] = await db
+        .select()
+        .from(schema.memories)
+        .where(eq(schema.memories.id, neighbor.id))
+        .limit(1);
+
+      if (!record || record.archivedAt) continue;
+      if (sources && record.source && !sources.includes(record.source)) continue;
+      if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
+
+      // Graph-expanded memories get a lower base similarity
+      const similarity = 0.1;
+      const score = scoreMemory({
+        similarity,
+        createdAt: record.createdAt,
+        lastAccessedAt: record.lastAccessedAt,
+        importance: record.importance,
+        accessCount: record.accessCount,
+      });
+
+      yieldedIds.add(record.id);
+      allYielded.push({ record, score, similarity });
+      totalChars += record.content.length;
+      rank++;
+
+      const recalled: RecalledMemory = {
+        id: record.id,
+        type: record.type as MemoryType,
+        content: record.content,
+        summary: record.summary,
+        score,
+        similarity,
+        source: record.source,
+      };
+
+      yield {
+        phase: 'graph',
+        memory: recalled,
+        rank,
+        contextSoFar: formatContext(allYielded.map((y) => y.record)),
+      };
+    }
+
+    // Update access counts (fire and forget)
+    const now = new Date().toISOString();
+    for (const { record } of allYielded) {
+      void db
+        .update(schema.memories)
+        .set({
+          accessCount: record.accessCount + 1,
+          lastAccessedAt: now,
+        })
+        .where(eq(schema.memories.id, record.id));
+    }
+
+    // Log to context_assemblies
+    const latencyMs = Date.now() - startTime;
+    void db.insert(schema.contextAssemblies).values({
+      id: uuidv4(),
+      query,
+      queryEmbedding: packFP16(queryVec),
+      assembledContext: JSON.stringify(
+        allYielded.map((s) => ({
+          memoryId: s.record.id,
+          score: s.score,
+          type: s.record.type,
+        }))
+      ),
+      source: source ?? null,
+      sessionId: sessionId ?? null,
+      latencyMs,
+    });
+
+    // Final sort by score for the complete context
+    allYielded.sort((a, b) => b.score - a.score);
+    const finalContext = formatContext(allYielded.map((y) => y.record));
+
+    // Phase 3: Complete
+    yield {
+      phase: 'complete',
+      context: finalContext,
+      memories: allYielded.map((y) => ({
+        id: y.record.id,
+        type: y.record.type as MemoryType,
+        content: y.record.content,
+        summary: y.record.summary,
+        score: y.score,
+        similarity: y.similarity,
+        source: y.record.source,
       })),
       latencyMs,
     };

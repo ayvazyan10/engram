@@ -11,8 +11,24 @@ let pipeline: any = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let embedder: any = null;
 
-const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
-const EMBEDDING_DIM = 384;
+/** Default embedding model. Can be overridden via ENGRAM_EMBEDDING_MODEL env var. */
+const DEFAULT_MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
+const DEFAULT_EMBEDDING_DIM = 384;
+
+/** Active model ID (resolved at first embed call). */
+let activeModelId: string = process.env['ENGRAM_EMBEDDING_MODEL'] ?? DEFAULT_MODEL_ID;
+
+/** Known model → dimension mappings. */
+const MODEL_DIMENSIONS: Record<string, number> = {
+  'Xenova/all-MiniLM-L6-v2': 384,
+  'Xenova/all-MiniLM-L12-v2': 384,
+  'Xenova/bge-small-en-v1.5': 384,
+  'Xenova/bge-base-en-v1.5': 768,
+  'Xenova/gte-small': 384,
+  'Xenova/gte-base': 768,
+};
+
+const EMBEDDING_DIM = MODEL_DIMENSIONS[activeModelId] ?? DEFAULT_EMBEDDING_DIM;
 
 export async function getEmbedder(): Promise<typeof embedder> {
   if (embedder) return embedder;
@@ -22,7 +38,7 @@ export async function getEmbedder(): Promise<typeof embedder> {
     pipeline = transformers.pipeline;
   }
 
-  embedder = await pipeline('feature-extraction', MODEL_ID, {
+  embedder = await pipeline('feature-extraction', activeModelId, {
     quantized: true, // use quantized ONNX model (~25MB vs ~90MB)
   });
 
@@ -59,6 +75,30 @@ export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
 }
 
 export const EMBEDDING_DIMENSION = EMBEDDING_DIM;
+
+/** Get the currently active embedding model ID. */
+export function getEmbeddingModelId(): string {
+  return activeModelId;
+}
+
+/** Get the dimension for a given model ID, or the current model's dimension. */
+export function getModelDimension(modelId?: string): number {
+  return MODEL_DIMENSIONS[modelId ?? activeModelId] ?? DEFAULT_EMBEDDING_DIM;
+}
+
+/**
+ * Switch the active embedding model at runtime.
+ * Clears the cached embedder so the next embed() call loads the new model.
+ * Returns the new dimension for the model.
+ */
+export function switchEmbeddingModel(modelId: string): number {
+  activeModelId = modelId;
+  embedder = null; // force reload on next embed()
+  return MODEL_DIMENSIONS[modelId] ?? DEFAULT_EMBEDDING_DIM;
+}
+
+/** All known model IDs and their dimensions. */
+export { MODEL_DIMENSIONS };
 
 // ─── FP16 compression utilities ──────────────────────────────────────────────
 

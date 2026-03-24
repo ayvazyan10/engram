@@ -15,6 +15,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       metadata?: Record<string, unknown>;
       importance?: number;
       concept?: string;
+      namespace?: string;
     };
   }>('/memory', {
     schema: {
@@ -31,14 +32,21 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           tags: { type: 'array', items: { type: 'string' } },
           importance: { type: 'number', minimum: 0, maximum: 1 },
           concept: { type: 'string' },
+          namespace: { type: 'string' },
         },
       },
     },
     handler: async (req, reply) => {
-      const memory = await brain.store(req.body);
-      io?.emit('memory:stored', { id: memory.id, type: memory.type });
+      const result = await brain.store(req.body);
+      io?.emit('memory:stored', { id: result.memory.id, type: result.memory.type });
+      if (result.contradictions.hasContradictions) {
+        io?.emit('memory:contradiction', {
+          memoryId: result.memory.id,
+          contradictions: result.contradictions.contradictions,
+        });
+      }
       reply.code(201);
-      return memory;
+      return result;
     },
   });
 
@@ -83,7 +91,8 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         return {
           count: results.length,
           latencyMs: Date.now() - start,
-          ids: results.map((m) => m.id),
+          ids: results.map((r) => r.memory.id),
+          contradictions: results.filter((r) => r.contradictions.hasContradictions).length,
         };
       },
     }
@@ -113,6 +122,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         const conditions = [isNull(schema.memories.archivedAt)];
         if (type) conditions.push(eq(schema.memories.type, type as 'episodic' | 'semantic' | 'procedural'));
         if (source) conditions.push(eq(schema.memories.source, source));
+        // Scope to brain's namespace if configured
+        const ns = brain.getNamespace();
+        if (ns) conditions.push(eq(schema.memories.namespace, ns));
 
         const memories = await db
           .select()

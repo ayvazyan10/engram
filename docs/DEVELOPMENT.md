@@ -85,16 +85,16 @@ ENGRAM_DB_PATH=../core/engram.db \
   npx tsx src/index.ts
 ```
 
-Server starts at `http://localhost:3001`.
+Server starts at `http://localhost:4901`.
 
 ### Start the dashboard
 
 ```bash
 pnpm --filter @engram/web dev
-# → http://localhost:5173
+# → http://localhost:4902
 ```
 
-The dashboard proxies `/api` → `localhost:3001` and `/socket.io` → `localhost:3001` via Vite's dev server proxy.
+The dashboard proxies `/api` → `localhost:4901` and `/socket.io` → `localhost:4901` via Vite's dev server proxy.
 
 ### Seed demo data
 
@@ -289,8 +289,8 @@ docker-compose up -d
 
 # Services:
 #   postgres:5432   — PostgreSQL 16 + pgvector
-#   api:3001        — Engram REST API
-#   web:5173        — Dashboard (production build)
+#   api:4901        — Engram REST API
+#   web:4902        — Dashboard (production build)
 
 # Logs
 docker-compose logs -f api

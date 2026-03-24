@@ -22,7 +22,7 @@ Versioning: [Semantic Versioning](https://semver.org/)
 - **`@engram/core`** — Drizzle ORM schema: `memories`, `memory_connections`, `sessions`, `context_assemblies`
 - **`@engram/core`** — SQLite WAL mode (>10,000 memory writes/sec)
 - **`@engram/mcp`** — MCP Server for Claude Code: `store_memory`, `recall_context`, `search_memory`, `add_knowledge`, `memory_stats`, `forget`
-- **`@engram/server`** — Fastify 5 REST API on port 3001 with Swagger UI at `/docs`
+- **`@engram/server`** — Fastify 5 REST API on port 4901 with Swagger UI at `/docs`
 - **`@engram/server`** — Socket.io WebSocket on `/neural` namespace: `memory:stored`, `memory:activated`, `graph:updated`
 - **`@engram/server`** — Batch memory endpoint: `POST /api/memory/batch` (up to 200 per request)
 - **`@engram/web`** — React 3D visualization dashboard with React Three Fiber

@@ -55,13 +55,12 @@ export function scoreMemory(
 /**
  * Recency score using an exponential decay (Ebbinghaus forgetting curve).
  * Returns 1.0 for very recent memories, approaching 0 for old ones.
- *
- * Half-life: ~7 days (604800 seconds)
  */
-function recencyScore(
+export function recencyScore(
   createdAt: string,
   lastAccessedAt: string | null,
-  now: Date
+  now: Date = new Date(),
+  halfLifeDays = 7
 ): number {
   const referenceTime = lastAccessedAt
     ? new Date(lastAccessedAt).getTime()
@@ -70,8 +69,8 @@ function recencyScore(
   const ageMs = now.getTime() - referenceTime;
   const ageSeconds = Math.max(0, ageMs / 1000);
 
-  const HALF_LIFE_SECONDS = 7 * 24 * 3600; // 7 days
-  return Math.exp((-Math.LN2 * ageSeconds) / HALF_LIFE_SECONDS);
+  const halfLifeSeconds = halfLifeDays * 24 * 3600;
+  return Math.exp((-Math.LN2 * ageSeconds) / halfLifeSeconds);
 }
 
 /**
@@ -98,9 +97,51 @@ export function computeImportanceAfterAccess(currentImportance: number): number 
  */
 export function decayImportance(
   currentImportance: number,
-  daysSinceAccess: number
+  daysSinceAccess: number,
+  decayRate = 0.01,
+  floor = 0.05
 ): number {
-  const decayRate = 0.01; // 1% per day without access
   const decayed = currentImportance - decayRate * daysSinceAccess;
-  return Math.max(0.05, decayed); // never drop below 5%
+  return Math.max(floor, decayed);
+}
+
+// ─── Retention Score ─────────────────────────────────────────────────────────
+
+export interface RetentionInput {
+  /** Stored importance value (0.0–1.0) */
+  importance: number;
+  /** ISO 8601 timestamp of creation */
+  createdAt: string;
+  /** ISO 8601 timestamp of last access, or null */
+  lastAccessedAt: string | null;
+  /** Total access count */
+  accessCount: number;
+  /** Ebbinghaus half-life in days (default: 7) */
+  halfLifeDays?: number;
+}
+
+/**
+ * Compute a retention score for a memory.
+ *
+ * retentionScore = importance × recencyFactor × accessFactor
+ *
+ * Used by the decay engine to decide whether a memory should be archived.
+ * Returns 0–1 where lower values mean the memory is more likely to be forgotten.
+ */
+export function computeRetentionScore(
+  input: RetentionInput,
+  now: Date = new Date()
+): number {
+  const recency = recencyScore(
+    input.createdAt,
+    input.lastAccessedAt,
+    now,
+    input.halfLifeDays ?? 7
+  );
+
+  // Access factor: floor of 0.3 so zero-access memories still have a base,
+  // scales logarithmically, saturates around count ≈ 999
+  const accessFactor = Math.min(1.0, 0.3 + 0.7 * Math.log10(input.accessCount + 1) / 3);
+
+  return input.importance * recency * accessFactor;
 }

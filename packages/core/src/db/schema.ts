@@ -20,9 +20,10 @@ export const memories = sqliteTable(
     content: text('content').notNull(),
     summary: text('summary'),
 
-    // Vector embedding (FP16-packed Float32[384])
+    // Vector embedding (FP16-packed Float32[dim])
     embedding: blob('embedding', { mode: 'buffer' }),
     embeddingDim: integer('embedding_dim').default(384).notNull(),
+    embeddingModel: text('embedding_model'),  // model ID that generated this embedding
 
     // Importance & confidence scores (0.0–1.0)
     importance: real('importance').default(0.5).notNull(),
@@ -44,6 +45,9 @@ export const memories = sqliteTable(
     triggerPattern: text('trigger_pattern'),
     actionPattern: text('action_pattern'),
 
+    // Namespace isolation (optional — null means shared pool)
+    namespace: text('namespace'),
+
     // Common
     metadata: text('metadata').default('{}').notNull(),
     tags: text('tags').default('[]').notNull(),
@@ -63,6 +67,7 @@ export const memories = sqliteTable(
     sessionIdx: index('idx_memories_session').on(t.sessionId),
     conceptIdx: index('idx_memories_concept').on(t.concept),
     archivedIdx: index('idx_memories_archived').on(t.archivedAt),
+    namespaceIdx: index('idx_memories_namespace').on(t.namespace),
   })
 );
 
@@ -145,6 +150,30 @@ export const contextAssemblies = sqliteTable(
   })
 );
 
+// ─── webhooks ────────────────────────────────────────────────────────────────
+// HTTP callback subscriptions for memory events
+
+export const webhooks = sqliteTable(
+  'webhooks',
+  {
+    id: text('id').primaryKey(),
+    url: text('url').notNull(),
+    secret: text('secret'),  // optional shared secret for HMAC signing
+    events: text('events').notNull(),  // JSON array: ["stored","forgotten","decayed","consolidated","contradiction"]
+    active: integer('active', { mode: 'boolean' }).default(true).notNull(),
+    description: text('description'),
+    metadata: text('metadata').default('{}').notNull(),
+    createdAt: text('created_at')
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    lastTriggeredAt: text('last_triggered_at'),
+    failCount: integer('fail_count').default(0).notNull(),
+  },
+  (t) => ({
+    activeIdx: index('idx_webhooks_active').on(t.active),
+  })
+);
+
 // ─── Type exports ─────────────────────────────────────────────────────────────
 
 export type Memory = typeof memories.$inferSelect;
@@ -167,3 +196,6 @@ export type NewSession = typeof sessions.$inferInsert;
 
 export type ContextAssembly = typeof contextAssemblies.$inferSelect;
 export type NewContextAssembly = typeof contextAssemblies.$inferInsert;
+
+export type Webhook = typeof webhooks.$inferSelect;
+export type NewWebhook = typeof webhooks.$inferInsert;

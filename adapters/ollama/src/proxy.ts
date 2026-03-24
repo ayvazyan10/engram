@@ -13,7 +13,7 @@
  * Environment:
  *   OLLAMA_PROXY_PORT=11435       (default: 11435)
  *   OLLAMA_TARGET=http://localhost:11434  (default)
- *   ENGRAM_API=http://localhost:3001 (default)
+ *   ENGRAM_API=http://localhost:4901 (default)
  *   ENGRAM_MAX_TOKENS=1500   (context tokens to inject, default: 1500)
  */
 
@@ -23,7 +23,7 @@ import { URL } from 'url';
 
 const PROXY_PORT = parseInt(process.env['OLLAMA_PROXY_PORT'] ?? '11435', 10);
 const OLLAMA_TARGET = process.env['OLLAMA_TARGET'] ?? 'http://localhost:11434';
-const ENGRAM_API = process.env['ENGRAM_API'] ?? 'http://localhost:3001';
+const ENGRAM_API = process.env['ENGRAM_API'] ?? 'http://localhost:4901';
 const MAX_TOKENS = parseInt(process.env['ENGRAM_MAX_TOKENS'] ?? '1500', 10);
 
 /**

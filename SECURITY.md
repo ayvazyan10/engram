@@ -25,7 +25,7 @@ We aim to acknowledge reports within 48 hours and provide a fix timeline within 
 
 Engram runs entirely locally by default — there is no cloud service or user accounts. The main attack surfaces are:
 
-- The REST API (`apps/server`) — unauthenticated by default, intended for local use. Do not expose port 3001 to the internet without adding authentication.
+- The REST API (`apps/server`) — unauthenticated by default, intended for local use. Do not expose port 4901 to the internet without adding authentication.
 - The MCP server — runs as a local stdio process, accessible only to the local user.
 - The SQLite database file — protected by filesystem permissions.
 

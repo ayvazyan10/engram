@@ -10,7 +10,7 @@
  *
  * Configuration: Set ENGRAM_API environment variable or pass url to constructor.
  * Or add to ~/.openclaw/openclaw.json:
- *   { "engram": { "url": "http://localhost:3001" } }
+ *   { "engram": { "url": "http://localhost:4901" } }
  */
 
 export interface RecallResult {
@@ -44,7 +44,7 @@ export class EngramClient {
     this.baseUrl =
       options.url ??
       process.env['ENGRAM_API'] ??
-      'http://localhost:3001';
+      'http://localhost:4901';
     this.source = options.source ?? 'openclaw';
     this.defaultTimeout = options.timeoutMs ?? 5000;
   }

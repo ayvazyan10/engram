@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain } from '../index.js';
+import { brain, io } from '../index.js';
 import type { MemoryType } from '@engram/core';
 
 export const searchRoutes: FastifyPluginAsync = async (app) => {
@@ -11,6 +11,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       threshold?: number;
       types?: MemoryType[];
       sources?: string[];
+      crossNamespace?: boolean;
     };
   }>('/search', {
     schema: {
@@ -28,6 +29,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
             items: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
           },
           sources: { type: 'array', items: { type: 'string' } },
+          crossNamespace: { type: 'boolean', default: false },
         },
       },
     },
@@ -38,6 +40,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         threshold: req.body.threshold ?? 0.3,
         types: req.body.types,
         sources: req.body.sources,
+        crossNamespace: req.body.crossNamespace,
       });
       return {
         count: memories.length,
@@ -55,6 +58,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       types?: MemoryType[];
       sources?: string[];
       sessionId?: string;
+      crossNamespace?: boolean;
     };
   }>('/recall', {
     schema: {
@@ -72,6 +76,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
           },
           sources: { type: 'array', items: { type: 'string' } },
           sessionId: { type: 'string' },
+          crossNamespace: { type: 'boolean', default: false },
         },
       },
     },
@@ -82,8 +87,76 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         sources: req.body.sources,
         sessionId: req.body.sessionId,
         source: 'rest-api',
+        crossNamespace: req.body.crossNamespace,
       });
       return result;
+    },
+  });
+
+  // GET /api/recall/stream — Server-Sent Events streaming recall
+  app.get<{
+    Querystring: {
+      query: string;
+      maxTokens?: number;
+      types?: string;
+      sources?: string;
+      crossNamespace?: boolean;
+    };
+  }>('/recall/stream', {
+    schema: {
+      tags: ['search'],
+      summary: 'Streaming recall via Server-Sent Events — memories arrive progressively',
+      querystring: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string' },
+          maxTokens: { type: 'integer', default: 2000 },
+          types: { type: 'string', description: 'Comma-separated memory types' },
+          sources: { type: 'string', description: 'Comma-separated sources' },
+          crossNamespace: { type: 'boolean', default: false },
+        },
+      },
+    },
+    handler: async (req, reply) => {
+      const { query, maxTokens, types, sources, crossNamespace } = req.query;
+
+      // Set SSE headers
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      const parsedTypes = types
+        ? (types.split(',').map((t) => t.trim()) as MemoryType[])
+        : undefined;
+      const parsedSources = sources
+        ? sources.split(',').map((s) => s.trim())
+        : undefined;
+
+      const stream = brain.recallStream(query, {
+        maxTokens: maxTokens ?? 2000,
+        types: parsedTypes,
+        sources: parsedSources,
+        source: 'rest-api-stream',
+        crossNamespace,
+      });
+
+      for await (const chunk of stream) {
+        const data = JSON.stringify(chunk);
+        reply.raw.write(`event: ${chunk.phase}\ndata: ${data}\n\n`);
+
+        // Also emit on WebSocket
+        if (chunk.phase !== 'complete') {
+          io?.emit('recall:chunk', chunk);
+        } else {
+          io?.emit('recall:complete', chunk);
+        }
+      }
+
+      reply.raw.end();
     },
   });
 };

@@ -16,7 +16,8 @@ const dbPath = path.join(__dirname, '..', 'engram.db');
 const brain = new NeuralBrain({ dbPath, defaultSource: 'demo' });
 
 async function store(input: Parameters<typeof brain.store>[0]) {
-  return brain.store(input);
+  const { memory } = await brain.store(input);
+  return memory;
 }
 
 async function connect(sourceId: string, targetId: string, relationship: string, strength = 0.8) {
@@ -162,7 +163,7 @@ async function run() {
     type: 'procedural',
     triggerPattern: 'Port already in use error',
     actionPattern: 'fuser -k PORT/tcp then restart',
-    content: 'When EADDRINUSE: run fuser -k 3001/tcp to kill existing process, then restart the server. Check with ss -tlnp to confirm port is free.',
+    content: 'When EADDRINUSE: run fuser -k 4901/tcp to kill existing process, then restart the server. Check with ss -tlnp to confirm port is free.',
     importance: 0.65, tags: ['debugging', 'devops'],
   });
 
