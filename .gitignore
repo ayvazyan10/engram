@@ -44,3 +44,5 @@ test-results/
 # Models cache (large WASM files)
 .xenova/
 packages/core/models/
+*.db.bak
+*.db.index
