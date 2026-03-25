@@ -129,6 +129,102 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
 }
 
 function runSqliteMigrations(sqlite: any): void {
+  // v0.1.0: Create base tables if they don't exist (fresh database)
+  const hasMemories = sqlite.prepare(
+    "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='memories'"
+  ).get() as { cnt: number };
+
+  if (hasMemories.cnt === 0) {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT PRIMARY KEY NOT NULL,
+        type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        summary TEXT,
+        embedding BLOB,
+        embedding_dim INTEGER NOT NULL DEFAULT 384,
+        importance REAL NOT NULL DEFAULT 0.5,
+        confidence REAL NOT NULL DEFAULT 1.0,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at TEXT,
+        event_at TEXT,
+        session_id TEXT,
+        source TEXT,
+        concept TEXT,
+        trigger_pattern TEXT,
+        action_pattern TEXT,
+        namespace TEXT,
+        embedding_model TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+        updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+        archived_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_memories_type ON memories (type);
+      CREATE INDEX IF NOT EXISTS idx_memories_source ON memories (source);
+      CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories (importance);
+      CREATE INDEX IF NOT EXISTS idx_memories_session ON memories (session_id);
+      CREATE INDEX IF NOT EXISTS idx_memories_concept ON memories (concept);
+      CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories (archived_at);
+      CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace);
+
+      CREATE TABLE IF NOT EXISTS memory_connections (
+        id TEXT PRIMARY KEY NOT NULL,
+        source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+        target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+        relationship TEXT NOT NULL,
+        strength REAL NOT NULL DEFAULT 1.0,
+        bidirectional INTEGER NOT NULL DEFAULT 0,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+      );
+      CREATE INDEX IF NOT EXISTS idx_connections_source ON memory_connections (source_id);
+      CREATE INDEX IF NOT EXISTS idx_connections_target ON memory_connections (target_id);
+      CREATE INDEX IF NOT EXISTS idx_connections_relationship ON memory_connections (relationship);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_unique_pair ON memory_connections (source_id, target_id, relationship);
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY NOT NULL,
+        source TEXT NOT NULL,
+        context TEXT,
+        started_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+        ended_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source);
+      CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions (started_at);
+
+      CREATE TABLE IF NOT EXISTS context_assemblies (
+        id TEXT PRIMARY KEY NOT NULL,
+        query TEXT NOT NULL,
+        query_embedding BLOB,
+        assembled_context TEXT NOT NULL,
+        source TEXT,
+        session_id TEXT,
+        latency_ms INTEGER,
+        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+      );
+      CREATE INDEX IF NOT EXISTS idx_assemblies_source ON context_assemblies (source);
+      CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies (session_id);
+      CREATE INDEX IF NOT EXISTS idx_assemblies_created ON context_assemblies (created_at);
+
+      CREATE TABLE IF NOT EXISTS webhooks (
+        id TEXT PRIMARY KEY,
+        url TEXT NOT NULL,
+        secret TEXT,
+        events TEXT NOT NULL DEFAULT '[]',
+        active INTEGER NOT NULL DEFAULT 1,
+        description TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+        last_triggered_at TEXT,
+        fail_count INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active);
+    `);
+    return; // Fresh DB — no need for incremental migrations
+  }
+
   // v0.2.0: namespace column
   const hasNamespace = sqlite.prepare(
     "SELECT COUNT(*) as cnt FROM pragma_table_info('memories') WHERE name='namespace'"
