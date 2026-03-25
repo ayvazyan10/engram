@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/ayvazyan10/engram/main/apps/web/public/logo.svg" alt="Engram Logo" width="80" height="80">
+<img src="https://raw.githubusercontent.com/ayvazyan10/engram/master/apps/web/public/logo.svg" alt="Engram Logo" width="80" height="80">
 
 # Engram
 
