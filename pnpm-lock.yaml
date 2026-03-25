@@ -63,6 +63,9 @@ importers:
       '@fastify/cors':
         specifier: ^10.0.2
         version: 10.1.0
+      '@fastify/static':
+        specifier: ^9.0.0
+        version: 9.0.0
       '@fastify/swagger':
         specifier: ^9.5.0
         version: 9.7.0

@@ -4,6 +4,9 @@ import { Server as SocketIOServer } from 'socket.io';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
+import fs from 'fs';
 
 import { healthRoutes } from './routes/health.js';
 import { memoryRoutes } from './routes/memory.js';
@@ -82,10 +85,33 @@ async function start() {
   await app.register(tagRoutes, { prefix: '/api' });
   await app.register(pluginRoutes, { prefix: '/api' });
 
+  // ─── Serve 3D dashboard (if built) ──────────────────────────────────────
+  const dashboardPath = path.resolve(process.cwd(), 'apps', 'web', 'dist');
+  if (fs.existsSync(path.join(dashboardPath, 'index.html'))) {
+    await app.register(fastifyStatic, {
+      root: dashboardPath,
+      prefix: '/',
+      decorateReply: false,
+      wildcard: false,
+    });
+
+    // SPA fallback — serve index.html for non-API, non-static routes
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api/') || req.url.startsWith('/docs')) {
+        reply.code(404).send({ error: 'Not Found', statusCode: 404 });
+      } else {
+        reply.sendFile('index.html', dashboardPath);
+      }
+    });
+
+    console.info(`Dashboard: http://${HOST}:${PORT}`);
+  }
+
   // Start Fastify — it creates and owns the HTTP server
   await app.listen({ port: PORT, host: HOST });
-  console.info(`Engram API running at http://${HOST}:${PORT}`);
-  console.info(`Swagger docs: http://${HOST}:${PORT}/docs`);
+  console.info(`Engram running at http://${HOST}:${PORT}`);
+  console.info(`  API:       http://${HOST}:${PORT}/api`);
+  console.info(`  Swagger:   http://${HOST}:${PORT}/docs`);
 
   // Attach Socket.io to Fastify's underlying HTTP server
   io = new SocketIOServer(app.server, {
