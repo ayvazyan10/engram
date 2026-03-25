@@ -5,6 +5,7 @@ import SearchBar from '../ui/SearchBar.js';
 import StatusBar from '../ui/StatusBar.js';
 import NeuronInspector from '../ui/NeuronInspector.js';
 import ViewSwitcher from '../ui/ViewSwitcher.js';
+import StoreMemoryModal from '../ui/StoreMemoryModal.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useViewStore } from '../../store/viewStore.js';
@@ -12,10 +13,12 @@ import { api } from '../../lib/api.js';
 import { useWebSocket } from '../../hooks/useWebSocket.js';
 
 export default function AppLayout() {
-  const { setNeurons, setConnections } = useNeuralStore();
+  const { neurons, setNeurons, setTargetPositions, setConnections, setContradictionPairs } = useNeuralStore();
   const { records, setRecords } = useMemoryStore();
   const { activeView } = useViewStore();
   const [loading, setLoading] = useState(true);
+  const [showStoreModal, setShowStoreModal] = useState(false);
+  const [firstLoad, setFirstLoad] = useState(true);
 
   useWebSocket();
 
@@ -27,12 +30,38 @@ export default function AppLayout() {
       .finally(() => setLoading(false));
   }, [setRecords]);
 
+  // Load contradictions
+  useEffect(() => {
+    if (records.length === 0) return;
+    api.getContradictions()
+      .then((res) => {
+        setContradictionPairs(
+          res.contradictions.map((c) => ({
+            sourceId: c.source.id,
+            targetId: c.target.id,
+            confidence: c.confidence,
+          }))
+        );
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records.length > 0]);
+
   // Re-layout whenever records OR active view changes
   useEffect(() => {
     if (records.length === 0) return;
     const positions = activeView.layout(records);
-    setNeurons(positions.map((p) => ({ ...p, activation: 0 })));
-  }, [records, activeView, setNeurons]);
+
+    if (firstLoad || neurons.length === 0) {
+      // First load — set positions directly (no transition)
+      setNeurons(positions.map((p) => ({ ...p, activation: 0, tx: p.x, ty: p.y, tz: p.z })));
+      setFirstLoad(false);
+    } else {
+      // Subsequent changes — set target positions for smooth lerp
+      setTargetPositions(positions);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records, activeView]);
 
   // Load connections (once after first data load)
   useEffect(() => {
@@ -43,9 +72,8 @@ export default function AppLayout() {
       graphs.forEach((g, i) => {
         if (!g) return;
         const src = top[i]!.id;
-        const data = g as { connections: Array<{ id: string; targetId?: string; target_id?: string; relationship: string; strength: number }> };
-        data.connections?.forEach((c) => {
-          all.push({ id: c.id, sourceId: src, targetId: c.targetId ?? c.target_id ?? '', relationship: c.relationship, strength: c.strength });
+        g.connections?.forEach((c) => {
+          all.push({ id: c.id, sourceId: c.sourceId || src, targetId: c.targetId, relationship: c.relationship, strength: c.strength });
         });
       });
       setConnections(all);
@@ -72,7 +100,7 @@ export default function AppLayout() {
       <div style={styles.main}>
         <div style={styles.sidebar}>
           <SearchBar />
-          <MemoryPanel loading={loading} />
+          <MemoryPanel loading={loading} onStore={() => setShowStoreModal(true)} />
         </div>
 
         <div style={styles.canvas}>
@@ -92,6 +120,16 @@ export default function AppLayout() {
       </div>
 
       <StatusBar />
+
+      {showStoreModal && (
+        <StoreMemoryModal
+          onClose={() => setShowStoreModal(false)}
+          onStored={(record) => {
+            setShowStoreModal(false);
+            useMemoryStore.getState().addRecord(record);
+          }}
+        />
+      )}
     </div>
   );
 }

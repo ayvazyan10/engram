@@ -21,14 +21,12 @@ const TYPE_LABELS: Record<string, string> = {
 
 interface Props {
   loading?: boolean;
+  onStore?: () => void;
 }
 
-export default function MemoryPanel({ loading }: Props) {
-  const { records, searchResults, searchQuery, isSearching, setRecords } = useMemoryStore();
+export default function MemoryPanel({ loading, onStore }: Props) {
+  const { records, searchResults, searchQuery, isSearching } = useMemoryStore();
   const { selectNeuron, selectedNeuronId } = useNeuralStore();
-
-  // Intentionally kept empty — data is loaded by AppLayout directly
-  void setRecords;
 
   const displayList = searchQuery ? searchResults : records;
 
@@ -43,7 +41,16 @@ export default function MemoryPanel({ loading }: Props) {
     <div style={styles.panel}>
       <div style={styles.header}>
         <span style={styles.title}>Memory Graph</span>
-        <span style={styles.count}>{displayList.length}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={styles.count}>{displayList.length}</span>
+          {onStore && (
+            <button onClick={onStore} title="Store new memory" style={{
+              width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', borderRadius: '5px',
+              color: '#fff', fontSize: '14px', fontWeight: 700, cursor: 'pointer', lineHeight: 1,
+            }}>+</button>
+          )}
+        </div>
       </div>
 
       {/* Type filter pills */}

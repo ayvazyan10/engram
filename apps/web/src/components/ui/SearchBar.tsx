@@ -1,13 +1,13 @@
 import { useState, useCallback, useRef } from 'react';
 import { api } from '../../lib/api.js';
-import { useMemoryStore } from '../../store/memoryStore.js';
+import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 
 export default function SearchBar() {
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { setSearchResults, setSearching, setContext, setSearchQuery, searchQuery } = useMemoryStore();
+  const { setSearchResults, setSearching, setContext, setSearchQuery, setHighlightedIds, searchQuery } = useMemoryStore();
 
   const hasQuery = searchQuery.length > 0;
 
@@ -21,7 +21,9 @@ export default function SearchBar() {
         api.search(input, 20),
         api.recall(input, 1500),
       ]);
-      setSearchResults(searchRes.results as Parameters<typeof setSearchResults>[0]);
+      const results = searchRes.results as MemoryRecord[];
+      setSearchResults(results);
+      setHighlightedIds(new Set(results.map((r) => r.id)));
       setContext(recallRes.context, recallRes.latencyMs);
     } catch (err) {
       console.error('Search failed:', err);
@@ -35,8 +37,10 @@ export default function SearchBar() {
     setInput('');
     setSearchQuery('');
     setSearchResults([]);
+    setContext('', 0);
+    setHighlightedIds(new Set());
     inputRef.current?.focus();
-  }, [setSearchQuery, setSearchResults]);
+  }, [setSearchQuery, setSearchResults, setContext, setHighlightedIds]);
 
   const borderColor = focused ? '#4f46e5' : hasQuery ? '#312e81' : '#0f2040';
   const boxShadow   = focused ? '0 0 0 3px rgba(99,102,241,0.12), 0 2px 8px rgba(0,0,0,0.4)' : '0 2px 6px rgba(0,0,0,0.3)';

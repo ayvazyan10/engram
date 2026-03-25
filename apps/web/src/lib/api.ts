@@ -33,7 +33,13 @@ export const api = {
     source?: string;
     tags?: string[];
     importance?: number;
-  }) => request<{ id: string }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
+    concept?: string;
+  }) => request<{ memory: { id: string; type: string; content: string; importance: number; source: string | null; concept: string | null; tags: string; createdAt: string; summary: string | null } }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
+
+  deleteMemory: (id: string) =>
+    fetch(`${BASE}/memory/${id}`, { method: 'DELETE' }).then((r) => {
+      if (!r.ok) throw new Error(`API ${r.status}: DELETE /memory/${id}`);
+    }),
 
   recall: (query: string, maxTokens = 2000) =>
     request<{ context: string; memories: unknown[]; latencyMs: number }>('/recall', {
@@ -48,5 +54,35 @@ export const api = {
     }),
 
   getGraph: (id: string) =>
-    request<{ node: unknown; connections: unknown[]; neighbors: unknown[] }>(`/graph/${id}`),
+    request<{ node: unknown; connections: Array<{ id: string; sourceId: string; targetId: string; relationship: string; strength: number }>; neighbors: unknown[] }>(`/graph/${id}`),
+
+  // Tags
+  addTag: (memoryId: string, tag: string) =>
+    request<{ id: string; tags: string[] }>(`/memory/${memoryId}/tags`, {
+      method: 'POST',
+      body: JSON.stringify({ tag }),
+    }),
+
+  removeTag: (memoryId: string, tag: string) =>
+    request<{ id: string; tags: string[] }>(`/memory/${memoryId}/tags/${encodeURIComponent(tag)}`, {
+      method: 'DELETE',
+    }),
+
+  // Contradictions
+  getContradictions: () =>
+    request<{
+      count: number;
+      contradictions: Array<{
+        edgeId: string;
+        confidence: number;
+        source: { id: string; content: string; type: string; importance: number };
+        target: { id: string; content: string; type: string; importance: number };
+      }>;
+    }>('/contradictions'),
+
+  resolveContradiction: (sourceId: string, targetId: string, strategy: string) =>
+    request<{ resolved: boolean; archivedId?: string; keptId?: string }>('/contradictions/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ sourceId, targetId, strategy }),
+    }),
 };

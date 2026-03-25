@@ -87,6 +87,7 @@ export default function NeuralCanvas() {
               sourcePos={[src.x, src.y, src.z]}
               targetPos={[tgt.x, tgt.y, tgt.z]}
               strength={conn.strength}
+              relationship={conn.relationship}
               style={theme.style}
             />
           );

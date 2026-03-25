@@ -8,6 +8,7 @@ interface Props {
   sourcePos: Vector3Tuple;
   targetPos: Vector3Tuple;
   strength: number;
+  relationship?: string;
   style: ViewTheme['style'];
 }
 
@@ -19,9 +20,12 @@ const STYLE_COLORS: Record<ViewTheme['style'], { low: number; mid: number; high:
   ghost:   { low: 0x2e1065, mid: 0x7c3aed, high: 0xc084fc },
 };
 
-export default function ConnectionLine({ sourcePos, targetPos, strength, style }: Props) {
+export default function ConnectionLine({ sourcePos, targetPos, strength, relationship, style }: Props) {
   const ref = useRef<THREE.Mesh>(null);
-  const palette = STYLE_COLORS[style] ?? STYLE_COLORS.cosmos;
+  const isContradiction = relationship === 'contradicts';
+  const palette = isContradiction
+    ? { low: 0x7c2d12, mid: 0xea580c, high: 0xf97316 }
+    : (STYLE_COLORS[style] ?? STYLE_COLORS.cosmos);
 
   const { midPoint, length, quaternion } = useMemo(() => {
     const s   = new THREE.Vector3(...sourcePos);
@@ -37,12 +41,14 @@ export default function ConnectionLine({ sourcePos, targetPos, strength, style }
     if (!ref.current) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
     const base = 0.06 + strength * 0.22;
-    const pulse = style === 'neon' ? 0.08 : 0.04;
-    mat.opacity = base + Math.sin(clock.getElapsedTime() * 1.5 + strength * 8) * pulse;
+    const pulse = isContradiction ? 0.12 : style === 'neon' ? 0.08 : 0.04;
+    const speed = isContradiction ? 3.0 : 1.5;
+    mat.opacity = base + Math.sin(clock.getElapsedTime() * speed + strength * 8) * pulse;
   });
 
   const color  = strength > 0.7 ? palette.high : strength > 0.4 ? palette.mid : palette.low;
-  const radius = style === 'neon' ? 0.06 + strength * 0.1 :
+  const radius = isContradiction ? 0.08 + strength * 0.14 :
+                 style === 'neon' ? 0.06 + strength * 0.1 :
                  style === 'stars' ? 0.03 + strength * 0.04 :
                  0.04 + strength * 0.08;
 
