@@ -102,33 +102,39 @@ CLI ─────────direct───────→ ┘
 
 ## Quick start
 
-### Prerequisites
+### One-command install
 
-- Node.js 22+
-- pnpm 9+
+```bash
+# Install the CLI globally
+npm i -g @engram-ai-memory/cli
 
-### Install
+# Run the setup wizard — clones, builds, configures everything
+engram setup
+
+# Start the server (API + 3D dashboard on :4901)
+engram start
+```
+
+That's it. Open http://localhost:4901 for the dashboard, `/docs` for Swagger UI.
+
+### CLI commands
+
+```bash
+engram setup       # Clone, build, configure, set up Claude Code MCP
+engram start       # Start the server (background)
+engram stop        # Stop the server
+engram doctor      # Health checks
+engram status      # Server status + memory count
+engram configure   # View/set config (port, dbPath, namespace, etc.)
+```
+
+### Manual install (alternative)
 
 ```bash
 git clone https://github.com/ayvazyan10/engram
 cd engram
 pnpm install
-```
-
-### Build
-
-```bash
 pnpm turbo run build
-```
-
-### Run
-
-```bash
-# API server (port 4901)
-ENGRAM_DB_PATH=./engram.db node apps/server/dist/index.js
-
-# Dashboard (served from API server after build)
-# Visit http://localhost:4901 — no separate port needed
 node apps/server/dist/index.js
 ```
 

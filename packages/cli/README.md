@@ -1,6 +1,6 @@
 # @engram-ai-memory/cli
 
-Terminal tool for [Engram](https://github.com/ayvazyan10/engram) — store, search, recall, and manage AI memories from the command line. Uses the brain engine directly, no server required.
+Terminal tool for [Engram](https://github.com/ayvazyan10/engram) — install, manage, and interact with AI memories from the command line.
 
 ## Install
 
@@ -8,49 +8,76 @@ Terminal tool for [Engram](https://github.com/ayvazyan10/engram) — store, sear
 npm install -g @engram-ai-memory/cli
 ```
 
-## Usage
+## Setup (one command)
 
 ```bash
-# Store a memory
-engram store "User prefers TypeScript" --type semantic --importance 0.8
+# Clone, build, configure, set up Claude Code MCP
+engram setup
 
-# Semantic search
-engram search "TypeScript" --top 5
+# Start the server (API + 3D dashboard on :4901)
+engram start
 
-# Recall context (pipeable to LLMs)
-engram recall "what languages does the user prefer?" --raw
-
-# Full stats
-engram stats
-
-# Export all memories
-engram export > backup.json
-
-# Import from backup
-engram import < backup.json
-
-# Archive a memory
-engram forget a1b2c3d4-...
+# Check everything is healthy
+engram doctor
 ```
 
-## Commands
+## Server Management
 
-| Command | Description |
-|---|---|
-| `engram store <content>` | Store with `--type`, `--importance`, `--tags`, `--concept`, `--namespace` |
-| `engram search <query>` | Vector search with `--top`, `--threshold`, `--type`, `--json` |
-| `engram recall <query>` | Context assembly with `--max-tokens`, `--raw`, `--json` |
-| `engram stats` | Memory counts, embedding status, index info. `--json` for machine output |
-| `engram forget <id>` | Archive (soft-delete) a memory |
-| `engram export` | Export as JSON or NDJSON (`--format ndjson`), filter with `--type` |
-| `engram import` | Import from stdin. Supports `--dry-run` |
+```bash
+engram setup               # First-time setup wizard
+engram start               # Start server (background)
+engram start --foreground  # Start in foreground
+engram stop                # Stop the server
+engram status              # Server status + memory count
+engram doctor              # Health checks (Node, pnpm, DB, MCP, API)
+engram configure           # View config
+engram configure set port 5000  # Change a setting
+```
+
+## Memory Commands
+
+```bash
+# Store
+engram store "User prefers TypeScript" --type semantic --importance 0.8
+
+# Search
+engram search "TypeScript" --top 5
+
+# Recall (pipeable)
+engram recall "what languages does the user prefer?" --raw
+
+# Stats
+engram stats
+
+# Forget
+engram forget a1b2c3d4-...
+
+# Export / Import
+engram export > backup.json
+engram import < backup.json
+```
+
+## Configuration
+
+Config file: `~/.engram/config.json`
+
+| Key | Default | Description |
+|---|---|---|
+| `dbPath` | `~/.engram/engram.db` | SQLite database path |
+| `port` | `4901` | API server port |
+| `host` | `127.0.0.1` | Bind address |
+| `namespace` | `null` | Memory namespace |
+| `embeddingModel` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
+| `indexPath` | `~/.engram/engram.db.index` | Vector index path |
+| `repoPath` | `~/.engram/repo` | Cloned repo path |
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
-| `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Vector index cache path |
+| Variable | Description |
+|---|---|
+| `ENGRAM_DB_PATH` | Override database path |
+| `ENGRAM_INDEX_PATH` | Override index path |
+| `ENGRAM_HOME` | Override state directory (default: `~/.engram`) |
 
 ## Links
 
