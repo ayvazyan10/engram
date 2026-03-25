@@ -137,14 +137,14 @@ program
     if (fs.existsSync(path.join(config.repoPath, '.git'))) {
       step('Repository exists — pulling latest...');
       try {
-        execSync('git pull --ff-only', { cwd: config.repoPath, stdio: 'pipe' });
+        execSync('git pull --ff-only', { cwd: config.repoPath, stdio: 'pipe',  });
         ok('Repository updated');
       } catch {
         warn('Pull failed — continuing with existing version');
       }
     } else {
       try {
-        execSync(`git clone --depth=1 ${REPO} "${config.repoPath}"`, { stdio: 'pipe' });
+        execSync(`git clone --depth=1 ${REPO} "${config.repoPath}"`, { stdio: 'pipe',  });
         ok('Repository cloned');
       } catch (err) {
         fail(`Clone failed: ${err instanceof Error ? err.message : err}`);
@@ -154,17 +154,21 @@ program
 
     step('Installing dependencies...');
     try {
-      execSync('pnpm install --frozen-lockfile', { cwd: config.repoPath, stdio: 'pipe' });
+      execSync('pnpm install --no-frozen-lockfile', { cwd: config.repoPath, stdio: 'pipe',  });
       ok('Dependencies installed');
-    } catch {
-      step('Retrying without --frozen-lockfile...');
-      execSync('pnpm install', { cwd: config.repoPath, stdio: 'pipe' });
-      ok('Dependencies installed');
+    } catch (err) {
+      fail(`Install failed: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
     }
 
     step('Building all packages...');
-    execSync('pnpm turbo run build', { cwd: config.repoPath, stdio: 'pipe' });
-    ok('Build complete');
+    try {
+      execSync('pnpm turbo run build', { cwd: config.repoPath, stdio: 'pipe',  });
+      ok('Build complete');
+    } catch (err) {
+      fail(`Build failed: ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
 
     if (opts.mcp !== false) {
       step('Configuring Claude Code MCP integration...');
