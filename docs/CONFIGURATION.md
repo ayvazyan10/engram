@@ -477,8 +477,8 @@ The 3D visualization targets 30 FPS. If performance drops with many neurons:
 
 | Port | Service | Description |
 |---|---|---|
-| `4901` | API Server | Engram REST API + Swagger docs at `/docs` |
-| `4902` | Dashboard | Engram visual dashboard (3D brain explorer) |
+| `4901` | API Server | Engram REST API + Swagger docs at `/docs` + 3D Dashboard |
+| `4902` | Dev only | Vite dev server for `apps/web` (not needed in production) |
 | `11435` | Ollama Proxy | Transparent memory-injecting proxy for Ollama |
 
 WebSocket is served on the same port as the API server (`4901`) under the `/neural` namespace.

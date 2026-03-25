@@ -61,7 +61,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
                           │
                           ▼
            ┌──────────────────────────┐
-           │  React Dashboard :4902   │
+           │  React Dashboard :4901   │
            │  @engram-ai-memory/web                 │
            │  React Three Fiber (3D)  │
            │  Socket.io (real-time)   │

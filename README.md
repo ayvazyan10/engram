@@ -127,8 +127,9 @@ pnpm turbo run build
 # API server (port 4901)
 ENGRAM_DB_PATH=./engram.db node apps/server/dist/index.js
 
-# Dashboard (port 4902)
-pnpm --filter @engram-ai-memory/web dev
+# Dashboard (served from API server after build)
+# Visit http://localhost:4901 — no separate port needed
+node apps/server/dist/index.js
 ```
 
 ### Store your first memory
@@ -251,7 +252,7 @@ Restart Claude Code. **18 tools** are now available:
 | Service | Port | Purpose |
 |---|---|---|
 | Engram API | **4901** | REST + WebSocket + Swagger UI |
-| Dashboard | **4902** | 3D visualization (Vite dev) |
+| Dashboard | **4901** | 3D visualization (served from API server) |
 | Ollama Proxy | **11435** | Memory injection proxy → Ollama |
 
 All ports are in the 49xx range to avoid conflicts with common dev services (3000, 5173, 8080, etc.).
@@ -265,8 +266,7 @@ All ports are in the 49xx range to avoid conflicts with common dev services (300
 cd packages/core && npx tsx scripts/demo.ts
 
 # Open the 3D visualization
-pnpm --filter @engram-ai-memory/web dev
-# → http://localhost:4902
+# → http://localhost:4901
 ```
 
 Five visualization modes: **Cosmos** · **Nebula** · **Neural Net** · **Galaxy** · **Clusters**

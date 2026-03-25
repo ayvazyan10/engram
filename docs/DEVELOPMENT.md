@@ -89,12 +89,16 @@ Server starts at `http://localhost:4901`.
 
 ### Start the dashboard
 
+In production, the 3D dashboard is served from the API server at `http://localhost:4901` (after building with `pnpm turbo run build`).
+
+For development with hot-reload:
+
 ```bash
 pnpm --filter @engram-ai-memory/web dev
-# → http://localhost:4902
+# → http://localhost:4902 (dev only — proxies to API on 4901)
 ```
 
-The dashboard proxies `/api` → `localhost:4901` and `/socket.io` → `localhost:4901` via Vite's dev server proxy.
+The Vite dev server proxies `/api` → `localhost:4901` and `/socket.io` → `localhost:4901`.
 
 ### Seed demo data
 
@@ -290,7 +294,7 @@ docker-compose up -d
 # Services:
 #   postgres:5432   — PostgreSQL 16 + pgvector
 #   api:4901        — Engram REST API
-#   web:4902        — Dashboard (production build)
+#   web:4902        — Dashboard (standalone container, optional)
 
 # Logs
 docker-compose logs -f api
