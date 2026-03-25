@@ -1,5 +1,5 @@
 /**
- * @engram/core — The Brain
+ * @engram-ai-memory/core — The Brain
  *
  * Main entry point. Create a NeuralBrain instance and use it to store
  * and recall memories from any AI system.

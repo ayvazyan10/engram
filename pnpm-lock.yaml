@@ -8,10 +8,10 @@ importers:
 
   .:
     devDependencies:
-      '@engram/eslint-config':
+      '@engram-ai-memory/eslint-config':
         specifier: workspace:*
         version: link:tooling/eslint-config
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:tooling/tsconfig
       '@types/node':
@@ -33,7 +33,7 @@ importers:
         specifier: ^3.3.2
         version: 3.3.2
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       tsx:
@@ -45,7 +45,7 @@ importers:
 
   adapters/openclaw:
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       tsx:
@@ -57,7 +57,7 @@ importers:
 
   apps/server:
     dependencies:
-      '@engram/core':
+      '@engram-ai-memory/core':
         specifier: workspace:*
         version: link:../../packages/core
       '@fastify/cors':
@@ -85,7 +85,7 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       '@types/uuid':
@@ -100,10 +100,10 @@ importers:
 
   apps/web:
     dependencies:
-      '@engram/core':
+      '@engram-ai-memory/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@engram/vis':
+      '@engram-ai-memory/vis':
         specifier: workspace:*
         version: link:../../packages/vis
       '@react-three/drei':
@@ -134,7 +134,7 @@ importers:
         specifier: ^5.0.5
         version: 5.0.12(@types/react@19.2.14)(react@19.2.4)(use-sync-external-store@1.6.0(react@19.2.4))
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       '@types/react':
@@ -158,14 +158,14 @@ importers:
 
   packages/cli:
     dependencies:
-      '@engram/core':
+      '@engram-ai-memory/core':
         specifier: workspace:*
         version: link:../core
       commander:
         specifier: ^13.1.0
         version: 13.1.0
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       tsx:
@@ -197,7 +197,7 @@ importers:
         specifier: ^8.13.0
         version: 8.20.0
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       '@types/better-sqlite3':
@@ -221,7 +221,7 @@ importers:
 
   packages/mcp:
     dependencies:
-      '@engram/core':
+      '@engram-ai-memory/core':
         specifier: workspace:*
         version: link:../core
       '@modelcontextprotocol/sdk':
@@ -234,7 +234,7 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       '@types/uuid':
@@ -246,7 +246,7 @@ importers:
 
   packages/vis:
     devDependencies:
-      '@engram/tsconfig':
+      '@engram-ai-memory/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
       typescript:

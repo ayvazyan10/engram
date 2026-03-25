@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, schema } from '@engram/core';
+import { getDb, schema } from '@engram-ai-memory/core';
 import { eq, isNull, desc, and } from 'drizzle-orm';
 import { brain, io } from '../index.js';
 

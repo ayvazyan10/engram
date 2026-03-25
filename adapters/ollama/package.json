@@ -1,5 +1,5 @@
 {
-  "name": "@engram/adapter-ollama",
+  "name": "@engram-ai-memory/adapter-ollama",
   "version": "0.1.0",
   "description": "Ollama transparent proxy — injects Engram memory into all Ollama requests",
   "main": "./dist/proxy.js",
@@ -17,7 +17,7 @@
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
-    "@engram/tsconfig": "workspace:*",
+    "@engram-ai-memory/tsconfig": "workspace:*",
     "tsx": "^4.19.4",
     "typescript": "5.7.3"
   }

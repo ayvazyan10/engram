@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, schema } from '@engram/core';
+import { getDb, schema } from '@engram-ai-memory/core';
 import { eq } from 'drizzle-orm';
 
 export const graphRoutes: FastifyPluginAsync = async (app) => {

@@ -1,5 +1,5 @@
 {
-  "name": "@engram/cli",
+  "name": "@engram-ai-memory/cli",
   "version": "0.1.0",
   "description": "Engram CLI — store, search, recall, and manage AI memories from the terminal",
   "type": "module",
@@ -14,11 +14,11 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@engram/core": "workspace:*",
+    "@engram-ai-memory/core": "workspace:*",
     "commander": "^13.1.0"
   },
   "devDependencies": {
-    "@engram/tsconfig": "workspace:*",
+    "@engram-ai-memory/tsconfig": "workspace:*",
     "tsx": "^4.19.4",
     "typescript": "5.7.3"
   }

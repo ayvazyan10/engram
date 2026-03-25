@@ -1,5 +1,5 @@
 {
-  "name": "@engram/adapter-openclaw",
+  "name": "@engram-ai-memory/adapter-openclaw",
   "version": "0.1.0",
   "description": "OpenClaw integration adapter — connects Engram memory to the OpenClaw agent system",
   "main": "./dist/index.js",
@@ -10,7 +10,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "devDependencies": {
-    "@engram/tsconfig": "workspace:*",
+    "@engram-ai-memory/tsconfig": "workspace:*",
     "tsx": "^4.19.4",
     "typescript": "5.7.3"
   }

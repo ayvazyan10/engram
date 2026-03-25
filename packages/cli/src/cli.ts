@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * @engram/cli — Engram command-line interface.
+ * @engram-ai-memory/cli — Engram command-line interface.
  *
  * Usage:
  *   engram store "User prefers TypeScript" --type semantic --importance 0.8
@@ -14,7 +14,7 @@
  */
 
 import { Command } from 'commander';
-import { NeuralBrain, closeDb } from '@engram/core';
+import { NeuralBrain, closeDb } from '@engram-ai-memory/core';
 import path from 'path';
 
 const DEFAULT_DB_PATH = process.env['ENGRAM_DB_PATH'] ?? path.join(process.cwd(), 'engram.db');

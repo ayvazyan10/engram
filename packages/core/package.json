@@ -1,5 +1,5 @@
 {
-  "name": "@engram/core",
+  "name": "@engram-ai-memory/core",
   "version": "0.1.0",
   "description": "The Brain — memory engine, embeddings, graph, and retrieval",
   "main": "./dist/index.js",
@@ -34,7 +34,7 @@
   },
   "devDependencies": {
     "@types/pg": "^8.11.0",
-    "@engram/tsconfig": "workspace:*",
+    "@engram-ai-memory/tsconfig": "workspace:*",
     "@types/better-sqlite3": "^7.6.12",
     "@types/uuid": "^10.0.0",
     "drizzle-kit": "^0.30.0",

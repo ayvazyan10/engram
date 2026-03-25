@@ -4,7 +4,7 @@
  * Provides OpenClaw agents with access to Engram's persistent memory.
  *
  * Usage in OpenClaw agents:
- *   import { EngramClient } from '@engram/adapter-openclaw';
+ *   import { EngramClient } from '@engram-ai-memory/adapter-openclaw';
  *   const memory = new EngramClient();
  *   const context = await memory.recall('what did the user ask about last time?');
  *

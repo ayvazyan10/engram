@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { DecayPolicyConfig } from '@engram/core';
+import type { DecayPolicyConfig } from '@engram-ai-memory/core';
 import { brain } from '../index.js';
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {

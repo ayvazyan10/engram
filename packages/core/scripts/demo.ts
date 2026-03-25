@@ -87,7 +87,7 @@ async function run() {
 
   const monorepo = await store({
     type: 'semantic', concept: 'Monorepo Architecture',
-    content: 'Single repository containing multiple packages: @engram/core (brain), @engram/mcp (Claude), @engram/server (REST API), @engram/web (dashboard). Managed by pnpm + Turborepo.',
+    content: 'Single repository containing multiple packages: @engram-ai-memory/core (brain), @engram-ai-memory/mcp (Claude), @engram-ai-memory/server (REST API), @engram-ai-memory/web (dashboard). Managed by pnpm + Turborepo.',
     importance: 0.75, tags: ['architecture', 'pnpm', 'turborepo'],
   });
 

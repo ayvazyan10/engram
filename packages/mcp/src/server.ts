@@ -12,7 +12,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { NeuralBrain } from '@engram/core';
+import { NeuralBrain } from '@engram-ai-memory/core';
 import { z } from 'zod';
 
 const brain = new NeuralBrain({

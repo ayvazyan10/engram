@@ -1,0 +1,13 @@
+src/
+scripts/
+*.ts
+!dist/**/*.d.ts
+*.db
+*.db-shm
+*.db-wal
+*.db.index
+__tests__/
+.turbo/
+drizzle.config.ts
+tsconfig.json
+vitest.config.ts

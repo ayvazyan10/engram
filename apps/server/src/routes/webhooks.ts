@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { brain } from '../index.js';
-import type { WebhookEvent } from '@engram/core';
+import type { WebhookEvent } from '@engram-ai-memory/core';
 
 export const webhookRoutes: FastifyPluginAsync = async (app) => {
   const mgr = brain.getWebhookManager();

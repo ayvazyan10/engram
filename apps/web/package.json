@@ -1,5 +1,5 @@
 {
-  "name": "@engram/web",
+  "name": "@engram-ai-memory/web",
   "version": "0.1.0",
   "description": "Engram visualization dashboard — 3D neural graph with React Three Fiber",
   "private": true,
@@ -12,8 +12,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@engram/core": "workspace:*",
-    "@engram/vis": "workspace:*",
+    "@engram-ai-memory/core": "workspace:*",
+    "@engram-ai-memory/vis": "workspace:*",
     "@react-three/drei": "^10.0.6",
     "@react-three/fiber": "^9.1.2",
     "@react-three/postprocessing": "^3.0.4",
@@ -25,7 +25,7 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
-    "@engram/tsconfig": "workspace:*",
+    "@engram-ai-memory/tsconfig": "workspace:*",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
     "@types/three": "^0.177.0",

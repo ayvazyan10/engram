@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { NeuralBrain } from '@engram/core';
+import { NeuralBrain } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';

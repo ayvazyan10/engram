@@ -1,5 +1,5 @@
 {
-  "name": "@engram/vis",
+  "name": "@engram-ai-memory/vis",
   "version": "0.1.0",
   "description": "Visualization helpers — neural graph layout, animation engine, color mapping",
   "main": "./dist/index.js",
@@ -12,7 +12,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "devDependencies": {
-    "@engram/tsconfig": "workspace:*",
+    "@engram-ai-memory/tsconfig": "workspace:*",
     "typescript": "5.7.3"
   }
 }
