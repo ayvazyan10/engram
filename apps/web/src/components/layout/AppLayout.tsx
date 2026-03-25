@@ -5,10 +5,12 @@ import SearchBar from '../ui/SearchBar.js';
 import StatusBar from '../ui/StatusBar.js';
 import NeuronInspector from '../ui/NeuronInspector.js';
 import ViewSwitcher from '../ui/ViewSwitcher.js';
+import TemplateSwitcher from '../ui/TemplateSwitcher.js';
 import StoreMemoryModal from '../ui/StoreMemoryModal.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useViewStore } from '../../store/viewStore.js';
+import { useTemplateStore } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
 import { useWebSocket } from '../../hooks/useWebSocket.js';
 
@@ -16,6 +18,7 @@ export default function AppLayout() {
   const { neurons, setNeurons, setTargetPositions, setConnections, setContradictionPairs } = useNeuralStore();
   const { records, setRecords } = useMemoryStore();
   const { activeView } = useViewStore();
+  const t = useTemplateStore((s) => s.activeTemplate);
   const [loading, setLoading] = useState(true);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [firstLoad, setFirstLoad] = useState(true);
@@ -53,11 +56,9 @@ export default function AppLayout() {
     const positions = activeView.layout(records);
 
     if (firstLoad || neurons.length === 0) {
-      // First load — set positions directly (no transition)
       setNeurons(positions.map((p) => ({ ...p, activation: 0, tx: p.x, ty: p.y, tz: p.z })));
       setFirstLoad(false);
     } else {
-      // Subsequent changes — set target positions for smooth lerp
       setTargetPositions(positions);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -82,39 +83,42 @@ export default function AppLayout() {
   }, [records.length > 0]);
 
   return (
-    <div style={styles.root}>
+    <div style={{ ...s.root, background: t.rootBg }}>
       {/* Header */}
-      <div style={styles.header}>
-        <div style={styles.logo}>
-          <span style={styles.logoIcon}>⬡</span>
-          <span style={styles.logoText}>Engram</span>
-          <span style={styles.logoBadge}>v0.1</span>
+      <div style={{ ...s.header, background: t.headerBg, borderBottomColor: t.headerBorder }}>
+        <div style={s.logo}>
+          <span style={{ ...s.logoIcon, color: t.accent }}>⬡</span>
+          <span style={{ ...s.logoText, color: t.textPrimary }}>Engram</span>
+          <span style={{ ...s.logoBadge, color: t.textMuted, background: t.cardBg }}>v0.1</span>
         </div>
 
         <ViewSwitcher />
 
-        <ConnectionDot />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <TemplateSwitcher />
+          <ConnectionDot />
+        </div>
       </div>
 
       {/* Main */}
-      <div style={styles.main}>
-        <div style={styles.sidebar}>
+      <div style={s.main}>
+        <div style={{ ...s.sidebar, background: t.panelBg, borderRightColor: t.panelBorder }}>
           <SearchBar />
           <MemoryPanel loading={loading} onStore={() => setShowStoreModal(true)} />
         </div>
 
-        <div style={styles.canvas}>
+        <div style={s.canvas}>
           {loading && records.length === 0 ? (
-            <div style={styles.loadingOverlay}>
-              <div style={styles.spinner} />
-              <div style={styles.loadingText}>Loading neural graph…</div>
+            <div style={{ ...s.loadingOverlay, background: t.rootBg }}>
+              <div style={{ ...s.spinner, borderColor: t.panelBorder, borderTopColor: t.accent }} />
+              <div style={{ ...s.loadingText, color: t.textMuted }}>Loading neural graph…</div>
             </div>
           ) : (
             <NeuralCanvas />
           )}
         </div>
 
-        <div style={styles.inspector}>
+        <div style={{ ...s.inspector, background: t.panelBg, borderLeftColor: t.panelBorder }}>
           <NeuronInspector />
         </div>
       </div>
@@ -144,28 +148,22 @@ function ConnectionDot() {
   );
 }
 
-const styles = {
-  root: { display: 'flex', flexDirection: 'column' as const, width: '100%', height: '100%', background: '#020817', overflow: 'hidden' },
+const s = {
+  root: { display: 'flex', flexDirection: 'column' as const, width: '100%', height: '100%', overflow: 'hidden' },
   header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '0 16px',
-    height: '46px',
-    background: '#040d1e',
-    borderBottom: '1px solid #0f2040',
-    flexShrink: 0,
-    gap: '16px',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '0 16px', height: '46px', borderBottom: '1px solid',
+    flexShrink: 0, gap: '12px',
   },
   logo: { display: 'flex', alignItems: 'center', gap: '7px', flexShrink: 0 },
-  logoIcon: { fontSize: '16px', color: '#6366f1' },
-  logoText: { fontSize: '13px', fontWeight: 700, color: '#e2e8f0', letterSpacing: '-0.02em' },
-  logoBadge: { fontSize: '10px', color: '#334155', background: '#0a1628', padding: '1px 5px', borderRadius: '4px' },
+  logoIcon: { fontSize: '16px' },
+  logoText: { fontSize: '13px', fontWeight: 700, letterSpacing: '-0.02em' },
+  logoBadge: { fontSize: '10px', padding: '1px 5px', borderRadius: '4px' },
   main: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
-  sidebar: { width: '260px', flexShrink: 0, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid #0f2040', background: '#060e1e', overflow: 'hidden' },
+  sidebar: { width: '260px', flexShrink: 0, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid', overflow: 'hidden' },
   canvas: { flex: 1, position: 'relative' as const, overflow: 'hidden', minWidth: 0, height: '100%' },
-  inspector: { width: '252px', flexShrink: 0, borderLeft: '1px solid #0f2040', background: '#060e1e', overflow: 'hidden', display: 'flex', flexDirection: 'column' as const },
-  loadingOverlay: { position: 'absolute' as const, inset: 0, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: '12px', background: '#050510' },
-  spinner: { width: '28px', height: '28px', border: '2px solid #1e293b', borderTop: '2px solid #6366f1', borderRadius: '50%' },
-  loadingText: { fontSize: '12px', color: '#334155' },
+  inspector: { width: '252px', flexShrink: 0, borderLeft: '1px solid', overflow: 'hidden', display: 'flex', flexDirection: 'column' as const },
+  loadingOverlay: { position: 'absolute' as const, inset: 0, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: '12px' },
+  spinner: { width: '28px', height: '28px', border: '2px solid', borderRadius: '50%' },
+  loadingText: { fontSize: '12px' },
 } as const;
