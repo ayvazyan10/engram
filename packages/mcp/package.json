@@ -1,6 +1,6 @@
 {
   "name": "@engram-ai-memory/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP Server — connects Engram brain to Claude Code and any MCP client",
   "main": "./dist/server.js",
   "bin": {
