@@ -17,7 +17,7 @@ import { tagRoutes } from './routes/tags.js';
 import { pluginRoutes } from './routes/plugins.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '4901', 10);
-const HOST = process.env['HOST'] ?? '0.0.0.0';
+const HOST = process.env['HOST'] ?? '127.0.0.1';
 const DECAY_INTERVAL = parseInt(process.env['ENGRAM_DECAY_INTERVAL'] ?? '', 10);
 const DECAY_THRESHOLD = parseFloat(process.env['ENGRAM_DECAY_THRESHOLD'] ?? '');
 
