@@ -161,9 +161,6 @@ importers:
 
   packages/cli:
     dependencies:
-      '@engram-ai-memory/core':
-        specifier: workspace:*
-        version: link:../core
       commander:
         specifier: ^13.1.0
         version: 13.1.0
