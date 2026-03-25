@@ -84,8 +84,8 @@ export default function NeuralCanvas() {
           return (
             <ConnectionLine
               key={conn.id}
-              sourcePos={[src.x, src.y, src.z]}
-              targetPos={[tgt.x, tgt.y, tgt.z]}
+              sourcePos={[src.tx ?? src.x, src.ty ?? src.y, src.tz ?? src.z]}
+              targetPos={[tgt.tx ?? tgt.x, tgt.ty ?? tgt.y, tgt.tz ?? tgt.z]}
               strength={conn.strength}
               relationship={conn.relationship}
               style={theme.style}
