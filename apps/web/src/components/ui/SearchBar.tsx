@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { api } from '../../lib/api.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
+import { useTemplateStore } from '../../store/templateStore.js';
 
 export default function SearchBar() {
   const [input, setInput] = useState('');
@@ -8,6 +9,7 @@ export default function SearchBar() {
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const { setSearchResults, setSearching, setContext, setSearchQuery, setHighlightedIds, searchQuery } = useMemoryStore();
+  const t = useTemplateStore((s) => s.activeTemplate);
 
   const hasQuery = searchQuery.length > 0;
 
@@ -42,24 +44,24 @@ export default function SearchBar() {
     inputRef.current?.focus();
   }, [setSearchQuery, setSearchResults, setContext, setHighlightedIds]);
 
-  const borderColor = focused ? '#4f46e5' : hasQuery ? '#312e81' : '#0f2040';
-  const boxShadow   = focused ? '0 0 0 3px rgba(99,102,241,0.12), 0 2px 8px rgba(0,0,0,0.4)' : '0 2px 6px rgba(0,0,0,0.3)';
+  const borderColor = focused ? t.accent : hasQuery ? t.accent + '60' : t.panelBorder;
+  const boxShadow   = focused ? `0 0 0 3px ${t.accentGlow}, 0 2px 8px rgba(0,0,0,0.4)` : '0 2px 6px rgba(0,0,0,0.3)';
 
   return (
-    <div style={styles.wrapper}>
+    <div style={{ ...styles.wrapper, background: `linear-gradient(180deg, ${t.panelBg} 0%, ${t.rootBg} 100%)`, borderBottomColor: t.panelBorder }}>
       {/* Label row */}
       <div style={styles.labelRow}>
-        <span style={styles.label}>Search</span>
+        <span style={{ ...styles.label, color: t.textMuted }}>Search</span>
         {hasQuery && (
-          <span style={styles.activeTag}>
-            <span style={styles.activeDot} />
+          <span style={{ ...styles.activeTag, color: t.accent }}>
+            <span style={{ ...styles.activeDot, background: t.accent, boxShadow: `0 0 5px ${t.accent}` }} />
             semantic recall active
           </span>
         )}
       </div>
 
       {/* Input row */}
-      <div style={{ ...styles.container, borderColor, boxShadow }}>
+      <div style={{ ...styles.container, background: t.inputBg, borderColor, boxShadow }}>
         {/* Search icon / spinner */}
         <div style={styles.iconWrap}>
           {loading ? (
@@ -76,7 +78,7 @@ export default function SearchBar() {
 
         <input
           ref={inputRef}
-          style={styles.input}
+          style={{ ...styles.input, color: t.textPrimary }}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onFocus={() => setFocused(true)}
@@ -92,7 +94,7 @@ export default function SearchBar() {
 
         {/* Clear button */}
         {input && (
-          <button style={styles.clearBtn} onClick={handleClear} title="Clear (Esc)">
+          <button style={{ ...styles.clearBtn, background: t.cardBg }} onClick={handleClear} title="Clear (Esc)">
             <svg viewBox="0 0 16 16" fill="none" style={{ width: 10, height: 10 }}>
               <path d="M3 3l10 10M13 3L3 13" stroke="#475569" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
@@ -113,14 +115,14 @@ export default function SearchBar() {
       </div>
 
       {/* Hint row */}
-      <div style={styles.hint}>
+      <div style={{ ...styles.hint, color: t.textMuted }}>
         <span>↵ search</span>
         <span>·</span>
         <span>esc clear</span>
         {hasQuery && (
           <>
             <span>·</span>
-            <span style={{ color: '#6366f1' }}>"{searchQuery}"</span>
+            <span style={{ color: t.accent }}>"{searchQuery}"</span>
           </>
         )}
       </div>

@@ -45,7 +45,7 @@ export const TEMPLATES: UITemplate[] = [
   },
   {
     id: 'vercel',
-    name: 'Vercel',
+    name: 'Mono',
     headerBg: '#000000',
     headerBorder: '#1a1a1a',
     panelBg: '#0a0a0a',
