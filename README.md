@@ -7,8 +7,8 @@
 **Universal AI Brain — persistent memory and cognition layer for any AI model**
 
 [![CI](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml)
-[![npm @engram/core](https://img.shields.io/npm/v/@engram/core?label=%40engram%2Fcore&color=6366f1)](https://www.npmjs.com/package/@engram/core)
-[![npm @engram/mcp](https://img.shields.io/npm/v/@engram/mcp?label=%40engram%2Fmcp&color=6366f1)](https://www.npmjs.com/package/@engram/mcp)
+[![npm @engram-ai-memory/core](https://img.shields.io/npm/v/@engram-ai-memory/core?label=%40engram-ai-memory%2Fcore&color=6366f1)](https://www.npmjs.com/package/@engram-ai-memory/core)
+[![npm @engram-ai-memory/mcp](https://img.shields.io/npm/v/@engram-ai-memory/mcp?label=%40engram-ai-memory%2Fmcp&color=6366f1)](https://www.npmjs.com/package/@engram-ai-memory/mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![pnpm 9+](https://img.shields.io/badge/pnpm-9%2B-orange)](https://pnpm.io)
@@ -128,7 +128,7 @@ pnpm turbo run build
 ENGRAM_DB_PATH=./engram.db node apps/server/dist/index.js
 
 # Dashboard (port 4902)
-pnpm --filter @engram/web dev
+pnpm --filter @engram-ai-memory/web dev
 ```
 
 ### Store your first memory
@@ -154,7 +154,7 @@ curl -X POST http://localhost:4901/api/recall \
 Install the CLI globally for terminal access:
 
 ```bash
-npm i -g @engram/cli
+npm i -g @engram-ai-memory/cli
 ```
 
 ```bash
@@ -219,14 +219,14 @@ Restart Claude Code. **18 tools** are now available:
 
 | Package | Description | npm |
 |---|---|---|
-| `@engram/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, contradictions, plugins | [![npm](https://img.shields.io/npm/v/@engram/core?color=6366f1)](https://npmjs.com/package/@engram/core) |
-| `@engram/mcp` | MCP Server — 18 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram/mcp?color=6366f1)](https://npmjs.com/package/@engram/mcp) |
-| `@engram/cli` | CLI — store, search, recall, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram/cli?color=6366f1)](https://npmjs.com/package/@engram/cli) |
-| `@engram/server` | Fastify REST API + Socket.io WebSocket (40+ endpoints) | — |
-| `@engram/web` | React 3D visualization dashboard (Three.js) | — |
-| `@engram/vis` | Force-directed layout + animation helpers | [![npm](https://img.shields.io/npm/v/@engram/vis?color=6366f1)](https://npmjs.com/package/@engram/vis) |
-| `@engram/adapter-ollama` | Transparent Ollama memory proxy (:11435) | — |
-| `@engram/adapter-openclaw` | OpenClaw REST adapter | — |
+| `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, contradictions, plugins | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
+| `@engram-ai-memory/mcp` | MCP Server — 18 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
+| `@engram-ai-memory/cli` | CLI — store, search, recall, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
+| `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (40+ endpoints) | — |
+| `@engram-ai-memory/web` | React 3D visualization dashboard (Three.js) | — |
+| `@engram-ai-memory/vis` | Force-directed layout + animation helpers | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/vis?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/vis) |
+| `@engram-ai-memory/adapter-ollama` | Transparent Ollama memory proxy (:11435) | — |
+| `@engram-ai-memory/adapter-openclaw` | OpenClaw REST adapter | — |
 
 ---
 
@@ -265,7 +265,7 @@ All ports are in the 49xx range to avoid conflicts with common dev services (300
 cd packages/core && npx tsx scripts/demo.ts
 
 # Open the 3D visualization
-pnpm --filter @engram/web dev
+pnpm --filter @engram-ai-memory/web dev
 # → http://localhost:4902
 ```
 

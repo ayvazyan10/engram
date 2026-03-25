@@ -17,7 +17,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
          ▼                  ▼              ▼              ▼
 ┌──────────────┐  ┌──────────────────┐  ┌───────────────────────┐
 │  MCP Server  │  │  Ollama Proxy    │  │   REST API :4901      │
-│  @engram/mcp     │  │  @engram/adapter-    │  │   @engram/server          │
+│  @engram-ai-memory/mcp     │  │  @engram-ai-memory/adapter-    │  │   @engram-ai-memory/server          │
 │              │  │  ollama          │  │   Fastify 5           │
 │ 18 MCP tools │  │  :11435→:11434   │  │   + Socket.io /neural │
 └──────┬───────┘  └────────┬─────────┘  └──────────┬────────────┘
@@ -26,7 +26,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
                       │  NeuralBrain API
                       ▼
        ┌──────────────────────────────────────────┐
-       │           @engram/core               │
+       │           @engram-ai-memory/core               │
        │                                           │
        │  ┌──────────┐  ┌──────────┐  ┌────────┐  │
        │  │ Episodic │  │ Semantic │  │ Proced.│  │
@@ -62,7 +62,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
                           ▼
            ┌──────────────────────────┐
            │  React Dashboard :4902   │
-           │  @engram/web                 │
+           │  @engram-ai-memory/web                 │
            │  React Three Fiber (3D)  │
            │  Socket.io (real-time)   │
            └──────────────────────────┘
@@ -75,28 +75,28 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
 ```
 neuralCore/
 ├── packages/
-│   ├── core/               @engram/core      — The Brain
-│   ├── mcp/                @engram/mcp       — Claude Code MCP server
-│   └── vis/                @engram/vis       — Visualization helpers
+│   ├── core/               @engram-ai-memory/core      — The Brain
+│   ├── mcp/                @engram-ai-memory/mcp       — Claude Code MCP server
+│   └── vis/                @engram-ai-memory/vis       — Visualization helpers
 │
 ├── apps/
-│   ├── server/             @engram/server    — REST API + WebSocket
-│   └── web/                @engram/web       — 3D dashboard
+│   ├── server/             @engram-ai-memory/server    — REST API + WebSocket
+│   └── web/                @engram-ai-memory/web       — 3D dashboard
 │
 ├── adapters/
-│   ├── ollama/             @engram/adapter-ollama
-│   └── openclaw/           @engram/adapter-openclaw
+│   ├── ollama/             @engram-ai-memory/adapter-ollama
+│   └── openclaw/           @engram-ai-memory/adapter-openclaw
 │
 └── tooling/
     ├── tsconfig/           shared TypeScript configs
     └── eslint-config/      shared ESLint config
 ```
 
-Build orchestration: **Turborepo** — `dependsOn: ["^build"]` ensures `@engram/core` always builds before packages that depend on it.
+Build orchestration: **Turborepo** — `dependsOn: ["^build"]` ensures `@engram-ai-memory/core` always builds before packages that depend on it.
 
 ---
 
-## Core brain (`@engram/core`)
+## Core brain (`@engram-ai-memory/core`)
 
 ### NeuralBrain class
 
@@ -271,7 +271,7 @@ created_at        DATETIME
 
 ---
 
-## REST API server (`@engram/server`)
+## REST API server (`@engram-ai-memory/server`)
 
 Built with **Fastify 5** for high throughput and automatic JSON schema validation.
 
@@ -284,7 +284,7 @@ See [API.md](API.md) for full endpoint reference.
 
 ---
 
-## Visualization dashboard (`@engram/web`)
+## Visualization dashboard (`@engram-ai-memory/web`)
 
 Built with **React 19 + Vite 6**. Three-dimensional neural graph rendered with **React Three Fiber** and **@react-three/drei**.
 

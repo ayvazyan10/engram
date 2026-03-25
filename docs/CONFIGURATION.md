@@ -383,7 +383,7 @@ const myPlugin: EngramPlugin = {
 ### Registration
 
 ```typescript
-import { NeuralBrain } from '@engram/core';
+import { NeuralBrain } from '@engram-ai-memory/core';
 
 const brain = new NeuralBrain({ dbPath: './engram.db' });
 brain.registerPlugin(myPlugin);

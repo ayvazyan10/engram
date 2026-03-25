@@ -51,7 +51,7 @@ adapters/* (depend on core)
 pnpm turbo run build
 
 # Build a single package (+ its dependencies)
-pnpm turbo run build --filter=@engram/server
+pnpm turbo run build --filter=@engram-ai-memory/server
 
 # Force rebuild (ignore cache)
 pnpm turbo run build --force
@@ -90,7 +90,7 @@ Server starts at `http://localhost:4901`.
 ### Start the dashboard
 
 ```bash
-pnpm --filter @engram/web dev
+pnpm --filter @engram-ai-memory/web dev
 # → http://localhost:4902
 ```
 
@@ -138,8 +138,8 @@ pnpm db:migrate
 Root-level scripts:
 
 ```json
-"db:generate": "pnpm --filter @engram/core exec drizzle-kit generate",
-"db:migrate":  "pnpm --filter @engram/core exec drizzle-kit migrate"
+"db:generate": "pnpm --filter @engram-ai-memory/core exec drizzle-kit generate",
+"db:migrate":  "pnpm --filter @engram-ai-memory/core exec drizzle-kit migrate"
 ```
 
 ---
@@ -167,7 +167,7 @@ mkdir packages/my-package
 cd packages/my-package
 cat > package.json << 'EOF'
 {
-  "name": "@engram/my-package",
+  "name": "@engram-ai-memory/my-package",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -180,7 +180,7 @@ EOF
 
 cat > tsconfig.json << 'EOF'
 {
-  "extends": "@engram/tsconfig/node.json",
+  "extends": "@engram-ai-memory/tsconfig/node.json",
   "compilerOptions": { "outDir": "./dist" },
   "include": ["src"]
 }
@@ -191,7 +191,7 @@ EOF
 
 ```bash
 # Add to a specific package
-pnpm --filter @engram/server add fastify
+pnpm --filter @engram-ai-memory/server add fastify
 
 # Add a dev dependency to the workspace root
 pnpm add -Dw typescript
@@ -208,10 +208,10 @@ Tests use **Vitest** (runs natively with ESM, no transpilation needed).
 pnpm turbo run test
 
 # Watch mode for a package
-pnpm --filter @engram/core exec vitest
+pnpm --filter @engram-ai-memory/core exec vitest
 
 # With coverage
-pnpm --filter @engram/core exec vitest --coverage
+pnpm --filter @engram-ai-memory/core exec vitest --coverage
 ```
 
 Test files: `src/**/*.test.ts`

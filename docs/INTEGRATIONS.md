@@ -20,7 +20,7 @@ The MCP server exposes Engram as native tools inside Claude Code. No API calls n
 
 ```bash
 cd /path/to/neuralcore
-pnpm turbo run build --filter=@engram/mcp
+pnpm turbo run build --filter=@engram-ai-memory/mcp
 ```
 
 **2. Add to Claude Code settings**
@@ -371,7 +371,7 @@ Client request  →  [Engram Proxy :11435]  →  [Ollama :11434]
 **1. Build the adapter**
 
 ```bash
-pnpm turbo run build --filter=@engram/adapter-ollama
+pnpm turbo run build --filter=@engram-ai-memory/adapter-ollama
 ```
 
 **2. Start the proxy**
@@ -418,7 +418,7 @@ The OpenClaw adapter provides a `EngramClient` class and a `withMemory()` conven
 **1. Build the adapter**
 
 ```bash
-pnpm turbo run build --filter=@engram/adapter-openclaw
+pnpm turbo run build --filter=@engram-ai-memory/adapter-openclaw
 ```
 
 **2. Configure Engram URL in OpenClaw settings**
@@ -435,7 +435,7 @@ pnpm turbo run build --filter=@engram/adapter-openclaw
 **3. Import and use in your OpenClaw agent**
 
 ```typescript
-import { EngramClient, withMemory } from '@engram/adapter-openclaw';
+import { EngramClient, withMemory } from '@engram-ai-memory/adapter-openclaw';
 
 // Option A — client class
 const neural = new EngramClient({ url: 'http://localhost:4901' });
@@ -541,10 +541,10 @@ async function recall(query: string): Promise<string> {
 
 ## CLI Integration
 
-The `@engram/cli` package works directly with the database — no running server needed.
+The `@engram-ai-memory/cli` package works directly with the database — no running server needed.
 
 ```bash
-npm i -g @engram/cli
+npm i -g @engram-ai-memory/cli
 
 # Store from a script
 echo "Deploy completed at $(date)" | xargs -I{} engram store "{}" --type episodic --source deploy-script
@@ -612,7 +612,7 @@ Plugins extend Engram with lifecycle hooks. They run in-process and have access 
 ### Plugin manifest
 
 ```typescript
-import type { EngramPlugin } from '@engram/core';
+import type { EngramPlugin } from '@engram-ai-memory/core';
 
 const myPlugin: EngramPlugin = {
   id: 'my-org/analytics',
@@ -647,7 +647,7 @@ const myPlugin: EngramPlugin = {
 ### Registration
 
 ```typescript
-import { NeuralBrain } from '@engram/core';
+import { NeuralBrain } from '@engram-ai-memory/core';
 
 const brain = new NeuralBrain({ dbPath: './engram.db' });
 brain.registerPlugin(myPlugin);

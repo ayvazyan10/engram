@@ -38,7 +38,7 @@ ENGRAM_DB_PATH=./packages/core/engram.db \
   node apps/server/dist/index.js
 
 # Terminal 2 — Dashboard
-pnpm --filter @engram/web dev
+pnpm --filter @engram-ai-memory/web dev
 ```
 
 ---
