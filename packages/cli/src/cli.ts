@@ -152,23 +152,23 @@ program
       }
     }
 
-    const execOpts = { cwd: config.repoPath, stdio: 'pipe' as const, env: { ...process.env, NODE_NO_WARNINGS: '1' } };
+    const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
 
     step('Installing dependencies...');
     try {
-      execSync('pnpm install --no-frozen-lockfile', execOpts);
+      execSync('pnpm install --no-frozen-lockfile', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
       ok('Dependencies installed');
-    } catch (err) {
-      fail(`Install failed: ${err instanceof Error ? err.message : err}`);
+    } catch {
+      fail('Install failed. Check the output above for details.');
       process.exit(1);
     }
 
     step('Building all packages...');
     try {
-      execSync('pnpm turbo run build', execOpts);
+      execSync('pnpm turbo run build', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
       ok('Build complete');
-    } catch (err) {
-      fail(`Build failed: ${err instanceof Error ? err.message : err}`);
+    } catch {
+      fail('Build failed. Check the output above for details.');
       process.exit(1);
     }
 
