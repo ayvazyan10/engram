@@ -90,17 +90,17 @@ const engramPlugin = {
             const count = result.memories?.length ?? 0;
             if (!result.context || count === 0) {
               return {
-                content: [{ type: "text", text: "No relevant memories found." }],
+                content: "No relevant memories found." ,
                 details: { count: 0 },
               };
             }
             return {
-              content: [{ type: "text", text: result.context }],
+              content: result.context ,
               details: { count, latencyMs: result.latencyMs },
             };
           } catch (err) {
             return {
-              content: [{ type: "text", text: `Memory unavailable: ${err.message}` }],
+              content: `Memory unavailable: ${err.message}` ,
             };
           }
         },
@@ -149,14 +149,12 @@ const engramPlugin = {
               source: src,
             });
             return {
-              content: [
-                { type: "text", text: `Stored (id: ${result.id}, type: ${result.type})` },
-              ],
+              content: `Stored (id: ${result.id}, type: ${result.type})`,
               details: { id: result.id, type: result.type },
             };
           } catch (err) {
             return {
-              content: [{ type: "text", text: `Store failed: ${err.message}` }],
+              content: `Store failed: ${err.message}` ,
             };
           }
         },
@@ -192,7 +190,7 @@ const engramPlugin = {
             const results = result.results ?? [];
             if (results.length === 0) {
               return {
-                content: [{ type: "text", text: "No results found." }],
+                content: "No results found." ,
                 details: { count: 0 },
               };
             }
@@ -203,12 +201,12 @@ const engramPlugin = {
               )
               .join("\n");
             return {
-              content: [{ type: "text", text: `${results.length} results:\n\n${text}` }],
+              content: `${results.length} results:\n\n${text}` ,
               details: { count: results.length },
             };
           } catch (err) {
             return {
-              content: [{ type: "text", text: `Search failed: ${err.message}` }],
+              content: `Search failed: ${err.message}` ,
             };
           }
         },
