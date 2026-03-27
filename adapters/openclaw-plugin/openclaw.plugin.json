@@ -1,0 +1,14 @@
+{
+  "id": "engram",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "url": { "type": "string" },
+      "source": { "type": "string" },
+      "autoRecall": { "type": "boolean" },
+      "maxTokens": { "type": "number" }
+    }
+  }
+}
