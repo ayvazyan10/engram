@@ -2,7 +2,8 @@
  * OpenClaw × Engram Memory Plugin
  *
  * Connects OpenClaw agents to Engram's persistent semantic memory.
- * Provides three tools: memory_recall, memory_store, engram_search.
+ * Provides six tools: memory_recall, memory_store, engram_search,
+ * memory_forget, memory_list, memory_stats.
  * Optionally injects relevant memories before each agent turn (autoRecall).
  *
  * Config (plugins.entries.engram.config in openclaw.json):
@@ -213,6 +214,149 @@ const engramPlugin = {
         },
       },
       { name: "engram_search" },
+    );
+
+    // -------------------------------------------------------------------------
+    // Tool: memory_forget
+    // -------------------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: "memory_forget",
+        label: "Memory Forget",
+        description:
+          "Delete (archive) a memory from Engram by its ID. Use to remove duplicates or outdated information.",
+        parameters: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Memory ID to delete" },
+          },
+          required: ["id"],
+        },
+        async execute(_id, params) {
+          const { id } = params;
+          try {
+            const res = await fetch(`${baseUrl}/api/memory/${encodeURIComponent(id)}`, {
+              method: "DELETE",
+              signal: AbortSignal.timeout(5000),
+            });
+            if (res.status === 204 || res.ok) {
+              return { content: `Deleted memory ${id}` };
+            }
+            return { content: `Failed to delete ${id}: HTTP ${res.status}` };
+          } catch (err) {
+            return { content: `Delete failed: ${err.message}` };
+          }
+        },
+      },
+      { name: "memory_forget" },
+    );
+
+    // -------------------------------------------------------------------------
+    // Tool: memory_list
+    // -------------------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: "memory_list",
+        label: "Memory List",
+        description:
+          "List all memories stored in Engram with optional filtering. Returns IDs, types, content previews, and importance scores. Use to audit, deduplicate, or browse memories.",
+        parameters: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              enum: ["episodic", "semantic", "procedural"],
+              description: "Filter by memory type (optional)",
+            },
+            source: {
+              type: "string",
+              description: "Filter by source tag (optional)",
+            },
+            limit: {
+              type: "number",
+              description: "Max results to return (default: 50, max: 200)",
+            },
+            offset: {
+              type: "number",
+              description: "Offset for pagination (default: 0)",
+            },
+          },
+        },
+        async execute(_id, params) {
+          const { type, source, limit = 50, offset = 0 } = params;
+          try {
+            const qs = new URLSearchParams();
+            if (type) qs.set("type", type);
+            if (source) qs.set("source", source);
+            qs.set("limit", String(Math.min(limit, 200)));
+            qs.set("offset", String(offset));
+            const result = await engramGet(`/api/memory?${qs}`);
+            const memories = result.memories ?? [];
+            if (memories.length === 0) {
+              return {
+                content: `No memories found (total: ${result.count ?? 0})`,
+                details: { count: 0, total: result.count ?? 0 },
+              };
+            }
+            const text = memories
+              .map(
+                (m, i) =>
+                  `${offset + i + 1}. [${m.type}] id=${m.id} imp=${m.importance ?? "?"} src=${m.source ?? "?"}\n   ${(m.content ?? "").slice(0, 120)}`,
+              )
+              .join("\n");
+            return {
+              content: `${result.count ?? memories.length} total memories (showing ${memories.length} from offset ${offset}):\n\n${text}`,
+              details: { count: memories.length, total: result.count ?? memories.length },
+            };
+          } catch (err) {
+            return { content: `List failed: ${err.message}` };
+          }
+        },
+      },
+      { name: "memory_list" },
+    );
+
+    // -------------------------------------------------------------------------
+    // Tool: memory_stats
+    // -------------------------------------------------------------------------
+
+    api.registerTool(
+      {
+        name: "memory_stats",
+        label: "Memory Stats",
+        description:
+          "Get Engram brain statistics: total memory count, breakdown by type (episodic/semantic/procedural), by source, graph edges, and index size.",
+        parameters: {
+          type: "object",
+          properties: {},
+        },
+        async execute() {
+          try {
+            const stats = await engramGet("/api/stats");
+            const lines = [
+              `Total memories: ${stats.total}`,
+              `By type: episodic=${stats.byType?.episodic ?? 0}, semantic=${stats.byType?.semantic ?? 0}, procedural=${stats.byType?.procedural ?? 0}`,
+              `Graph: ${stats.graphNodes ?? 0} nodes, ${stats.graphEdges ?? 0} edges`,
+              `Index size: ${stats.indexSize ?? 0}`,
+            ];
+            if (stats.bySource) {
+              const sources = Object.entries(stats.bySource)
+                .map(([k, v]) => `${k}=${v}`)
+                .join(", ");
+              lines.push(`By source: ${sources}`);
+            }
+            return {
+              content: lines.join("\n"),
+              details: stats,
+            };
+          } catch (err) {
+            return { content: `Stats failed: ${err.message}` };
+          }
+        },
+      },
+      { name: "memory_stats" },
     );
 
     // -------------------------------------------------------------------------

@@ -33,6 +33,25 @@ export interface MemoryStats {
   total: number;
   byType: Record<string, number>;
   bySource: Record<string, number>;
+  graphNodes?: number;
+  graphEdges?: number;
+  indexSize?: number;
+}
+
+export interface MemoryEntry {
+  id: string;
+  content: string;
+  type: string;
+  importance: number | null;
+  source: string | null;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListResult {
+  count: number;
+  memories: MemoryEntry[];
 }
 
 export class EngramClient {
@@ -104,6 +123,36 @@ export class EngramClient {
   }
 
   /**
+   * List all memories with optional filtering and pagination.
+   */
+  async list(
+    options: { type?: string; source?: string; limit?: number; offset?: number } = {}
+  ): Promise<ListResult> {
+    const params = new URLSearchParams();
+    if (options.type) params.set('type', options.type);
+    if (options.source) params.set('source', options.source);
+    params.set('limit', String(Math.min(options.limit ?? 50, 200)));
+    params.set('offset', String(options.offset ?? 0));
+    const response = await this.get(`/api/memory?${params}`);
+    return response as ListResult;
+  }
+
+  /**
+   * Delete (archive) a memory by ID.
+   */
+  async forget(id: string): Promise<void> {
+    await this.del(`/api/memory/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Get a single memory by ID.
+   */
+  async getById(id: string): Promise<MemoryEntry> {
+    const response = await this.get(`/api/memory/${encodeURIComponent(id)}`);
+    return response as MemoryEntry;
+  }
+
+  /**
    * Check if Engram is reachable.
    */
   async ping(): Promise<boolean> {
@@ -121,6 +170,16 @@ export class EngramClient {
     });
     if (!response.ok) throw new Error(`Engram API error: ${response.status}`);
     return response.json();
+  }
+
+  private async del(path: string): Promise<void> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(this.defaultTimeout),
+    });
+    if (!response.ok && response.status !== 204) {
+      throw new Error(`Engram API error: ${response.status}`);
+    }
   }
 
   private async post(path: string, body: unknown): Promise<unknown> {

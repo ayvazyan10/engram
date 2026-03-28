@@ -440,7 +440,18 @@ If Engram is unavailable (not running, slow, or erroring), the proxy falls throu
 
 ## OpenClaw
 
-The OpenClaw adapter provides a `EngramClient` class and a `withMemory()` convenience wrapper for enriching agent actions with Engram context.
+OpenClaw integration comes in two forms:
+
+1. **Plugin** (`adapters/openclaw-plugin/`) — drop-in memory plugin that registers 6 tools (`memory_recall`, `memory_store`, `engram_search`, `memory_forget`, `memory_list`, `memory_stats`) with auto-recall and auto-store hooks
+2. **Adapter** (`adapters/openclaw/`) — `EngramClient` TypeScript class and `withMemory()` convenience wrapper for custom agent code
+
+### Plugin (recommended)
+
+Copy `adapters/openclaw-plugin/` to `~/.openclaw/plugins/engram/` and configure in `openclaw.json`. See the [engram.am OpenClaw docs](https://engram.am/docs/openclaw) for full setup instructions.
+
+### Adapter (TypeScript client)
+
+The adapter provides a `EngramClient` class and a `withMemory()` convenience wrapper for enriching agent actions with Engram context.
 
 ### Setup
 
@@ -482,33 +493,59 @@ const result = await withMemory(userMessage, async (context) => {
 
 ```typescript
 class EngramClient {
-  constructor(config: { url: string; timeout?: number })
+  constructor(config: { url?: string; source?: string; timeoutMs?: number })
 
   // Assemble context for a query
-  recall(query: string, maxTokens?: number): Promise<string>
+  recall(query: string, maxTokens?: number): Promise<RecallResult>
 
   // Store a memory
-  store(content: string, options?: {
-    type?: 'episodic' | 'semantic' | 'procedural';
-    source?: string;
+  store(content: string, type?: 'episodic' | 'semantic' | 'procedural', options?: {
     importance?: number;
-  }): Promise<string | null>  // returns memory ID or null on failure
+    tags?: string[];
+    sessionId?: string;
+  }): Promise<StoreResult>
+
+  // Semantic search across memories
+  search(query: string, options?: {
+    topK?: number;
+    threshold?: number;
+    types?: string[];
+  }): Promise<unknown[]>
+
+  // List all memories with pagination and filtering
+  list(options?: {
+    type?: string;
+    source?: string;
+    limit?: number;    // default 50, max 200
+    offset?: number;
+  }): Promise<ListResult>
+
+  // Delete (archive) a memory by ID
+  forget(id: string): Promise<void>
+
+  // Get a single memory by ID
+  getById(id: string): Promise<MemoryEntry>
+
+  // Memory statistics
+  stats(): Promise<MemoryStats>
+
+  // Health check — returns true if Engram is reachable
+  ping(): Promise<boolean>
 }
 ```
 
-### `withMemory()` wrapper
+### `withMemory()` convenience wrapper
 
 ```typescript
-async function withMemory<T>(
+async function withMemory(
   query: string,
-  handler: (context: string) => Promise<T>,
-  options?: { storeResponse?: boolean; source?: string }
-): Promise<T>
+  options?: { url?: string; source?: string; maxTokens?: number }
+): Promise<string>
 ```
 
-- Calls `/api/recall` before running `handler`
-- Optionally calls `/api/memory` after to store the agent's response
-- Returns empty string (not an error) if Engram is unavailable
+- Calls `/api/recall` and returns the formatted context string
+- Returns empty string (not an error) if Engram is unavailable — graceful degradation
+- Inject the returned string at the top of your system prompt
 
 ---
 
