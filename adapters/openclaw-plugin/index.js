@@ -19,6 +19,7 @@ const engramPlugin = {
   kind: "memory",
 
   register(api) {
+    api.logger?.info?.(`engram: registrationMode=${api.registrationMode}`);
     const cfg = api.pluginConfig ?? {};
     const baseUrl = cfg.url ?? process.env.ENGRAM_API ?? "http://localhost:4901";
     const baseSource = cfg.source ?? "openclaw";
@@ -275,6 +276,20 @@ const engramPlugin = {
       if (!text || text.length < 3) return;
       const key = event.sessionKey ?? event.chatId ?? "default";
       pendingUserMsg.set(key, { text: text.slice(0, 1000), ts: Date.now() });
+
+      // Store user message immediately (don't rely on message_sent pairing)
+      try {
+        await engramPost("/api/memory", {
+          content: `User: ${text.slice(0, 1000)}`,
+          type: "episodic",
+          importance: 0.5,
+          source: agentSource(event),
+          sessionId: key,
+        });
+        api.logger?.info?.("engram: stored user message");
+      } catch {
+        // Engram unavailable — skip silently
+      }
     }, { name: "engram-message-received" });
 
     api.on("message_sent", async (event) => {
