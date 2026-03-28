@@ -42,6 +42,35 @@ pnpm turbo run build --filter=@engram-ai-memory/mcp
 
 **3. Restart Claude Code** — the tools will appear automatically.
 
+### Auto-store conversations (optional)
+
+By default, memories are only stored when Claude explicitly calls `store_memory`. To automatically save a conversation summary to engram when each session ends, add a Claude Code hook:
+
+```bash
+# Copy the hook script from the repo
+cp scripts/claude-code-hook.sh ~/.claude/hooks/engram-session-end.sh
+chmod +x ~/.claude/hooks/engram-session-end.sh
+```
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "~/.claude/hooks/engram-session-end.sh",
+        "timeout": 15
+      }]
+    }]
+  }
+}
+```
+
+The hook reads the session transcript, extracts assistant messages, and stores them as an episodic memory tagged `auto-stored`. The brain grows automatically with every conversation.
+
 ### Available MCP tools
 
 #### `store_memory`

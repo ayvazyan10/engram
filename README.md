@@ -220,6 +220,39 @@ Restart Claude Code. **18 tools** are now available:
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
 
+### Auto-store conversations (optional)
+
+Add a Claude Code hook to automatically save conversation summaries to engram when a session ends:
+
+```bash
+# Copy the hook script
+cp scripts/claude-code-hook.sh ~/.claude/hooks/engram-session-end.sh
+chmod +x ~/.claude/hooks/engram-session-end.sh
+```
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/engram-session-end.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Every session now auto-stores a summary to engram — the brain grows without manual effort.
+
 ---
 
 ## Packages
