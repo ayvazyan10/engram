@@ -219,7 +219,7 @@ const engramPlugin = {
     // -------------------------------------------------------------------------
 
     if (autoRecall) {
-      api.registerHook("before_agent_start", async (event) => {
+      api.on("before_agent_start", async (event) => {
         if (!event.prompt || event.prompt.length < 10) return;
         try {
           const src = agentSource(event);
@@ -259,7 +259,7 @@ const engramPlugin = {
         } catch {
           // Engram unavailable — degrade silently
         }
-      }, { name: "engram-auto-recall", description: "Inject engram memories before agent turn" });
+      }, { name: "engram-auto-recall" });
     }
 
     // -------------------------------------------------------------------------
@@ -269,14 +269,16 @@ const engramPlugin = {
     // Buffer: per-session last user message, awaiting the assistant reply
     const pendingUserMsg = new Map(); // sessionKey → { text, timestamp }
 
-    api.registerHook("message_received", async (event) => {
+    api.on("message_received", async (event) => {
+      api.logger?.info?.("engram: message_received hook fired");
       const text = event.text ?? event.content ?? event.body ?? "";
       if (!text || text.length < 3) return;
       const key = event.sessionKey ?? event.chatId ?? "default";
       pendingUserMsg.set(key, { text: text.slice(0, 1000), ts: Date.now() });
-    }, { name: "engram-message-received", description: "Buffer user message for engram memory" });
+    }, { name: "engram-message-received" });
 
-    api.registerHook("message_sent", async (event) => {
+    api.on("message_sent", async (event) => {
+      api.logger?.info?.("engram: message_sent hook fired");
       const assistantText = event.text ?? event.content ?? event.body ?? "";
       if (!assistantText || assistantText.length < 5) return;
 
@@ -305,10 +307,10 @@ const engramPlugin = {
           sessionId: key,
         });
         api.logger?.info?.(`engram: stored exchange (source: ${src}, importance: ${importance.toFixed(2)})`);
-      } catch {
-        // Engram unavailable — skip silently
+      } catch (err) {
+        api.logger?.warn?.(`engram: auto-store failed: ${err.message}`);
       }
-    }, { name: "engram-auto-store", description: "Store exchange in engram memory" });
+    }, { name: "engram-auto-store" });
 
     // Flush unbuffered user messages after 2 minutes with no reply
     setInterval(() => {
