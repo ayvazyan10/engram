@@ -1,13 +1,12 @@
 ---
 name: engram
-description: Persistent AI memory backend with semantic search and knowledge graph. Stores episodic, semantic, and procedural memories in a local SQLite database and retrieves the most relevant ones using vector similarity + graph traversal. Use when you need to remember information across sessions, recall past decisions, store facts about a project, detect contradictions between beliefs, or give any AI model a persistent, growing brain. All embeddings run locally — no API keys required.
+description: "Persistent AI memory backend with semantic search and knowledge graph. Stores episodic, semantic, and procedural memories in a local SQLite database and retrieves the most relevant ones using vector similarity and graph traversal. Use when you need to remember information across sessions, recall past decisions, store facts about a project, detect contradictions between beliefs, or give any AI model a persistent growing brain. All embeddings run locally - no API keys required."
 license: MIT
-compatibility: Requires Node.js >= 22 and npm. Embedding model (~25 MB) downloads automatically on first use. Works on macOS, Linux, and Windows.
+compatibility: "Requires Node.js 22+ and npm. Works on macOS, Linux, and Windows."
 metadata:
   author: ayvazyan10
   version: "0.1.3"
   homepage: https://engram.am
-  npm: "@engram-ai-memory/mcp"
 ---
 
 # Engram AI Memory
