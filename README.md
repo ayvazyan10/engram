@@ -9,7 +9,7 @@
 [![CI](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml)
 [![npm @engram-ai-memory/core](https://img.shields.io/npm/v/@engram-ai-memory/core?label=%40engram-ai-memory%2Fcore&color=6366f1)](https://www.npmjs.com/package/@engram-ai-memory/core)
 [![npm @engram-ai-memory/mcp](https://img.shields.io/npm/v/@engram-ai-memory/mcp?label=%40engram-ai-memory%2Fmcp&color=6366f1)](https://www.npmjs.com/package/@engram-ai-memory/mcp)
-[![Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+[![Smithery](https://smithery.ai/badge/ayvazyan10/engram)](https://smithery.ai/skills/ayvazyan10/engram)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![pnpm 9+](https://img.shields.io/badge/pnpm-9%2B-orange)](https://pnpm.io)
@@ -95,7 +95,7 @@ CLI            ──direct───────→ ┘
 | Integration | Method | How |
 |---|---|---|
 | **Claude Code** | MCP (18 native tools) | `store_memory`, `recall_context`, `check_contradictions`, … |
-| **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/server/engram) or `.mcpb` from releases |
+| **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/skills/ayvazyan10/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
 | **OpenClaw** | REST adapter | `EngramClient` or `withMemory()` wrapper |
 | **Any app** | Direct REST API | `POST /api/recall` + `POST /api/memory` |
@@ -264,9 +264,9 @@ The fastest way to get Engram into Claude Desktop — no manual JSON editing req
 
 ### Via Smithery
 
-[![Install on Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+[![Install on Smithery](https://smithery.ai/badge/ayvazyan10/engram)](https://smithery.ai/skills/ayvazyan10/engram)
 
-Go to [smithery.ai/server/engram](https://smithery.ai/server/engram), click **Install**, optionally set your database path and namespace, and Smithery configures Claude Desktop automatically.
+Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan10/engram), click **Install**, optionally set your database path and namespace, and Smithery configures Claude Desktop automatically.
 
 ### Via .mcpb Desktop Extension
 

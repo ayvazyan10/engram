@@ -12,9 +12,9 @@ npm install -g @engram-ai-memory/mcp
 
 ### Smithery (1-click — recommended for Claude Desktop)
 
-[![Install on Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+[![Install on Smithery](https://smithery.ai/badge/ayvazyan10/engram)](https://smithery.ai/skills/ayvazyan10/engram)
 
-[smithery.ai/server/engram](https://smithery.ai/server/engram) — installs and configures automatically.
+[smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan10/engram) — installs and configures automatically.
 
 ### Desktop Extension (.mcpb)
 
