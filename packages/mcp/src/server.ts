@@ -51,6 +51,7 @@ server.tool(
     sessionId: z.string().optional().describe('Session ID to group related episodic memories'),
     namespace: z.string().optional().describe('Override namespace for this memory'),
   },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   async ({ content, type, source, tags, importance, concept, sessionId, namespace }) => {
     await ensureInitialized();
 
@@ -116,6 +117,7 @@ server.tool(
       .describe('Filter by memory type'),
     crossNamespace: z.boolean().optional().default(false).describe('If true, search across all namespaces'),
   },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ query, topK, threshold, types, crossNamespace }) => {
     await ensureInitialized();
 
@@ -168,6 +170,7 @@ server.tool(
     crossNamespace: z.boolean().optional().default(false).describe('If true, recall from all namespaces'),
     progressive: z.boolean().optional().default(false).describe('If true, return memories grouped by recall phase (vector, graph) with scores'),
   },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ query, maxTokens, types, sources, crossNamespace, progressive }) => {
     await ensureInitialized();
 
@@ -264,6 +267,7 @@ server.tool(
       .default(0.7)
       .describe('Importance 0.0–1.0'),
   },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   async ({ concept, content, tags, importance }) => {
     await ensureInitialized();
 
@@ -292,6 +296,7 @@ server.tool(
   'memory_stats',
   'Get statistics about the current state of the AI brain memory system.',
   {},
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async () => {
     await ensureInitialized();
     const stats = await brain.stats();
@@ -315,6 +320,7 @@ server.tool(
     ids: z.array(z.string()).describe('Memory IDs to archive'),
     reason: z.string().optional().describe('Reason for forgetting (logged only)'),
   },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async ({ ids, reason }) => {
     await ensureInitialized();
 
@@ -348,6 +354,7 @@ server.tool(
       .default(false)
       .describe('If true, compute what would be archived without actually modifying anything'),
   },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   async ({ dryRun }) => {
     await ensureInitialized();
 
@@ -384,6 +391,7 @@ server.tool(
     importanceFloor: z.number().min(0).max(1).optional().describe('Minimum importance after decay'),
     consolidationEnabled: z.boolean().optional().describe('Enable/disable auto-consolidation'),
   },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ action, halfLifeDays, archiveThreshold, importanceDecayRate, importanceFloor, consolidationEnabled }) => {
     await ensureInitialized();
 
@@ -431,6 +439,7 @@ server.tool(
   {
     memoryId: z.string().optional().describe('Memory ID to check. If omitted, lists all unresolved contradictions.'),
   },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ memoryId }) => {
     await ensureInitialized();
 
@@ -486,6 +495,7 @@ server.tool(
       .enum(['keep_newest', 'keep_oldest', 'keep_important', 'keep_both', 'manual'])
       .describe('Resolution strategy'),
   },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async ({ sourceId, targetId, strategy }) => {
     await ensureInitialized();
 
@@ -513,6 +523,7 @@ server.tool(
   'plugin_list',
   'List all registered Engram plugins with their hooks and metadata.',
   {},
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async () => {
     await ensureInitialized();
     const plugins = brain.listPlugins();
@@ -539,6 +550,7 @@ server.tool(
     tag: z.string().optional().describe('If provided, returns memories with this tag. If omitted, returns the tag cloud.'),
     limit: z.number().min(1).max(200).optional().default(50).describe('Max memories to return when filtering by tag.'),
   },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ tag, limit }) => {
     await ensureInitialized();
 
@@ -582,6 +594,7 @@ server.tool(
     tag: z.string().describe('Tag string to add or remove'),
     action: z.enum(['add', 'remove']).default('add').describe('Whether to add or remove the tag'),
   },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   async ({ memoryId, tag, action }) => {
     await ensureInitialized();
 
@@ -612,6 +625,7 @@ server.tool(
     secret: z.string().optional().describe('Shared secret for HMAC-SHA256 signature verification'),
     description: z.string().optional().describe('Human-readable description of this webhook'),
   },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   async ({ url, events, secret, description }) => {
     await ensureInitialized();
     const hook = await brain.getWebhookManager().subscribe({ url, events, secret, description });
@@ -626,6 +640,7 @@ server.tool(
   'webhook_list',
   'List all webhook subscriptions.',
   {},
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async () => {
     await ensureInitialized();
     const hooks = await brain.getWebhookManager().list();
@@ -653,6 +668,7 @@ server.tool(
   'index_status',
   'Get the vector index status — how it was loaded (disk cache or full rebuild), entry count, and persistence info.',
   {},
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async () => {
     await ensureInitialized();
     const status = brain.getIndexStatus();
@@ -677,6 +693,7 @@ server.tool(
   'embedding_status',
   'Get the status of the embedding model — shows current model, dimension, and how many memories need re-embedding.',
   {},
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async () => {
     await ensureInitialized();
     const status = await brain.embeddingStatus();
@@ -704,6 +721,7 @@ server.tool(
     onlyStale: z.boolean().optional().default(true).describe('If true, only re-embed memories with a different or missing model ID. Default: true.'),
     batchSize: z.number().min(1).max(100).optional().default(32).describe('Batch size for processing. Default: 32.'),
   },
+  { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ onlyStale, batchSize }) => {
     await ensureInitialized();
     const result = await brain.reEmbed(onlyStale, batchSize);

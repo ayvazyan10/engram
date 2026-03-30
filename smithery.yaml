@@ -1,0 +1,44 @@
+name: engram
+description: Universal AI memory backend — store, search, and recall memories with semantic similarity and knowledge graph traversal. Gives any AI model persistent, structured memory across sessions.
+license: MIT
+category: memory
+homepage: https://engram.am
+repository: https://github.com/ayvazyan10/engram
+
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required: []
+    properties:
+      dbPath:
+        type: string
+        title: Database Path
+        description: >
+          Path to the SQLite database file where memories are persisted.
+          Defaults to ~/.engram/engram.db if not set.
+        default: ""
+      namespace:
+        type: string
+        title: Namespace
+        description: >
+          Optional namespace to isolate memories per project or context.
+          Leave empty to use the global namespace.
+        default: ""
+      embeddingModel:
+        type: string
+        title: Embedding Model
+        description: >
+          Xenova (ONNX) embedding model to use for semantic similarity.
+          Defaults to Xenova/all-MiniLM-L6-v2 (384-dim, runs 100% locally).
+        default: ""
+  commandFunction: |-
+    (config) => ({
+      command: "npx",
+      args: ["-y", "@engram-ai-memory/mcp@latest"],
+      env: {
+        ...(config.dbPath       ? { ENGRAM_DB_PATH:         config.dbPath }       : {}),
+        ...(config.namespace    ? { ENGRAM_NAMESPACE:        config.namespace }    : {}),
+        ...(config.embeddingModel ? { ENGRAM_EMBEDDING_MODEL: config.embeddingModel } : {}),
+      }
+    })

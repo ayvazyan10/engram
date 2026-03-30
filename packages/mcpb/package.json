@@ -1,0 +1,13 @@
+{
+  "name": "@engram-ai-memory/desktop-extension",
+  "version": "0.1.3",
+  "description": "Claude Desktop Extension (.mcpb) for Engram MCP server",
+  "private": true,
+  "scripts": {
+    "pack": "bash scripts/pack.sh",
+    "validate": "mcpb validate manifest.json"
+  },
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "latest"
+  }
+}

@@ -3,10 +3,47 @@
 Engram exposes multiple integration surfaces:
 
 1. **MCP Server** — for Claude Code and any MCP-compatible client (18 tools)
-2. **REST API** — for everything else (Ollama, OpenClaw, custom apps, 40+ endpoints)
-3. **CLI** — terminal workflows and scripting
-4. **Webhooks** — push notifications to external systems on memory events
-5. **Plugin System** — extend Engram with lifecycle hooks
+2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
+3. **REST API** — for everything else (Ollama, OpenClaw, custom apps, 40+ endpoints)
+4. **CLI** — terminal workflows and scripting
+5. **Webhooks** — push notifications to external systems on memory events
+6. **Plugin System** — extend Engram with lifecycle hooks
+
+---
+
+## Claude Desktop Extension (1-click install)
+
+The easiest way to get Engram into Claude Desktop — no manual JSON editing or path configuration.
+
+### Via Smithery
+
+[![Install on Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+
+Go to [smithery.ai/server/engram](https://smithery.ai/server/engram) and click **Install**. Smithery automatically configures Claude Desktop and prompts for optional settings (database path, namespace).
+
+### Via .mcpb Desktop Extension
+
+1. Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest)
+2. Open Claude Desktop → File → Open Extension
+3. Select the `.mcpb` file
+
+On first launch the extension installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` via npm (requires npm to be available). Subsequent launches skip the install step and start immediately.
+
+**User config options (set during installation):**
+
+| Option | Description | Default |
+|---|---|---|
+| `db_path` | SQLite database path | `~/.engram/engram.db` |
+| `namespace` | Memory namespace for isolation | *(global)* |
+
+**How the bootstrap launcher works:**
+
+```
+Claude Desktop  →  node ~/.engram/mcp/server/index.js
+                      │
+                      ├─ First run:  npm install @engram-ai-memory/mcp → ~/.engram/mcp/
+                      └─ All runs:   spawn node packages/mcp/dist/server.js  (stdio)
+```
 
 ---
 

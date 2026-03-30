@@ -4,9 +4,21 @@ MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to 
 
 ## Install
 
+### npm (manual)
+
 ```bash
 npm install -g @engram-ai-memory/mcp
 ```
+
+### Smithery (1-click — recommended for Claude Desktop)
+
+[![Install on Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+
+[smithery.ai/server/engram](https://smithery.ai/server/engram) — installs and configures automatically.
+
+### Desktop Extension (.mcpb)
+
+Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases) and open in Claude Desktop.
 
 ## Claude Code Setup
 

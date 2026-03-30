@@ -9,6 +9,7 @@
 [![CI](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml/badge.svg)](https://github.com/ayvazyan10/engram/actions/workflows/ci.yml)
 [![npm @engram-ai-memory/core](https://img.shields.io/npm/v/@engram-ai-memory/core?label=%40engram-ai-memory%2Fcore&color=6366f1)](https://www.npmjs.com/package/@engram-ai-memory/core)
 [![npm @engram-ai-memory/mcp](https://img.shields.io/npm/v/@engram-ai-memory/mcp?label=%40engram-ai-memory%2Fmcp&color=6366f1)](https://www.npmjs.com/package/@engram-ai-memory/mcp)
+[![Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![pnpm 9+](https://img.shields.io/badge/pnpm-9%2B-orange)](https://pnpm.io)
@@ -83,16 +84,18 @@ The AI responds with awareness of everything it has ever learned. After the exch
 ## Integrations
 
 ```
-Claude Code ──MCP────────→ ┐
-Ollama ──────proxy────────→ │  Engram  →  SQLite / PostgreSQL
-OpenClaw ────REST─────────→ │  REST :4901
-Any app ─────REST─────────→ │  WebSocket :4901/neural
-CLI ─────────direct───────→ ┘
+Claude Code    ──MCP──────────→ ┐
+Claude Desktop ──extension────→ │  Engram  →  SQLite / PostgreSQL
+Ollama         ──proxy────────→ │  REST :4901
+OpenClaw       ──REST─────────→ │  WebSocket :4901/neural
+Any app        ──REST─────────→ │
+CLI            ──direct───────→ ┘
 ```
 
 | Integration | Method | How |
 |---|---|---|
 | **Claude Code** | MCP (18 native tools) | `store_memory`, `recall_context`, `check_contradictions`, … |
+| **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/server/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
 | **OpenClaw** | REST adapter | `EngramClient` or `withMemory()` wrapper |
 | **Any app** | Direct REST API | `POST /api/recall` + `POST /api/memory` |
@@ -252,6 +255,24 @@ Add to `~/.claude/settings.json`:
 ```
 
 Every session now auto-stores a summary to engram — the brain grows without manual effort.
+
+---
+
+## Claude Desktop Extension (1-click install)
+
+The fastest way to get Engram into Claude Desktop — no manual JSON editing required.
+
+### Via Smithery
+
+[![Install on Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+
+Go to [smithery.ai/server/engram](https://smithery.ai/server/engram), click **Install**, optionally set your database path and namespace, and Smithery configures Claude Desktop automatically.
+
+### Via .mcpb Desktop Extension
+
+Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
+
+> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 18 MCP tools are then available in Claude Desktop.
 
 ---
 

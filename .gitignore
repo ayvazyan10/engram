@@ -46,3 +46,7 @@ test-results/
 packages/core/models/
 *.db.bak
 *.db.index
+
+# Desktop extension build artifact
+*.mcpb
+packages/mcpb/.bundle/

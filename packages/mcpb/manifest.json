@@ -1,0 +1,70 @@
+{
+  "manifest_version": "0.3",
+  "name": "engram-mcp",
+  "display_name": "Engram AI Memory",
+  "version": "0.1.3",
+  "description": "Universal AI memory — store, search, and recall memories with semantic similarity and knowledge graph traversal.",
+  "long_description": "Engram gives any AI model persistent, structured memory across sessions.\n\nOn first launch it installs `@engram-ai-memory/mcp` from npm (requires Node.js ≥ 22 and npm). The embedding model (all-MiniLM-L6-v2) downloads automatically on first use (~25 MB).\n\n**18 tools across 7 categories:**\n- **Memory** — `store_memory`, `search_memory`, `recall_context`, `add_knowledge`, `forget`\n- **Stats** — `memory_stats`, `index_status`, `embedding_status`\n- **Lifecycle** — `decay_sweep`, `decay_policy`, `re_embed`\n- **Contradictions** — `check_contradictions`, `resolve_contradiction`\n- **Tags** — `list_tags`, `tag_memory`\n- **Webhooks** — `webhook_subscribe`, `webhook_list`\n- **Plugins** — `plugin_list`\n\n**Recommended workflow:**\n```\nSession start  → recall_context(task description)\nDuring work    → store_memory(decisions, findings)\nEnd of session → store_memory(session summary)\n```\n\nAll embeddings run 100% locally — no external API calls.",
+  "author": {
+    "name": "engram-ai-memory",
+    "email": "contact@engram.am"
+  },
+  "repository": "https://github.com/ayvazyan10/engram",
+  "homepage": "https://engram.am",
+  "documentation": "https://github.com/ayvazyan10/engram/blob/master/docs/INTEGRATIONS.md",
+  "license": "MIT",
+  "keywords": ["memory", "ai", "mcp", "semantic-search", "knowledge-graph", "embeddings", "persistence"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "ENGRAM_DB_PATH": "${user_config.db_path}",
+        "ENGRAM_NAMESPACE": "${user_config.namespace}",
+        "ENGRAM_PACKAGE_VERSION": "0.1.3"
+      }
+    }
+  },
+  "tools": [
+    { "name": "store_memory",          "description": "Store an episodic, semantic, or procedural memory" },
+    { "name": "search_memory",         "description": "Search memories via semantic similarity" },
+    { "name": "recall_context",        "description": "Assemble formatted context for AI prompts (primary recall tool)" },
+    { "name": "add_knowledge",         "description": "Add a semantic fact or concept" },
+    { "name": "forget",                "description": "Archive (soft-delete) memories" },
+    { "name": "memory_stats",          "description": "Brain statistics: counts, sources, types" },
+    { "name": "index_status",          "description": "Vector index status and performance info" },
+    { "name": "embedding_status",      "description": "Embedding model status and re-embed needs" },
+    { "name": "decay_sweep",           "description": "Run memory decay based on Ebbinghaus forgetting curve" },
+    { "name": "decay_policy",          "description": "View or update decay configuration" },
+    { "name": "re_embed",              "description": "Re-embed memories with the current model" },
+    { "name": "check_contradictions",  "description": "Find contradictions between memories" },
+    { "name": "resolve_contradiction", "description": "Resolve a contradiction using a strategy" },
+    { "name": "list_tags",             "description": "Get tag cloud or memories by tag" },
+    { "name": "tag_memory",            "description": "Add or remove a tag on a memory" },
+    { "name": "webhook_subscribe",     "description": "Subscribe a URL to memory events (HMAC-signed)" },
+    { "name": "webhook_list",          "description": "List webhook subscriptions" },
+    { "name": "plugin_list",           "description": "List registered Engram plugins" }
+  ],
+  "tools_generated": false,
+  "user_config": {
+    "db_path": {
+      "type": "string",
+      "title": "Database Path",
+      "description": "Path to the SQLite file where memories are stored. Leave empty to use the default (~/.engram/engram.db).",
+      "required": false,
+      "default": ""
+    },
+    "namespace": {
+      "type": "string",
+      "title": "Namespace",
+      "description": "Optional namespace to isolate memories per project or context. Leave empty for the global namespace.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"]
+  }
+}

@@ -12,6 +12,7 @@
     "e2e": "turbo run e2e",
     "db:generate": "pnpm --filter @engram-ai-memory/core drizzle-kit generate",
     "db:migrate": "pnpm --filter @engram-ai-memory/core drizzle-kit migrate",
+    "pack:mcpb": "pnpm --filter @engram-ai-memory/desktop-extension pack",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
