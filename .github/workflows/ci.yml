@@ -28,6 +28,12 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
 
+      - name: Cache Xenova embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: xenova-all-MiniLM-L6-v2-v1
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
