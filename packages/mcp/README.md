@@ -18,7 +18,7 @@ npm install -g @engram-ai-memory/mcp
 
 ### Desktop Extension (.mcpb)
 
-Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases) and open in Claude Desktop.
+Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest) and open in Claude Desktop.
 
 ## Claude Code Setup
 

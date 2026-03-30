@@ -270,7 +270,7 @@ Go to [smithery.ai/server/engram](https://smithery.ai/server/engram), click **In
 
 ### Via .mcpb Desktop Extension
 
-Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
+Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
 
 > **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 18 MCP tools are then available in Claude Desktop.
 
