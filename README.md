@@ -380,6 +380,54 @@ Key areas where help is especially welcome:
 
 ---
 
+## Usage examples
+
+### Example 1 — Session start: recall relevant context
+
+```
+User: "Continue working on the auth refactor"
+Claude: [calls recall_context("auth refactor current status")]
+→ Returns past decisions, code patterns, and session notes about auth
+```
+
+Tool: `recall_context` · Input: `{ "query": "auth refactor current status", "maxTokens": 1500 }` · Output: formatted context block with matched memories and scores.
+
+### Example 2 — Store a decision
+
+```
+User: "Always use drizzle-kit migrate, never drizzle-kit push — it broke prod once"
+Claude: [calls store_memory with type "procedural", importance 0.95]
+→ Next session: search_memory("database migrations") surfaces this rule automatically
+```
+
+Tool: `store_memory` → `search_memory` · Demonstrates cross-session persistence.
+
+### Example 3 — Contradiction detection
+
+```
+User (day 1): "Production runs on PostgreSQL 15"
+User (day 30): "We migrated prod to SQLite WAL last month"
+Claude: [store_memory returns contradictions detected]
+→ calls resolve_contradiction(strategy: "keep_newest")
+```
+
+Tool: `store_memory` + `resolve_contradiction` · Engram flags the conflict with 0.87 confidence and archives the stale belief.
+
+---
+
+## Privacy policy
+
+Engram is local-first and privacy-preserving by design:
+
+- **No data leaves your machine.** All memories are stored in a local SQLite database (`~/.engram/engram.db` by default).
+- **All embeddings run on-device.** The `all-MiniLM-L6-v2` model runs locally via `@xenova/transformers` — no external embedding API calls.
+- **No telemetry.** Engram does not collect usage statistics, crash reports, or any analytics.
+- **Webhooks are opt-in.** If you configure webhooks, memory events are sent to your chosen URL — fully under your control.
+
+Full privacy policy: **https://engram.am/privacy**
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE)

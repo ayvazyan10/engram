@@ -66,5 +66,8 @@
   },
   "compatibility": {
     "platforms": ["darwin", "linux", "win32"]
-  }
+  },
+  "privacy_policies": [
+    "https://engram.am/privacy"
+  ]
 }
