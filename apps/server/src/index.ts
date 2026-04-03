@@ -7,6 +7,9 @@ import swaggerUi from '@fastify/swagger-ui';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { healthRoutes } from './routes/health.js';
 import { memoryRoutes } from './routes/memory.js';
@@ -86,7 +89,7 @@ async function start() {
   await app.register(pluginRoutes, { prefix: '/api' });
 
   // ─── Serve 3D dashboard (if built) ──────────────────────────────────────
-  const dashboardPath = path.resolve(process.cwd(), 'apps', 'web', 'dist');
+  const dashboardPath = path.resolve(__dirname, '..', '..', '..', 'apps', 'web', 'dist');
   if (fs.existsSync(path.join(dashboardPath, 'index.html'))) {
     await app.register(fastifyStatic, {
       root: dashboardPath,

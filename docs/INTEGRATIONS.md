@@ -424,6 +424,14 @@ Client request  →  [Engram Proxy :11435]  →  [Ollama :11434]
                    inject context       ←   store exchange as episodic memory
 ```
 
+The proxy intercepts three endpoint paths:
+
+| Path | Protocol |
+|---|---|
+| `/api/chat` | Ollama native |
+| `/api/generate` | Ollama native |
+| `/v1/chat/completions` | OpenAI-compatible |
+
 1. Client sends chat request to `:11435`
 2. Proxy extracts the user message
 3. Calls Engram `/api/recall` (3s timeout — falls through gracefully if unavailable)
@@ -431,6 +439,8 @@ Client request  →  [Engram Proxy :11435]  →  [Ollama :11434]
 5. Forwards modified request to `:11434`
 6. Streams response back to client
 7. After response: stores `[User]: ... [Assistant]: ...` as episodic memory
+
+**Tool-call retry:** When a request includes a `tools` array and the model responds with plain text (`finish_reason: stop`) instead of a tool call, the proxy retries once with an added instruction message before returning the response. Disable with `ENGRAM_TOOL_RETRY=false`.
 
 ### Setup
 
@@ -468,6 +478,7 @@ base_url = "http://localhost:11435/v1"
 | `OLLAMA_TARGET` | `http://localhost:11434` | Real Ollama server URL |
 | `ENGRAM_API` | `http://localhost:4901` | Engram REST API URL |
 | `ENGRAM_MAX_TOKENS` | `1500` | Max context tokens to inject |
+| `ENGRAM_TOOL_RETRY` | `true` | Retry once when model misses a tool call (`false` to disable) |
 
 ### Graceful degradation
 

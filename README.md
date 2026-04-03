@@ -304,6 +304,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
+| `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 
 ---
 

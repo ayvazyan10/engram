@@ -7,6 +7,20 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`@engram-ai-memory/adapter-ollama`** — OpenAI-compatible API interception: proxy now also intercepts `/v1/chat/completions` in addition to `/api/chat` and `/api/generate`, enabling memory injection for any client using the OpenAI-compatible Ollama endpoint
+- **`@engram-ai-memory/adapter-ollama`** — Tool-call retry: when a model responds with plain text instead of a tool call (detected via `finish_reason`), the proxy automatically retries once with an explicit instruction message; controlled via `ENGRAM_TOOL_RETRY` env var (default: `true`)
+
+### Fixed
+
+- **`@engram-ai-memory/cli`** — `dev` script was `tsx src/cli.ts` which exits with code 1 (CLI with no arguments), causing `turbo run dev` to abort the entire workspace; changed to `tsc --watch` consistent with other packages
+- **`@engram-ai-memory/server`** — Dashboard static path resolved relative to `__dirname` instead of `process.cwd()`, fixing serving when the server is started from a non-root working directory
+
+---
+
 ## [0.1.0] — 2026-03-21
 
 ### Added
