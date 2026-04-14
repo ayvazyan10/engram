@@ -7,9 +7,6 @@ import swaggerUi from '@fastify/swagger-ui';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 import { healthRoutes } from './routes/health.js';
 import { memoryRoutes } from './routes/memory.js';
@@ -98,12 +95,19 @@ async function start() {
       wildcard: false,
     });
 
-    // SPA fallback — serve index.html for non-API, non-static routes
-    app.setNotFoundHandler((req, reply) => {
+    // SPA fallback — serve index.html for non-API, non-static routes.
+    // @fastify/static is registered with `decorateReply: false`, so
+    // `reply.sendFile` is unavailable; read the file directly instead.
+    const indexPath = path.join(dashboardPath, 'index.html');
+    app.setNotFoundHandler(async (req, reply) => {
       if (req.url.startsWith('/api/') || req.url.startsWith('/docs')) {
-        reply.code(404).send({ error: 'Not Found', statusCode: 404 });
-      } else {
-        reply.sendFile('index.html', dashboardPath);
+        return reply.code(404).send({ error: 'Not Found', statusCode: 404 });
+      }
+      try {
+        const data = await fs.promises.readFile(indexPath);
+        return reply.header('Content-Type', 'text/html').send(data);
+      } catch {
+        return reply.code(404).send({ error: 'Not Found', statusCode: 404 });
       }
     });
 

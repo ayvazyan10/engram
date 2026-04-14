@@ -141,6 +141,14 @@ pnpm turbo run build
 node apps/server/dist/index.js
 ```
 
+Or keep it running in the background with PM2:
+
+```bash
+pnpm turbo run build
+pm2 start ecosystem.config.cjs
+pm2 logs engram
+```
+
 ### Store your first memory
 
 ```bash
