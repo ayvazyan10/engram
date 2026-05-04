@@ -597,6 +597,61 @@ async function withMemory(
 
 ---
 
+## Asterisk
+
+[Asterisk](https://github.com/ayvazyan10/asterisk) is a lightweight, open-source AI agent CLI built on Bun. By default, its conversation history lives in memory and is lost on restart. Three integration paths give Asterisk persistent memory via Engram.
+
+See the [engram.am Asterisk docs](https://engram.am/docs/asterisk) for full setup instructions with examples.
+
+### Option A — MCP Server (recommended)
+
+Asterisk has full MCP client support. Add Engram as an MCP server in `~/.asterisk/config.json`:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "engram",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
+      "env": {
+        "ENGRAM_DB_PATH": "/path/to/engram.db"
+      }
+    }
+  ]
+}
+```
+
+Restart Asterisk. All 18 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
+
+If Engram is already configured for Claude Code, use the same `server.js` path and database — both tools share the same brain.
+
+### Option B — Ollama Proxy (zero config)
+
+If Asterisk uses Ollama as its provider, point it at the Engram Ollama proxy instead. In `~/.asterisk/config.json`:
+
+```json
+{
+  "provider": "ollama",
+  "ollama": {
+    "baseUrl": "http://localhost:11435"
+  }
+}
+```
+
+The proxy intercepts every request, injects relevant memories into the system prompt, and auto-stores conversations as episodic memories. No MCP configuration or tool calls needed.
+
+### Option C — REST API + Soul/Hooks
+
+For maximum control, add memory recall/store instructions to Asterisk's soul system (`~/.asterisk/SOUL.md`) and use lifecycle hooks in `~/.asterisk/config.json` to auto-store exchanges after each turn. This works regardless of provider (Ollama or Anthropic).
+
+### Telegram & WhatsApp bots
+
+When Asterisk runs in daemon mode with bot transports enabled, each bot session uses the same provider configuration. If you configured the Ollama proxy (Option B), bot conversations automatically gain memory. If you configured MCP (Option A), the agent has memory tools in bot sessions too.
+
+---
+
 ## Custom integrations (REST)
 
 Any application can integrate with Engram directly via HTTP.
