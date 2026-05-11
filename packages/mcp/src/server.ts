@@ -21,10 +21,34 @@ const brain = new NeuralBrain({
   namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
 });
 
-const server = new McpServer({
-  name: 'engram',
-  version: '0.1.0',
-});
+const server = new McpServer(
+  {
+    name: 'engram',
+    version: '0.1.0',
+  },
+  {
+    instructions: [
+      'Engram is the user\'s persistent AI memory system.',
+      'You MUST use it automatically — do NOT wait for the user to ask.',
+      '',
+      'On every conversation start:',
+      '  - Call recall_context with a brief summary of what the user is asking about.',
+      '',
+      'During the conversation:',
+      '  - When you learn something important (user preferences, project context,',
+      '    decisions, facts, corrections), call store_memory to save it.',
+      '  - Use type="episodic" for events/conversations, "semantic" for facts/knowledge,',
+      '    "procedural" for patterns/workflows.',
+      '  - When you need past context, call search_memory or recall_context.',
+      '',
+      'Before answering questions that may have prior context:',
+      '  - Call search_memory to check if relevant information was stored before.',
+      '',
+      'Do NOT ask the user "should I save this?" — just save what matters.',
+      'Do NOT announce every store/recall — use them silently like your own memory.',
+    ].join('\n'),
+  }
+);
 
 // ─── Tool: store_memory ───────────────────────────────────────────────────────
 server.tool(
