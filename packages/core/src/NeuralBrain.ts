@@ -14,7 +14,7 @@
 import fs from 'fs';
 import { and, eq, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { closeDb, getDb, schema } from './db/index.js';
+import { closeDb, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   EMBEDDING_DIMENSION, embed, embedBatch, packFP16, unpackFP16,
@@ -329,6 +329,13 @@ export class NeuralBrain {
     });
   }
 
+  private defaultImportance(type: string, source: string | null): number {
+    const aiClient = source === 'claude-code' || source === 'ollama';
+    if (type === 'semantic') return aiClient ? 0.85 : 0.7;
+    if (type === 'procedural') return aiClient ? 0.8 : 0.5;
+    return aiClient ? 0.75 : 0.5;
+  }
+
   /**
    * Store a new memory.
    */
@@ -353,7 +360,7 @@ export class NeuralBrain {
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
       embeddingModel: getEmbeddingModelId(),
-      importance: input.importance ?? (type === 'semantic' ? 0.7 : 0.5),
+      importance: input.importance ?? this.defaultImportance(type, source),
       source,
       sessionId: input.sessionId ?? null,
       eventAt: (input.eventAt ?? new Date()).toISOString(),
@@ -624,6 +631,7 @@ export class NeuralBrain {
    */
   async stats(): Promise<MemoryStats> {
     this.assertInitialized();
+    walCheckpoint();
     const db = getDb();
 
     const statsConditions = [isNull(schema.memories.archivedAt)];

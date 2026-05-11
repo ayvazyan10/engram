@@ -47,5 +47,18 @@ export function getDatabaseConnection(config?: AdapterConfig): DatabaseConnectio
   return getDatabase(config);
 }
 
+/**
+ * Force WAL checkpoint so the current connection sees external writes.
+ * Safe to call any time — no-op on PostgreSQL or if no connection exists.
+ */
+export function walCheckpoint(): void {
+  try {
+    const conn = getDatabase();
+    conn.walCheckpoint();
+  } catch {
+    // No active connection — nothing to checkpoint
+  }
+}
+
 export { schema, getDatabase, closeDatabase, getDialect };
 export type { DatabaseDialect, AdapterConfig, DatabaseConnection };

@@ -32,6 +32,8 @@ export interface DatabaseConnection {
   close: () => void;
   /** Whether pgvector is available (PostgreSQL only) */
   hasPgVector: boolean;
+  /** Force WAL checkpoint so reads see external writes (SQLite only, no-op on PG) */
+  walCheckpoint: () => void;
 }
 
 // Singleton
@@ -125,6 +127,9 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
       sqlite.close();
     },
     hasPgVector: false,
+    walCheckpoint: () => {
+      sqlite.pragma('wal_checkpoint(PASSIVE)');
+    },
   };
 }
 
@@ -310,6 +315,7 @@ function createPostgresConnection(url: string): DatabaseConnection {
       pool.end();
     },
     get hasPgVector() { return hasPgVector; },
+    walCheckpoint: () => {},
   };
 
   return connection;

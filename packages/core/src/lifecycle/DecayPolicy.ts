@@ -46,6 +46,13 @@ export const DEFAULT_PROTECTION_RULES: ProtectionRule[] = [
       }
     },
   },
+  {
+    name: 'ai-client-source',
+    predicate: (m) => {
+      const src = m.source ?? '';
+      return src === 'claude-code' || src === 'ollama' || src === 'rest-api';
+    },
+  },
 ];
 
 // ─── Consolidation Config ────────────────────────────────────────────────────
