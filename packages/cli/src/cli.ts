@@ -109,7 +109,7 @@ const program = new Command();
 program
   .name('engram')
   .description('Engram CLI — Universal AI Brain')
-  .version('0.1.4');
+  .version('0.1.8');
 
 // ─── setup ───────────────────────────────────────────────────────────────────
 
@@ -394,6 +394,129 @@ configCmd.command('set <key> <value>').description('Set a config value').action(
 });
 configCmd.command('path').description('Print config file path').action(() => console.log(CONFIG_PATH));
 configCmd.action(() => console.log(JSON.stringify(loadConfig(), null, 2)));
+
+// ─── update ─────────────────────────────────────────────────────────────────
+
+program
+  .command('update')
+  .description('Update Engram to the latest version — pull, rebuild, and restart')
+  .option('--no-restart', 'Skip server restart after update')
+  .action(async (opts) => {
+    console.log(`\n${B}  ⬡  Engram Update${X}\n`);
+
+    const config = loadConfig();
+    const repoPath = config.repoPath;
+
+    if (!fs.existsSync(path.join(repoPath, '.git'))) {
+      fail(`Repository not found at ${repoPath}`);
+      console.log(`  Run ${C}engram setup${X} first.`);
+      process.exit(1);
+    }
+
+    step('Checking for updates...');
+    try {
+      execSync('git fetch --quiet', { cwd: repoPath, stdio: 'pipe' });
+    } catch {
+      fail('Could not reach remote repository. Check your connection.');
+      process.exit(1);
+    }
+
+    const local = execSync('git rev-parse HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
+    const remote = execSync('git rev-parse @{u}', { cwd: repoPath, encoding: 'utf8' }).trim();
+
+    if (local === remote) {
+      ok('Already up to date.');
+      console.log();
+      return;
+    }
+
+    const behind = execSync('git rev-list --count HEAD..@{u}', { cwd: repoPath, encoding: 'utf8' }).trim();
+    step(`${behind} new commit(s) available`);
+
+    step('Pulling latest changes...');
+    try {
+      execSync('git pull --ff-only', { cwd: repoPath, stdio: 'pipe' });
+      ok('Repository updated');
+    } catch {
+      fail('Pull failed — you may have local modifications.');
+      console.log(`  Try: ${D}cd ${repoPath} && git stash && engram update${X}`);
+      process.exit(1);
+    }
+
+    const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
+
+    step('Installing dependencies...');
+    try {
+      execSync('pnpm install --no-frozen-lockfile', { cwd: repoPath, stdio: 'inherit', env: execEnv });
+      ok('Dependencies installed');
+    } catch {
+      fail('Install failed. Check the output above.');
+      process.exit(1);
+    }
+
+    step('Rebuilding all packages...');
+    try {
+      execSync('pnpm turbo run build', { cwd: repoPath, stdio: 'inherit', env: execEnv });
+      ok('Build complete');
+    } catch {
+      fail('Build failed. Check the output above.');
+      process.exit(1);
+    }
+
+    if (opts.restart !== false) {
+      const { running, pid } = isServerRunning();
+      if (running) {
+        step('Restarting server...');
+        try {
+          process.kill(pid!, 'SIGTERM');
+          fs.unlinkSync(PID_PATH);
+        } catch {}
+
+        await new Promise((r) => setTimeout(r, 1000));
+
+        const serverScript = path.join(repoPath, 'apps', 'server', 'dist', 'index.js');
+        const env = {
+          ...process.env,
+          PORT: String(config.port),
+          HOST: config.host,
+          ENGRAM_DB_PATH: config.dbPath,
+          ENGRAM_INDEX_PATH: config.indexPath,
+          ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
+          ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
+        };
+        fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
+        const logFd = fs.openSync(LOG_PATH, 'a');
+        const child = spawn('node', [serverScript], {
+          env,
+          detached: true,
+          stdio: ['ignore', logFd, logFd],
+          cwd: repoPath,
+        });
+        child.unref();
+        fs.writeFileSync(PID_PATH, String(child.pid));
+
+        const url = `http://${config.host}:${config.port}/api/health`;
+        let healthy = false;
+        for (let i = 0; i < 20; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          try {
+            const res = await fetch(url);
+            if (res.ok) { healthy = true; break; }
+          } catch {}
+        }
+
+        if (healthy) {
+          ok(`Server restarted (PID ${child.pid})`);
+        } else {
+          warn('Server may not have restarted cleanly. Check logs:');
+          console.log(`  ${D}cat ${LOG_PATH}${X}`);
+        }
+      }
+    }
+
+    const newRev = execSync('git rev-parse --short HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
+    console.log(`\n${B}${G}  Engram updated to ${newRev}${X}\n`);
+  });
 
 // ─── store ───────────────────────────────────────────────────────────────────
 

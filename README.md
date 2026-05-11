@@ -50,7 +50,7 @@ Most AI tools forget everything the moment a session ends. Engram solves this by
 | **Webhooks** | Subscribe external systems to memory events (stored, forgotten, decayed, consolidated, contradiction) |
 | **Tagging & Collections** | Tag cloud, filter by tag, prefix-based collections (e.g. `project:alpha`) |
 | **Plugin System** | 6 lifecycle hooks (onStore, onRecall, onForget, onDecay, onStartup, onShutdown) |
-| **Importance Learning** | Auto-boost importance when recalled, decay when unused |
+| **Importance Decay** | Source-aware default importance, daily decay for unused memories, protection rules for AI clients |
 | **Observability** | Debug endpoints, scoring breakdowns, Swagger UI at `/docs` |
 
 ---
@@ -124,6 +124,7 @@ That's it. Open http://localhost:4901 for the dashboard, `/docs` for Swagger UI.
 
 ```bash
 engram setup       # Clone, build, configure, set up Claude Code MCP
+engram update      # Pull latest changes, rebuild, restart server
 engram start       # Start the server (background)
 engram stop        # Stop the server
 engram doctor      # Health checks
@@ -202,17 +203,36 @@ Set `ENGRAM_DB_PATH` to point at your database file.
 
 ## Claude Code (MCP) setup
 
-Add Engram as a native tool in Claude Code — no API calls, no wrappers:
+Add Engram as a native tool in Claude Code — no API calls, no wrappers.
+
+Create `~/.mcp.json` (global) or `.mcp.json` in a project root (per-project):
 
 ```json
-// ~/.claude/settings.json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "@engram-ai-memory/mcp@latest"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db"
+      }
+    }
+  }
+}
+```
+
+> **Note:** Do not put `mcpServers` in `~/.claude/settings.json` — that file is for Claude Code settings only. MCP servers belong in `.mcp.json`.
+
+If you installed via `engram setup`, you can point to the local build instead:
+
+```json
 {
   "mcpServers": {
     "engram": {
       "command": "node",
-      "args": ["/path/to/engram/packages/mcp/dist/server.js"],
+      "args": ["~/.engram/repo/packages/mcp/dist/server.js"],
       "env": {
-        "ENGRAM_DB_PATH": "/path/to/engram/engram.db"
+        "ENGRAM_DB_PATH": "~/.engram/engram.db"
       }
     }
   }
