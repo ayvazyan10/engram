@@ -60,7 +60,7 @@ describe('DecayPolicy', () => {
     expect(DEFAULT_DECAY_POLICY.importanceFloor).toBe(0.05);
     expect(DEFAULT_DECAY_POLICY.consolidation.enabled).toBe(true);
     expect(DEFAULT_DECAY_POLICY.consolidation.minClusterSize).toBe(3);
-    expect(DEFAULT_DECAY_POLICY.protectionRules.length).toBe(4);
+    expect(DEFAULT_DECAY_POLICY.protectionRules.length).toBe(5);
   });
 
   it('merges partial policy with defaults', () => {
