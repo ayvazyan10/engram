@@ -109,7 +109,7 @@ const program = new Command();
 program
   .name('engram')
   .description('Engram CLI — Universal AI Brain')
-  .version('0.1.8');
+  .version('0.1.9');
 
 // ─── setup ───────────────────────────────────────────────────────────────────
 
