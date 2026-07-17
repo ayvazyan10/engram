@@ -127,13 +127,17 @@ That's it. Open http://localhost:4901 for the dashboard, `/docs` for Swagger UI.
 ### CLI commands
 
 ```bash
-engram setup       # Clone, build, configure, set up Claude Code MCP
-engram update      # Pull latest changes, rebuild, restart server
-engram start       # Start the server (background)
-engram stop        # Stop the server
-engram doctor      # Health checks
-engram status      # Server status + memory count
-engram configure   # View/set config (port, dbPath, LLM, etc.)
+engram setup                # Clone, build, configure, set up MCP for any AI client
+engram setup --npx          # Fast setup — npx-based MCP config, no clone/build
+engram setup --source cursor # Set ENGRAM_SOURCE for client identification
+engram init                 # Generate AI memory instructions (CLAUDE.md, .cursorrules, etc.)
+engram init --client cursor # Generate instructions for a specific client
+engram update               # Pull latest changes, rebuild, restart server
+engram start                # Start the server (background)
+engram stop                 # Stop the server
+engram doctor               # Health checks (verifies ~/.mcp.json config)
+engram status               # Server status + memory count
+engram configure            # View/set config (port, dbPath, LLM, etc.)
 ```
 
 ### Manual install (alternative)
@@ -233,9 +237,9 @@ Set `ENGRAM_DB_PATH` to point at your database file.
 
 ---
 
-## Claude Code (MCP) setup
+## MCP Setup (Claude Code, Cursor, Windsurf, Cline)
 
-Add Engram as a native tool in Claude Code — no API calls, no wrappers.
+Add Engram as a native tool in any MCP-compatible AI client — no API calls, no wrappers.
 
 Create `~/.mcp.json` (global) or `.mcp.json` in a project root (per-project):
 
@@ -273,7 +277,7 @@ If you installed via `engram setup`, you can point to the local build instead:
 }
 ```
 
-Restart Claude Code. **21 tools** are now available:
+Restart your AI client. **21 tools** are now available:
 
 | Category | Tools |
 |---|---|
@@ -335,7 +339,7 @@ Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan
 
 Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
 
-> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 18 MCP tools are then available in Claude Desktop.
+> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 21 MCP tools are then available in Claude Desktop.
 
 ---
 
@@ -360,6 +364,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 |---|---|---|
 | `PORT` | `4901` | API server port |
 | `HOST` | `0.0.0.0` | Bind address |
+| `ENGRAM_SOURCE` | `mcp-client` | Client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
 | `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
 | `ENGRAM_NAMESPACE` | *(none)* | Scope all operations to a namespace |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
