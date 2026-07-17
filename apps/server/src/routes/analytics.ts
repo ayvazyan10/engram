@@ -1,0 +1,201 @@
+import type { FastifyPluginAsync } from 'fastify';
+import { getDb, schema } from '@engram-ai-memory/core';
+import { isNull, and, eq, sql, gte, desc } from 'drizzle-orm';
+import { brain } from '../index.js';
+
+export const analyticsRoutes: FastifyPluginAsync = async (app) => {
+  app.get<{ Querystring: { days?: string } }>('/analytics', {
+    schema: {
+      tags: ['analytics'],
+      summary: 'Aggregated memory analytics: growth, activity heatmap, top concepts',
+    },
+    handler: async (req) => {
+      const db = getDb();
+      const days = parseInt(req.query.days ?? '30', 10);
+      const since = new Date(Date.now() - days * 86400000).toISOString();
+
+      const ns = brain.getNamespace();
+      const nsCond = ns ? eq(schema.memories.namespace, ns) : undefined;
+      const baseWhere = nsCond
+        ? and(isNull(schema.memories.archivedAt), nsCond)
+        : isNull(schema.memories.archivedAt);
+
+      const [totalRow] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(schema.memories)
+        .where(baseWhere);
+
+      const byType = await db
+        .select({
+          type: schema.memories.type,
+          count: sql<number>`count(*)`,
+        })
+        .from(schema.memories)
+        .where(baseWhere)
+        .groupBy(schema.memories.type);
+
+      const bySource = await db
+        .select({
+          source: schema.memories.source,
+          count: sql<number>`count(*)`,
+        })
+        .from(schema.memories)
+        .where(baseWhere)
+        .groupBy(schema.memories.source);
+
+      const recentWhere = nsCond
+        ? and(isNull(schema.memories.archivedAt), nsCond, gte(schema.memories.createdAt, since))
+        : and(isNull(schema.memories.archivedAt), gte(schema.memories.createdAt, since));
+
+      const dailyGrowth = await db
+        .select({
+          date: sql<string>`date(${schema.memories.createdAt})`,
+          count: sql<number>`count(*)`,
+        })
+        .from(schema.memories)
+        .where(recentWhere)
+        .groupBy(sql`date(${schema.memories.createdAt})`)
+        .orderBy(sql`date(${schema.memories.createdAt})`);
+
+      const hourlyActivity = await db
+        .select({
+          hour: sql<number>`cast(strftime('%H', ${schema.memories.createdAt}) as integer)`,
+          dayOfWeek: sql<number>`cast(strftime('%w', ${schema.memories.createdAt}) as integer)`,
+          count: sql<number>`count(*)`,
+        })
+        .from(schema.memories)
+        .where(recentWhere)
+        .groupBy(
+          sql`cast(strftime('%H', ${schema.memories.createdAt}) as integer)`,
+          sql`cast(strftime('%w', ${schema.memories.createdAt}) as integer)`
+        );
+
+      const topConcepts = await db
+        .select({
+          concept: schema.memories.concept,
+          count: sql<number>`count(*)`,
+          avgImportance: sql<number>`avg(${schema.memories.importance})`,
+        })
+        .from(schema.memories)
+        .where(and(baseWhere, sql`${schema.memories.concept} is not null`))
+        .groupBy(schema.memories.concept)
+        .orderBy(desc(sql`count(*)`))
+        .limit(20);
+
+      const avgImportance = await db
+        .select({ avg: sql<number>`avg(${schema.memories.importance})` })
+        .from(schema.memories)
+        .where(baseWhere);
+
+      return {
+        total: totalRow?.count ?? 0,
+        avgImportance: avgImportance[0]?.avg ?? 0,
+        byType: Object.fromEntries(byType.map((r) => [r.type, r.count])),
+        bySource: Object.fromEntries(bySource.map((r) => [r.source ?? 'unknown', r.count])),
+        dailyGrowth,
+        hourlyActivity,
+        topConcepts,
+      };
+    },
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: { content?: string; importance?: number; tags?: string[]; concept?: string };
+  }>('/memory/:id', {
+    schema: {
+      tags: ['memory'],
+      summary: 'Inline edit a memory (content, importance, tags, concept)',
+    },
+    handler: async (req, reply) => {
+      const db = getDb();
+      const { id } = req.params;
+      const { content, importance, tags, concept } = req.body;
+
+      const [existing] = await db
+        .select()
+        .from(schema.memories)
+        .where(eq(schema.memories.id, id))
+        .limit(1);
+
+      if (!existing) {
+        reply.code(404);
+        return { error: 'Memory not found' };
+      }
+
+      const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+      if (content !== undefined) updates['content'] = content;
+      if (importance !== undefined) updates['importance'] = importance;
+      if (tags !== undefined) updates['tags'] = JSON.stringify(tags);
+      if (concept !== undefined) updates['concept'] = concept;
+
+      await db
+        .update(schema.memories)
+        .set(updates)
+        .where(eq(schema.memories.id, id));
+
+      const [updated] = await db
+        .select()
+        .from(schema.memories)
+        .where(eq(schema.memories.id, id))
+        .limit(1);
+
+      return updated;
+    },
+  });
+
+  app.post<{ Body: { ids: string[]; tag: string } }>('/memory/bulk/tag', {
+    schema: {
+      tags: ['memory'],
+      summary: 'Add a tag to multiple memories at once',
+    },
+    handler: async (req) => {
+      const db = getDb();
+      const { ids, tag } = req.body;
+      let modified = 0;
+
+      for (const id of ids) {
+        const [mem] = await db
+          .select()
+          .from(schema.memories)
+          .where(eq(schema.memories.id, id))
+          .limit(1);
+        if (!mem) continue;
+
+        const existing: string[] = JSON.parse(mem.tags ?? '[]');
+        if (!existing.includes(tag)) {
+          existing.push(tag);
+          await db
+            .update(schema.memories)
+            .set({ tags: JSON.stringify(existing), updatedAt: new Date().toISOString() })
+            .where(eq(schema.memories.id, id));
+          modified++;
+        }
+      }
+
+      return { modified, total: ids.length };
+    },
+  });
+
+  app.post<{ Body: { ids: string[] } }>('/memory/bulk/archive', {
+    schema: {
+      tags: ['memory'],
+      summary: 'Archive multiple memories at once',
+    },
+    handler: async (req) => {
+      const { ids } = req.body;
+      let archived = 0;
+
+      for (const id of ids) {
+        try {
+          await brain.forget(id);
+          archived++;
+        } catch {
+          // skip missing
+        }
+      }
+
+      return { archived, total: ids.length };
+    },
+  });
+};

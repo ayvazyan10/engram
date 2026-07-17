@@ -85,4 +85,63 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ sourceId, targetId, strategy }),
     }),
+
+  // Analytics
+  getAnalytics: (days = 30) =>
+    request<{
+      total: number;
+      avgImportance: number;
+      byType: Record<string, number>;
+      bySource: Record<string, number>;
+      dailyGrowth: Array<{ date: string; count: number }>;
+      hourlyActivity: Array<{ hour: number; dayOfWeek: number; count: number }>;
+      topConcepts: Array<{ concept: string; count: number; avgImportance: number }>;
+    }>(`/analytics?days=${days}`),
+
+  // Reflections
+  getReflections: (limit = 20, type?: string) => {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (type) q.set('type', type);
+    return request<{
+      count: number;
+      reflections: Array<{
+        id: string;
+        type: string;
+        content: string;
+        importance: number;
+        confidence: number;
+        tags: string[];
+        createdAt: string;
+      }>;
+    }>(`/reflections?${q}`);
+  },
+
+  triggerReflection: () =>
+    request<{
+      count: number;
+      reflections: Array<{ type: string; insight: string; confidence: number; relatedMemoryIds: string[] }>;
+    }>('/reflect', { method: 'POST' }),
+
+  getLLMStatus: () =>
+    request<{ provider: string; model: string; contextWindow: number; available: boolean }>('/llm/status'),
+
+  // Inline edit
+  updateMemory: (id: string, body: { content?: string; importance?: number; tags?: string[]; concept?: string }) =>
+    request<{ id: string; content: string; importance: number; tags: string; concept: string | null; updatedAt: string }>(
+      `/memory/${id}`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    ),
+
+  // Bulk operations
+  bulkTag: (ids: string[], tag: string) =>
+    request<{ modified: number; total: number }>('/memory/bulk/tag', {
+      method: 'POST',
+      body: JSON.stringify({ ids, tag }),
+    }),
+
+  bulkArchive: (ids: string[]) =>
+    request<{ archived: number; total: number }>('/memory/bulk/archive', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
 };

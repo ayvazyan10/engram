@@ -7,10 +7,14 @@ import NeuronInspector from '../ui/NeuronInspector.js';
 import ViewSwitcher from '../ui/ViewSwitcher.js';
 import TemplateSwitcher from '../ui/TemplateSwitcher.js';
 import StoreMemoryModal from '../ui/StoreMemoryModal.js';
+import TimelineView from '../views/TimelineView.js';
+import AnalyticsView from '../views/AnalyticsView.js';
+import ReflectionView from '../views/ReflectionView.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useViewStore } from '../../store/viewStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
+import { useDashboardStore } from '../../store/dashboardStore.js';
 import { api } from '../../lib/api.js';
 import { useWebSocket } from '../../hooks/useWebSocket.js';
 
@@ -18,6 +22,7 @@ export default function AppLayout() {
   const { neurons, setNeurons, setTargetPositions, setConnections, setContradictionPairs } = useNeuralStore();
   const { records, setRecords } = useMemoryStore();
   const { activeView } = useViewStore();
+  const viewMode = useDashboardStore((s) => s.viewMode);
   const t = useTemplateStore((s) => s.activeTemplate);
   const [loading, setLoading] = useState(true);
   const [showStoreModal, setShowStoreModal] = useState(false);
@@ -25,7 +30,6 @@ export default function AppLayout() {
 
   useWebSocket();
 
-  // Load memories once on mount
   useEffect(() => {
     api.listMemories({ limit: 200 })
       .then((res) => setRecords(res.memories as MemoryRecord[]))
@@ -33,7 +37,6 @@ export default function AppLayout() {
       .finally(() => setLoading(false));
   }, [setRecords]);
 
-  // Load contradictions
   useEffect(() => {
     if (records.length === 0) return;
     api.getContradictions()
@@ -50,9 +53,8 @@ export default function AppLayout() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records.length > 0]);
 
-  // Re-layout whenever records OR active view changes
   useEffect(() => {
-    if (records.length === 0) return;
+    if (records.length === 0 || viewMode !== '3d') return;
     const positions = activeView.layout(records);
 
     if (firstLoad || neurons.length === 0) {
@@ -62,11 +64,10 @@ export default function AppLayout() {
       setTargetPositions(positions);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [records, activeView]);
+  }, [records, activeView, viewMode]);
 
-  // Load connections (once after first data load)
   useEffect(() => {
-    if (records.length === 0) return;
+    if (records.length === 0 || viewMode !== '3d') return;
     const top = [...records].sort((a, b) => b.importance - a.importance).slice(0, 30);
     Promise.all(top.map((m) => api.getGraph(m.id).catch(() => null))).then((graphs) => {
       const all: Parameters<typeof setConnections>[0] = [];
@@ -80,7 +81,7 @@ export default function AppLayout() {
       setConnections(all);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [records.length > 0]);
+  }, [records.length > 0, viewMode]);
 
   return (
     <div style={{ ...s.root, background: t.rootBg }}>
@@ -89,7 +90,7 @@ export default function AppLayout() {
         <div style={s.logo}>
           <span style={{ ...s.logoIcon, color: t.accent }}>⬡</span>
           <span style={{ ...s.logoText, color: t.textPrimary }}>Engram</span>
-          <span style={{ ...s.logoBadge, color: t.textMuted, background: t.cardBg }}>v0.1</span>
+          <span style={{ ...s.logoBadge, color: t.textMuted, background: t.cardBg }}>v0.2</span>
         </div>
 
         <ViewSwitcher />
@@ -100,28 +101,36 @@ export default function AppLayout() {
         </div>
       </div>
 
-      {/* Main */}
-      <div style={s.main}>
-        <div style={{ ...s.sidebar, background: t.panelBg, borderRightColor: t.panelBorder }}>
-          <SearchBar />
-          <MemoryPanel loading={loading} onStore={() => setShowStoreModal(true)} />
-        </div>
+      {/* Main — mode aware */}
+      {viewMode === '3d' ? (
+        <div style={s.main}>
+          <div style={{ ...s.sidebar, background: t.panelBg, borderRightColor: t.panelBorder }}>
+            <SearchBar />
+            <MemoryPanel loading={loading} onStore={() => setShowStoreModal(true)} />
+          </div>
 
-        <div style={s.canvas}>
-          {loading && records.length === 0 ? (
-            <div style={{ ...s.loadingOverlay, background: t.rootBg }}>
-              <div style={{ ...s.spinner, borderColor: t.panelBorder, borderTopColor: t.accent }} />
-              <div style={{ ...s.loadingText, color: t.textMuted }}>Loading neural graph…</div>
-            </div>
-          ) : (
-            <NeuralCanvas />
-          )}
-        </div>
+          <div style={s.canvas}>
+            {loading && records.length === 0 ? (
+              <div style={{ ...s.loadingOverlay, background: t.rootBg }}>
+                <div style={{ ...s.spinner, borderColor: t.panelBorder, borderTopColor: t.accent }} />
+                <div style={{ ...s.loadingText, color: t.textMuted }}>Loading neural graph…</div>
+              </div>
+            ) : (
+              <NeuralCanvas />
+            )}
+          </div>
 
-        <div style={{ ...s.inspector, background: t.panelBg, borderLeftColor: t.panelBorder }}>
-          <NeuronInspector />
+          <div style={{ ...s.inspector, background: t.panelBg, borderLeftColor: t.panelBorder }}>
+            <NeuronInspector />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div style={s.fullView}>
+          {viewMode === 'timeline' && <TimelineView />}
+          {viewMode === 'analytics' && <AnalyticsView />}
+          {viewMode === 'reflections' && <ReflectionView />}
+        </div>
+      )}
 
       <StatusBar />
 
@@ -160,6 +169,7 @@ const s = {
   logoText: { fontSize: '13px', fontWeight: 700, letterSpacing: '-0.02em' },
   logoBadge: { fontSize: '10px', padding: '1px 5px', borderRadius: '4px' },
   main: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
+  fullView: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
   sidebar: { width: '260px', flexShrink: 0, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid', overflow: 'hidden' },
   canvas: { flex: 1, position: 'relative' as const, overflow: 'hidden', minWidth: 0, height: '100%' },
   inspector: { width: '252px', flexShrink: 0, borderLeft: '1px solid', overflow: 'hidden', display: 'flex', flexDirection: 'column' as const },
