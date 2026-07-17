@@ -117,7 +117,7 @@ const program = new Command();
 program
   .name('engram')
   .description('Engram CLI — Universal AI Brain')
-  .version('0.2.2');
+  .version('0.2.3');
 
 // ─── setup ───────────────────────────────────────────────────────────────────
 
@@ -178,6 +178,14 @@ program
     } catch {
       fail('Build failed. Check the output above for details.');
       process.exit(1);
+    }
+
+    step('Installing CLI globally...');
+    try {
+      execSync('npm install -g .', { cwd: path.join(config.repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
+      ok('CLI linked from repo build');
+    } catch {
+      warn('Could not install CLI globally. Try: npm install -g @engram-ai-memory/cli@latest');
     }
 
     if (opts.mcp !== false) {
