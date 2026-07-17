@@ -13,7 +13,7 @@ metadata:
 
 Universal AI memory backend — give any AI model persistent, structured memory that survives sessions, systems, and restarts.
 
-## Tools (18 total)
+## Tools (21 total)
 
 | Category | Tools |
 |---|---|
@@ -24,6 +24,7 @@ Universal AI memory backend — give any AI model persistent, structured memory 
 | **Tags** | `list_tags`, `tag_memory` |
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
+| **Reflection** | `trigger_reflection`, `get_reflections`, `llm_status` |
 
 ## Recommended workflow
 

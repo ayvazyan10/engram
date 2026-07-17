@@ -2,7 +2,7 @@
 
 Engram exposes multiple integration surfaces:
 
-1. **MCP Server** — for Claude Code and any MCP-compatible client (18 tools)
+1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 21 tools)
 2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
 3. **REST API** — for everything else (Ollama, OpenClaw, custom apps, 40+ endpoints)
 4. **CLI** — terminal workflows and scripting
@@ -47,37 +47,55 @@ Claude Desktop  →  node ~/.engram/mcp/server/index.js
 
 ---
 
-## Claude Code (MCP)
+## MCP Integration (Claude Code, Cursor, Windsurf, Cline)
 
-The MCP server exposes Engram as native tools inside Claude Code. No API calls needed — Claude uses `store_memory`, `recall_context`, etc. directly as tool calls.
+The MCP server exposes Engram as native tools inside any MCP-compatible AI client. No API calls needed — your AI uses `store_memory`, `recall_context`, etc. directly as tool calls.
 
 ### Setup
 
-**1. Build the MCP server**
+**Option A — npx (fastest, recommended)**
 
-```bash
-cd /path/to/neuralcore
-pnpm turbo run build --filter=@engram-ai-memory/mcp
-```
-
-**2. Add to Claude Code settings**
+Add to `~/.mcp.json` (global) or `.mcp.json` (per-project):
 
 ```json
-// ~/.claude/settings.json
 {
   "mcpServers": {
     "engram": {
-      "command": "node",
-      "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
+      "command": "npx",
+      "args": ["-y", "@engram-ai-memory/mcp@latest"],
       "env": {
-        "ENGRAM_DB_PATH": "/path/to/neuralcore/packages/core/engram.db"
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "claude-code"
       }
     }
   }
 }
 ```
 
-**3. Restart Claude Code** — the tools will appear automatically.
+Set `ENGRAM_SOURCE` to your client: `claude-code`, `cursor`, `windsurf`, `cline`, or any custom identifier.
+
+**Option B — local build**
+
+```bash
+cd /path/to/neuralcore
+pnpm turbo run build --filter=@engram-ai-memory/mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "node",
+      "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db"
+      }
+    }
+  }
+}
+```
+
+**Restart your AI client** — 21 tools will appear automatically.
 
 ### Auto-store conversations (optional)
 
@@ -118,7 +136,7 @@ Store any information as a persistent memory.
 Input:
   content     string   required  — text to store
   type        string   optional  — 'episodic' | 'semantic' | 'procedural' (default: episodic)
-  source      string   optional  — defaults to 'claude-code'
+  source      string   optional  — defaults to ENGRAM_SOURCE env var or 'mcp-client'
   tags        string[] optional  — categorization
   importance  float    optional  — 0.0–1.0
   concept     string   optional  — for semantic memories: concept label
@@ -393,7 +411,7 @@ Output:
 
 ---
 
-### Recommended workflow for Claude Code sessions
+### Recommended workflow for AI sessions
 
 ```
 Session start:
@@ -623,7 +641,7 @@ Asterisk has full MCP client support. Add Engram as an MCP server in `~/.asteris
 }
 ```
 
-Restart Asterisk. All 18 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
+Restart Asterisk. All 21 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
 
 If Engram is already configured for Claude Code, use the same `server.js` path and database — both tools share the same brain.
 

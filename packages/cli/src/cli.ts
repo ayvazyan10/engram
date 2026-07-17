@@ -123,8 +123,10 @@ program
 
 program
   .command('setup')
-  .description('Initialize Engram — clone, build, configure, and set up MCP for Claude Code')
-  .option('--no-mcp', 'Skip Claude Code MCP configuration')
+  .description('Initialize Engram — clone, build, configure, and set up MCP for any AI client')
+  .option('--no-mcp', 'Skip MCP configuration')
+  .option('--npx', 'Use npx instead of cloning repo (fastest setup)')
+  .option('--source <name>', 'AI client identifier (e.g. claude-code, cursor, windsurf)', 'mcp-client')
   .option('--non-interactive', 'Run without prompts')
   .action(async (opts) => {
     console.log(`\n${B}  ⬡  Engram Setup${X}\n`);
@@ -141,91 +143,105 @@ program
       ok('Config exists: ~/.engram/config.json');
     }
 
-    step(`Cloning Engram into ${config.repoPath}...`);
-    if (fs.existsSync(path.join(config.repoPath, '.git'))) {
-      step('Repository exists — pulling latest...');
-      try {
-        execSync('git pull --ff-only', { cwd: config.repoPath, stdio: 'pipe',  });
-        ok('Repository updated');
-      } catch {
-        warn('Pull failed — continuing with existing version');
+    if (!opts.npx) {
+      step(`Cloning Engram into ${config.repoPath}...`);
+      if (fs.existsSync(path.join(config.repoPath, '.git'))) {
+        step('Repository exists — pulling latest...');
+        try {
+          execSync('git pull --ff-only', { cwd: config.repoPath, stdio: 'pipe',  });
+          ok('Repository updated');
+        } catch {
+          warn('Pull failed — continuing with existing version');
+        }
+      } else {
+        try {
+          execSync(`git clone --depth=1 ${REPO} "${config.repoPath}"`, { stdio: 'pipe',  });
+          ok('Repository cloned');
+        } catch (err) {
+          fail(`Clone failed: ${err instanceof Error ? err.message : err}`);
+          process.exit(1);
+        }
       }
-    } else {
+
+      const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
+
+      step('Installing dependencies...');
       try {
-        execSync(`git clone --depth=1 ${REPO} "${config.repoPath}"`, { stdio: 'pipe',  });
-        ok('Repository cloned');
-      } catch (err) {
-        fail(`Clone failed: ${err instanceof Error ? err.message : err}`);
+        execSync('pnpm install --no-frozen-lockfile', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
+        ok('Dependencies installed');
+      } catch {
+        fail('Install failed. Check the output above for details.');
         process.exit(1);
       }
-    }
 
-    const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
+      step('Building all packages...');
+      try {
+        execSync('pnpm turbo run build', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
+        ok('Build complete');
+      } catch {
+        fail('Build failed. Check the output above for details.');
+        process.exit(1);
+      }
 
-    step('Installing dependencies...');
-    try {
-      execSync('pnpm install --no-frozen-lockfile', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
-      ok('Dependencies installed');
-    } catch {
-      fail('Install failed. Check the output above for details.');
-      process.exit(1);
-    }
-
-    step('Building all packages...');
-    try {
-      execSync('pnpm turbo run build', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
-      ok('Build complete');
-    } catch {
-      fail('Build failed. Check the output above for details.');
-      process.exit(1);
-    }
-
-    step('Installing CLI globally...');
-    try {
-      execSync('npm install -g .', { cwd: path.join(config.repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
-      ok('CLI linked from repo build');
-    } catch {
-      warn('Could not install CLI globally. Try: npm install -g @engram-ai-memory/cli@latest');
+      step('Installing CLI globally...');
+      try {
+        execSync('npm install -g .', { cwd: path.join(config.repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
+        ok('CLI linked from repo build');
+      } catch {
+        warn('Could not install CLI globally. Try: npm install -g @engram-ai-memory/cli@latest');
+      }
+    } else {
+      ok('Using npx mode — skipping clone/build');
     }
 
     if (opts.mcp !== false) {
-      step('Configuring Claude Code MCP integration...');
-      const mcpConfigPaths = [
-        path.join(os.homedir(), '.claude', 'settings.json'),
-        path.join(os.homedir(), '.claude.json'),
-      ];
-      let mcpPath = mcpConfigPaths.find((p) => fs.existsSync(p));
-      if (!mcpPath) {
-        fs.mkdirSync(path.join(os.homedir(), '.claude'), { recursive: true });
-        mcpPath = mcpConfigPaths[0]!;
-      }
+      step('Configuring MCP integration...');
+      const mcpPath = path.join(os.homedir(), '.mcp.json');
       let mcpConfig: Record<string, unknown> = {};
       if (fs.existsSync(mcpPath)) {
         try { mcpConfig = JSON.parse(fs.readFileSync(mcpPath, 'utf8')); } catch {}
       }
       const mcpServers = (mcpConfig.mcpServers ?? {}) as Record<string, unknown>;
-      mcpServers.engram = {
-        command: 'node',
-        args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')],
-        env: {
-          ENGRAM_DB_PATH: config.dbPath,
-          ENGRAM_LLM_PROVIDER: config.llmProvider,
-          ENGRAM_LLM_URL: config.llmUrl,
-          ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
-          ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
-        },
+
+      const engramEnv: Record<string, string> = {
+        ENGRAM_DB_PATH: config.dbPath,
+        ENGRAM_SOURCE: opts.source,
+        ENGRAM_LLM_PROVIDER: config.llmProvider,
+        ENGRAM_LLM_URL: config.llmUrl,
+        ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
+        ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
       };
+
+      if (opts.npx) {
+        mcpServers.engram = {
+          command: 'npx',
+          args: ['-y', '@engram-ai-memory/mcp@latest'],
+          env: engramEnv,
+        };
+      } else {
+        mcpServers.engram = {
+          command: 'node',
+          args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')],
+          env: engramEnv,
+        };
+      }
+
       mcpConfig.mcpServers = mcpServers;
       fs.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
       ok(`MCP configured: ${mcpPath}`);
     }
 
     console.log(`\n${B}${G}  Engram installed successfully!${X}\n`);
-    console.log(`  Start the server:     ${D}engram start${X}`);
-    console.log(`  Check health:         ${D}engram doctor${X}`);
-    console.log(`  Store a memory:       ${D}engram store "hello world"${X}`);
-    console.log(`  Open dashboard:       ${C}http://localhost:${config.port}${X}`);
-    console.log(`  Swagger docs:         ${C}http://localhost:${config.port}/docs${X}`);
+    if (opts.npx) {
+      console.log(`  Restart your AI client to activate Engram.`);
+      console.log(`  MCP config:           ${D}~/.mcp.json${X}`);
+    } else {
+      console.log(`  Start the server:     ${D}engram start${X}`);
+      console.log(`  Check health:         ${D}engram doctor${X}`);
+      console.log(`  Store a memory:       ${D}engram store "hello world"${X}`);
+      console.log(`  Open dashboard:       ${C}http://localhost:${config.port}${X}`);
+      console.log(`  Swagger docs:         ${C}http://localhost:${config.port}/docs${X}`);
+    }
     console.log();
   });
 
@@ -362,14 +378,21 @@ program
       } catch { fail(`Server running but API not responding on :${config.port}`); issues++; }
     } else { warn('Server not running — start with: engram start'); }
 
-    const mcpPath = path.join(os.homedir(), '.claude', 'settings.json');
-    if (fs.existsSync(mcpPath)) {
+    const globalMcpPath = path.join(os.homedir(), '.mcp.json');
+    const legacyMcpPath = path.join(os.homedir(), '.claude', 'settings.json');
+    if (fs.existsSync(globalMcpPath)) {
       try {
-        const mc = JSON.parse(fs.readFileSync(mcpPath, 'utf8'));
-        if (mc.mcpServers?.engram) { ok('Claude Code MCP: configured'); }
-        else { warn('Claude Code MCP: not configured — run: engram setup'); }
-      } catch { warn('Claude Code settings: parse error'); }
-    } else { warn('Claude Code: settings.json not found'); }
+        const mc = JSON.parse(fs.readFileSync(globalMcpPath, 'utf8'));
+        if (mc.mcpServers?.engram) { ok('MCP: configured in ~/.mcp.json'); }
+        else { warn('MCP: ~/.mcp.json exists but engram not configured — run: engram setup'); }
+      } catch { warn('MCP: ~/.mcp.json parse error'); }
+    } else { warn('MCP: ~/.mcp.json not found — run: engram setup'); }
+    if (fs.existsSync(legacyMcpPath)) {
+      try {
+        const mc = JSON.parse(fs.readFileSync(legacyMcpPath, 'utf8'));
+        if (mc.mcpServers?.engram) { warn('Legacy: engram found in ~/.claude/settings.json — migrate to ~/.mcp.json'); }
+      } catch {}
+    }
 
     console.log();
     console.log(issues === 0 ? `${G}  All checks passed.${X}\n` : `${Y}  ${issues} issue(s) found.${X}\n`);
@@ -430,6 +453,57 @@ configCmd.action(() => {
   const display = { ...config, anthropicKey: config.anthropicKey ? config.anthropicKey.slice(0, 8) + '...' : null };
   console.log(JSON.stringify(display, null, 2));
 });
+
+// ─── init ───────────────────────────────────────────────────────────────────
+
+const MEMORY_INSTRUCTIONS = `# Memory (Engram)
+
+This project uses Engram for persistent AI memory across sessions.
+
+## Behavior
+
+1. **Start of every conversation**: call \`recall_context\` with what the user is asking about.
+2. **Store automatically**: architecture decisions, coding conventions, bug fixes, build commands, user preferences. Never ask — just store.
+3. **Before answering history questions**: call \`search_memory\` to check for stored context.
+4. **End of session**: store a brief summary with tags=["session-summary"].
+5. **Never announce** memory operations — use them silently.
+`;
+
+const AI_CLIENT_FILES: Record<string, string> = {
+  claude: 'CLAUDE.md',
+  cursor: '.cursorrules',
+  windsurf: '.windsurfrules',
+  cline: '.clinerules',
+};
+
+program
+  .command('init')
+  .description('Add Engram memory instructions to the current project for your AI client')
+  .option('--client <name>', 'AI client: claude, cursor, windsurf, cline, all (default: all)', 'all')
+  .action((opts) => {
+    const cwd = process.cwd();
+    const clients = opts.client === 'all' ? Object.keys(AI_CLIENT_FILES) : [opts.client];
+
+    for (const client of clients) {
+      const filename = AI_CLIENT_FILES[client];
+      if (!filename) { warn(`Unknown client: ${client}. Valid: ${Object.keys(AI_CLIENT_FILES).join(', ')}, all`); continue; }
+      const filepath = path.join(cwd, filename);
+
+      if (fs.existsSync(filepath)) {
+        const existing = fs.readFileSync(filepath, 'utf8');
+        if (existing.includes('Engram')) {
+          ok(`${filename}: already has Engram instructions`);
+          continue;
+        }
+        fs.appendFileSync(filepath, '\n' + MEMORY_INSTRUCTIONS);
+        ok(`${filename}: appended Engram memory instructions`);
+      } else {
+        fs.writeFileSync(filepath, MEMORY_INSTRUCTIONS);
+        ok(`${filename}: created with Engram memory instructions`);
+      }
+    }
+    console.log();
+  });
 
 // ─── update ─────────────────────────────────────────────────────────────────
 

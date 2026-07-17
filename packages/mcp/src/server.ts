@@ -2,12 +2,12 @@
 /**
  * Engram MCP Server
  *
- * Exposes Engram brain capabilities as MCP tools for Claude Code
- * and any MCP-compatible AI client.
+ * Exposes Engram brain capabilities as MCP tools for any AI client
+ * (Claude Code, Cursor, Windsurf, Cline, and any MCP-compatible client).
  *
  * Run: node dist/server.js
- * Or add to ~/.claude/settings.json:
- *   { "mcpServers": { "engram": { "command": "node", "args": ["/path/to/dist/server.js"] } } }
+ * Or add to ~/.mcp.json:
+ *   { "mcpServers": { "engram": { "command": "npx", "args": ["-y", "@engram-ai-memory/mcp@latest"] } } }
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -15,9 +15,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { NeuralBrain } from '@engram-ai-memory/core';
 import { z } from 'zod';
 
+const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
+
 const brain = new NeuralBrain({
   dbPath: process.env['ENGRAM_DB_PATH'],
-  defaultSource: 'claude-code',
+  defaultSource,
   namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
 });
 
@@ -28,24 +30,33 @@ const server = new McpServer(
   },
   {
     instructions: [
-      'Engram is the user\'s persistent AI memory system.',
-      'You MUST use it automatically — do NOT wait for the user to ask.',
+      'Engram is your persistent memory — it survives across sessions and works with any AI model.',
       '',
-      'On every conversation start:',
-      '  - Call recall_context with a brief summary of what the user is asking about.',
+      'STARTUP (do this FIRST before responding):',
+      '  Call recall_context with a 5-10 word summary of the user\'s request.',
       '',
-      'During the conversation:',
-      '  - When you learn something important (user preferences, project context,',
-      '    decisions, facts, corrections), call store_memory to save it.',
-      '  - Use type="episodic" for events/conversations, "semantic" for facts/knowledge,',
-      '    "procedural" for patterns/workflows.',
-      '  - When you need past context, call search_memory or recall_context.',
+      'STORE automatically (never ask permission):',
+      '  - User preferences and corrections (importance: 0.9)',
+      '  - Project decisions and rationale (importance: 0.7)',
+      '  - Architecture facts, tech stack, naming conventions (importance: 0.7)',
+      '  - Bugs found and their fixes (importance: 0.6)',
+      '  - Commands/scripts that worked or failed (importance: 0.5)',
+      '  - User\'s name, role, team, working patterns (importance: 0.9)',
+      '  Use type="semantic" for facts, "episodic" for events, "procedural" for workflows.',
       '',
-      'Before answering questions that may have prior context:',
-      '  - Call search_memory to check if relevant information was stored before.',
+      'RECALL before answering:',
+      '  - Past decisions, project history, conventions → search_memory first',
+      '  - User preferences or prior corrections → search_memory first',
       '',
-      'Do NOT ask the user "should I save this?" — just save what matters.',
-      'Do NOT announce every store/recall — use them silently like your own memory.',
+      'END OF SESSION:',
+      '  Store a 2-3 sentence session summary as type="episodic"',
+      '  with tags=["session-summary"] and importance=0.6.',
+      '',
+      'RULES:',
+      '  - Never say "I\'m saving this to memory" — do it silently.',
+      '  - Never ask "should I save this?" — just save what matters.',
+      '  - When recall returns relevant memories, USE them in your response.',
+      '  - Prefer search_memory for specific topics, recall_context for broad context.',
     ].join('\n'),
   }
 );
@@ -53,7 +64,7 @@ const server = new McpServer(
 // ─── Tool: store_memory ───────────────────────────────────────────────────────
 server.tool(
   'store_memory',
-  'Store a new memory in the AI brain. Use this to remember important information, events, facts, or learned patterns.',
+  'Store information to persistent memory. Call AUTOMATICALLY for: user preferences, project decisions, tech stack, bug fixes, useful commands, corrections, workflow patterns. Do not ask — just store.',
   {
     content: z.string().describe('The content to store as a memory'),
     type: z
@@ -82,7 +93,7 @@ server.tool(
     const result = await brain.store({
       content,
       type,
-      source: source ?? 'claude-code',
+      source: source ?? defaultSource,
       tags,
       importance,
       concept,
@@ -124,7 +135,7 @@ server.tool(
 // ─── Tool: search_memory ──────────────────────────────────────────────────────
 server.tool(
   'search_memory',
-  'Search through stored memories using semantic similarity. Returns the most relevant memories for a query.',
+  'Search memories by semantic similarity. Use BEFORE answering questions about past decisions, project details, or anything discussed previously.',
   {
     query: z.string().describe('The search query'),
     topK: z.number().int().min(1).max(50).optional().default(10).describe('Number of results'),
@@ -172,7 +183,7 @@ server.tool(
 // ─── Tool: recall_context ─────────────────────────────────────────────────────
 server.tool(
   'recall_context',
-  'Assemble the most relevant context from all memories for a given query. Returns formatted context ready to use in AI prompts. This is the primary tool for giving AI models access to their memories.',
+  'CALL FIRST in every conversation. Loads relevant memories — past decisions, preferences, project context, session notes. Returns formatted context ready for use.',
   {
     query: z.string().describe('The query or topic to recall context for'),
     maxTokens: z
@@ -211,7 +222,7 @@ server.tool(
         maxTokens,
         types,
         sources,
-        source: 'claude-code',
+        source: defaultSource,
         crossNamespace,
       })) {
         if (chunk.phase === 'complete' && 'context' in chunk) {
@@ -250,7 +261,7 @@ server.tool(
       maxTokens,
       types,
       sources,
-      source: 'claude-code',
+      source: defaultSource,
       crossNamespace,
     });
 
@@ -278,7 +289,7 @@ server.tool(
 // ─── Tool: add_knowledge ──────────────────────────────────────────────────────
 server.tool(
   'add_knowledge',
-  'Add a semantic fact or knowledge entry to the brain. Use for storing persistent facts and concepts.',
+  'Store a named fact (e.g., "TypeScript: project uses TS 5.7 strict"). Use for reusable knowledge — the concept field acts as a label for retrieval.',
   {
     concept: z.string().describe('The concept or entity name (e.g. "TypeScript", "User")'),
     content: z.string().describe('The fact or knowledge content'),
@@ -301,7 +312,7 @@ server.tool(
       content,
       tags,
       importance,
-      source: 'claude-code',
+      source: defaultSource,
     });
 
     return {
@@ -339,7 +350,7 @@ server.tool(
 // ─── Tool: forget ─────────────────────────────────────────────────────────────
 server.tool(
   'forget',
-  'Archive (soft-delete) memories from the brain. The memories are not permanently deleted but are excluded from future recall.',
+  'Archive outdated or incorrect memories. Use when info is superseded, user asks to forget, or after resolving contradictions.',
   {
     ids: z.array(z.string()).describe('Memory IDs to archive'),
     reason: z.string().optional().describe('Reason for forgetting (logged only)'),
