@@ -14,7 +14,7 @@ const TYPE_META: Record<string, { icon: string; label: string; color: string }> 
 };
 
 export default function ReflectionView() {
-  const { insights, llmStatus, loading, reflecting, filterType, setInsights, setLLMStatus, setLoading, setReflecting, setFilterType } = useReflectionStore();
+  const { insights, llmStatus, loading, reflecting, filterType, error, setInsights, setLLMStatus, setLoading, setReflecting, setFilterType, setError } = useReflectionStore();
   const t = useTemplateStore((s) => s.activeTemplate);
 
   useEffect(() => {
@@ -42,15 +42,22 @@ export default function ReflectionView() {
 
   const handleReflect = () => {
     setReflecting(true);
+    setError(null);
     api.triggerReflection()
       .then((res) => {
         if (res.count > 0) {
-          api.getReflections(50, filterType ?? undefined)
-            .then((r) => setInsights(r.reflections))
-            .catch(() => {});
+          return api.getReflections(50, filterType ?? undefined)
+            .then((r) => setInsights(r.reflections));
         }
+        setError('No insights generated. Store more memories and try again.');
+        return;
       })
-      .catch(() => {})
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : 'Reflection failed';
+        setError(msg.includes('500') || msg.includes('LLM')
+          ? 'LLM provider not available. Run: engram configure set llmProvider claude'
+          : msg);
+      })
       .finally(() => setReflecting(false));
   };
 
@@ -115,6 +122,19 @@ export default function ReflectionView() {
           );
         })}
       </div>
+
+      {/* Error */}
+      {error && (
+        <div style={{ ...s.errorBanner, background: '#ef444415', borderColor: '#ef4444' }}>
+          <span style={{ color: '#ef4444', fontSize: '13px' }}>{error}</span>
+          <button
+            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '16px', padding: 0, lineHeight: 1 }}
+            onClick={() => setError(null)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Content */}
       {reflecting && (
@@ -246,6 +266,14 @@ const s = {
     fontWeight: 500,
     cursor: 'pointer',
     transition: 'background 0.15s',
+  },
+  errorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '10px 14px',
+    borderRadius: '8px',
+    border: '1px solid',
   },
   progressBar: {
     height: 3,
