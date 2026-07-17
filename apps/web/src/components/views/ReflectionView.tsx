@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import { useReflectionStore, type ReflectionInsight } from '../../store/reflectionStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
@@ -16,6 +16,7 @@ const TYPE_META: Record<string, { icon: string; label: string; color: string }> 
 export default function ReflectionView() {
   const { insights, llmStatus, loading, reflecting, filterType, error, setInsights, setLLMStatus, setLoading, setReflecting, setFilterType, setError } = useReflectionStore();
   const t = useTemplateStore((s) => s.activeTemplate);
+  const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     if (!document.getElementById('engram-spin-keyframes')) {
@@ -40,12 +41,20 @@ export default function ReflectionView() {
       .finally(() => setLoading(false));
   }, [filterType, setInsights, setLLMStatus, setLoading]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   const handleReflect = () => {
     setReflecting(true);
     setError(null);
+    setToast(null);
     api.triggerReflection()
       .then((res) => {
         if (res.count > 0) {
+          setToast(`✓ ${res.count} new insight${res.count > 1 ? 's' : ''} generated`);
           return api.getReflections(50, filterType ?? undefined)
             .then((r) => setInsights(r.reflections));
         }
@@ -54,7 +63,7 @@ export default function ReflectionView() {
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : 'Reflection failed';
-        setError(msg.includes('500') || msg.includes('LLM')
+        setError(msg.includes('500') || msg.includes('LLM') || msg.includes('503')
           ? 'LLM provider not available. Run: engram configure set llmProvider claude'
           : msg);
       })
@@ -122,6 +131,13 @@ export default function ReflectionView() {
           );
         })}
       </div>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ ...s.toastBanner, background: '#22c55e18', borderColor: '#22c55e' }}>
+          <span style={{ color: '#22c55e', fontSize: '13px', fontWeight: 500 }}>{toast}</span>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -266,6 +282,12 @@ const s = {
     fontWeight: 500,
     cursor: 'pointer',
     transition: 'background 0.15s',
+  },
+  toastBanner: {
+    padding: '10px 14px',
+    borderRadius: '8px',
+    border: '1px solid',
+    textAlign: 'center' as const,
   },
   errorBanner: {
     display: 'flex',
