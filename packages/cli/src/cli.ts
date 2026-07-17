@@ -117,7 +117,7 @@ const program = new Command();
 program
   .name('engram')
   .description('Engram CLI — Universal AI Brain')
-  .version('0.2.1');
+  .version('0.2.2');
 
 // ─── setup ───────────────────────────────────────────────────────────────────
 
@@ -491,6 +491,14 @@ program
       process.exit(1);
     }
 
+    step('Updating CLI...');
+    try {
+      execSync('npm install -g .', { cwd: path.join(repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
+      ok('CLI updated globally');
+    } catch {
+      warn('Could not update CLI globally. Try: npm install -g @engram-ai-memory/cli@latest');
+    }
+
     if (opts.restart !== false) {
       const { running, pid } = isServerRunning();
       if (running) {
@@ -511,6 +519,10 @@ program
           ENGRAM_INDEX_PATH: config.indexPath,
           ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
           ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
+          ENGRAM_LLM_PROVIDER: config.llmProvider,
+          ENGRAM_LLM_URL: config.llmUrl,
+          ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
+          ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
         };
         fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
         const logFd = fs.openSync(LOG_PATH, 'a');
