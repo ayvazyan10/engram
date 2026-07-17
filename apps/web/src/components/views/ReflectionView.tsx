@@ -18,6 +18,15 @@ export default function ReflectionView() {
   const t = useTemplateStore((s) => s.activeTemplate);
 
   useEffect(() => {
+    if (!document.getElementById('engram-spin-keyframes')) {
+      const style = document.createElement('style');
+      style.id = 'engram-spin-keyframes';
+      style.textContent = '@keyframes engram-spin{to{transform:rotate(360deg)}}@keyframes engram-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}';
+      document.head.appendChild(style);
+    }
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
     Promise.all([
       api.getReflections(50, filterType ?? undefined),
@@ -65,11 +74,21 @@ export default function ReflectionView() {
             </div>
           )}
           <button
-            style={{ ...s.reflectBtn, background: t.accent, opacity: reflecting || !llmStatus?.available ? 0.5 : 1 }}
+            style={{
+              ...s.reflectBtn,
+              background: reflecting ? t.panelBorder : t.accent,
+              opacity: !llmStatus?.available ? 0.4 : 1,
+              cursor: reflecting || !llmStatus?.available ? 'not-allowed' : 'pointer',
+              position: 'relative' as const,
+              overflow: 'hidden' as const,
+            }}
             onClick={handleReflect}
             disabled={reflecting || !llmStatus?.available}
           >
-            {reflecting ? '⟳ Reflecting…' : '✦ Reflect Now'}
+            {reflecting && (
+              <span style={s.btnSpinner} />
+            )}
+            {reflecting ? 'Analyzing memories…' : '✦ Reflect Now'}
           </button>
         </div>
       </div>
@@ -98,9 +117,14 @@ export default function ReflectionView() {
       </div>
 
       {/* Content */}
+      {reflecting && (
+        <div style={{ ...s.progressBar, background: t.panelBorder }}>
+          <div style={{ ...s.progressFill, background: t.accent }} />
+        </div>
+      )}
       {loading ? (
         <div style={{ ...s.center, color: t.textMuted }}>Loading reflections…</div>
-      ) : insights.length === 0 ? (
+      ) : insights.length === 0 && !reflecting ? (
         <div style={{ ...s.emptyState, borderColor: t.panelBorder }}>
           <div style={{ fontSize: '32px', marginBottom: '12px' }}>◈</div>
           <div style={{ color: t.textSecondary, fontSize: '14px' }}>No reflections yet</div>
@@ -194,9 +218,20 @@ const s = {
     color: '#fff',
     fontSize: '12px',
     fontWeight: 600,
-    cursor: 'pointer',
-    transition: 'opacity 0.15s',
+    transition: 'background 0.2s, opacity 0.2s',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
   },
+  btnSpinner: {
+    width: 12,
+    height: 12,
+    border: '2px solid rgba(255,255,255,0.3)',
+    borderTopColor: '#fff',
+    borderRadius: '50%',
+    animation: 'engram-spin 0.8s linear infinite',
+    flexShrink: 0,
+  } as React.CSSProperties,
   filters: {
     display: 'flex',
     gap: '6px',
@@ -212,6 +247,17 @@ const s = {
     cursor: 'pointer',
     transition: 'background 0.15s',
   },
+  progressBar: {
+    height: 3,
+    borderRadius: 2,
+    overflow: 'hidden' as const,
+  },
+  progressFill: {
+    height: '100%',
+    width: '40%',
+    borderRadius: 2,
+    animation: 'engram-shimmer 1.5s ease-in-out infinite',
+  } as React.CSSProperties,
   center: {
     flex: 1,
     display: 'flex',
