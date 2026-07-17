@@ -61,6 +61,11 @@ export interface ShutdownHookContext {
   entryCount: number;
 }
 
+export interface ReflectHookContext {
+  insights: number;
+  types: string[];
+}
+
 // ─── Plugin Interface ────────────────────────────────────────────────────────
 
 export interface PluginHooks {
@@ -70,6 +75,7 @@ export interface PluginHooks {
   onDecay?:    (ctx: DecayHookContext) => Promise<void> | void;
   onStartup?:  (ctx: StartupHookContext) => Promise<void> | void;
   onShutdown?: (ctx: ShutdownHookContext) => Promise<void> | void;
+  onReflect?:  (ctx: ReflectHookContext) => Promise<void> | void;
 }
 
 export interface EngramPlugin {

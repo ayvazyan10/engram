@@ -26,10 +26,11 @@ export type WebhookEvent =
   | 'forgotten'
   | 'decayed'
   | 'consolidated'
-  | 'contradiction';
+  | 'contradiction'
+  | 'reflected';
 
 export const ALL_EVENTS: WebhookEvent[] = [
-  'stored', 'forgotten', 'decayed', 'consolidated', 'contradiction',
+  'stored', 'forgotten', 'decayed', 'consolidated', 'contradiction', 'reflected',
 ];
 
 export interface WebhookPayload {

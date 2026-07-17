@@ -675,6 +675,59 @@ program
     console.log(`Imported: ${imported}  Skipped: ${skipped}`);
   });
 
+// ─── Reflection ─────────────────────────────────────────────────────────────
+
+program
+  .command('reflect')
+  .description('Trigger a memory reflection cycle (requires LLM provider)')
+  .action(async () => {
+    const res = await api<{ error?: string; count: number; reflections?: Array<{ type: string; insight: string; confidence: number }> }>('POST', '/api/reflect');
+    if (res.error) {
+      console.error(`Error: ${res.error}`);
+      process.exit(1);
+    }
+    console.log(`Generated ${res.count} reflection insights`);
+    if (res.reflections) {
+      for (const r of res.reflections) {
+        console.log(`\n  [${r.type}] (confidence: ${r.confidence?.toFixed(2) ?? '?'})`);
+        console.log(`  ${r.insight}`);
+      }
+    }
+  });
+
+program
+  .command('reflections')
+  .description('List stored reflection insights')
+  .option('-l, --limit <n>', 'Max results', '20')
+  .option('-t, --type <type>', 'Filter: pattern, knowledge_gap, trend, contradiction_summary')
+  .option('--json', 'Output raw JSON')
+  .action(async (opts) => {
+    const params = new URLSearchParams();
+    if (opts.limit) params.set('limit', opts.limit);
+    if (opts.type) params.set('type', opts.type);
+    const res = await api<{ count?: number; reflections?: Array<{ type: string; content: string; importance: number; createdAt: string }> }>('GET', `/api/reflections?${params.toString()}`);
+    if (opts.json) {
+      console.log(JSON.stringify(res, null, 2));
+      return;
+    }
+    console.log(`${res.count ?? 0} reflections\n`);
+    for (const r of (res.reflections ?? [])) {
+      console.log(`  [${r.type}] ${r.content}`);
+      console.log(`    importance: ${r.importance}  created: ${r.createdAt}\n`);
+    }
+  });
+
+program
+  .command('llm-status')
+  .description('Check LLM provider availability')
+  .action(async () => {
+    const res = await api<{ provider: string; model: string; contextWindow: number; available: boolean }>('GET', '/api/llm/status');
+    console.log(`Provider:  ${res.provider}`);
+    console.log(`Model:     ${res.model}`);
+    console.log(`Context:   ${res.contextWindow} tokens`);
+    console.log(`Available: ${res.available ? 'Yes' : 'No'}`);
+  });
+
 // ─── Run ─────────────────────────────────────────────────────────────────────
 
 program.parseAsync().catch((err: unknown) => {

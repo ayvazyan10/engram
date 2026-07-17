@@ -9,4 +9,5 @@ export type {
   DecayHookContext,
   StartupHookContext,
   ShutdownHookContext,
+  ReflectHookContext,
 } from './PluginRegistry.js';

@@ -68,11 +68,20 @@ export type {
   EngramPlugin, PluginHooks, PluginInfo,
   StoreHookContext, RecallHookContext, ForgetHookContext,
   DecayHookContext, StartupHookContext, ShutdownHookContext,
+  ReflectHookContext,
 } from './plugins/index.js';
 
 // Webhooks
 export { WebhookManager, ALL_EVENTS } from './webhooks/index.js';
 export type { WebhookEvent, WebhookPayload, WebhookSubscription, WebhookDeliveryResult } from './webhooks/index.js';
+
+// Reflection
+export { ReflectionEngine, DEFAULT_REFLECTION_CONFIG } from './reflection/index.js';
+export type { ReflectionType, ReflectionConfig, ReflectionResult } from './reflection/index.js';
+
+// LLM providers
+export { createLLMProvider, NullProvider, OllamaProvider, ClaudeProvider } from './llm/index.js';
+export type { LLMProvider, LLMConfig, LLMMessage, LLMCompletionOptions, LLMCompletionResult } from './llm/index.js';
 
 // DB client
 export { getDb, closeDb, schema, getDatabaseDialect, getDatabaseConnection } from './db/index.js';

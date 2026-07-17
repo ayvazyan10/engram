@@ -18,6 +18,7 @@ import { indexRoutes } from './routes/index-mgmt.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { tagRoutes } from './routes/tags.js';
 import { pluginRoutes } from './routes/plugins.js';
+import { reflectionRoutes } from './routes/reflection.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '4901', 10);
 const HOST = process.env['HOST'] ?? '127.0.0.1';
@@ -66,6 +67,7 @@ async function start() {
         { name: 'webhooks', description: 'Webhook subscriptions for memory events' },
         { name: 'tags', description: 'Tagging and collections' },
         { name: 'plugins', description: 'Plugin registration and management' },
+        { name: 'reflection', description: 'Memory reflection and LLM-powered insights' },
         { name: 'health', description: 'Health and status' },
       ],
     },
@@ -84,6 +86,7 @@ async function start() {
   await app.register(webhookRoutes, { prefix: '/api' });
   await app.register(tagRoutes, { prefix: '/api' });
   await app.register(pluginRoutes, { prefix: '/api' });
+  await app.register(reflectionRoutes, { prefix: '/api' });
 
   // ─── Serve 3D dashboard (if built) ──────────────────────────────────────
   const dashboardPath = path.resolve(__dirname, '..', '..', '..', 'apps', 'web', 'dist');

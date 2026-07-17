@@ -43,6 +43,10 @@ import type { EngramPlugin, PluginInfo } from './plugins/PluginRegistry.js';
 import { ContextAssembler } from './retrieval/ContextAssembler.js';
 import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
+import { createLLMProvider } from './llm/index.js';
+import type { LLMProvider, LLMConfig } from './llm/index.js';
+import { ReflectionEngine } from './reflection/ReflectionEngine.js';
+import type { ReflectionConfig, ReflectionResult } from './reflection/ReflectionEngine.js';
 
 /**
  * Extract a short concept label (2–5 words) from memory content.
@@ -74,6 +78,10 @@ export interface BrainConfig {
   contradictionConfig?: Partial<ContradictionConfig>;
   /** Path to persist the vector index for fast startup. Defaults to {dbPath}.index */
   indexPath?: string;
+  /** LLM provider configuration for summarization and reflection */
+  llm?: Partial<LLMConfig>;
+  /** Reflection engine configuration */
+  reflection?: Partial<ReflectionConfig>;
 }
 
 export interface StoreInput {
@@ -191,6 +199,8 @@ export class NeuralBrain {
   private contradictionDetector: ContradictionDetector;
   private webhookManager: WebhookManager;
   private pluginRegistry: PluginRegistry;
+  private llmProvider: LLMProvider;
+  private reflectionEngine: ReflectionEngine;
 
   readonly episodic: EpisodicMemory;
   readonly semantic: SemanticMemory;
@@ -216,6 +226,8 @@ export class NeuralBrain {
     this.contradictionDetector = new ContradictionDetector(config.contradictionConfig ?? {});
     this.webhookManager = new WebhookManager();
     this.pluginRegistry = new PluginRegistry();
+    this.llmProvider = createLLMProvider(config.llm);
+    this.reflectionEngine = new ReflectionEngine(this.llmProvider, config.reflection);
     this.episodic = new EpisodicMemory();
     this.semantic = new SemanticMemory();
     this.procedural = new ProceduralMemory();
@@ -514,6 +526,11 @@ export class NeuralBrain {
       contradictions: contradictionResult.contradictions.length,
     });
 
+    // Check if reflection should trigger (non-blocking)
+    if (inserted!.source !== 'reflection' && this.reflectionEngine.notifyStore()) {
+      void this.reflect().catch(() => {});
+    }
+
     return { memory: inserted!, contradictions: contradictionResult };
   }
 
@@ -719,22 +736,15 @@ export class NeuralBrain {
     const results: Memory[] = [];
 
     for (const cluster of clusters) {
-      // Build summary from cluster contents
-      const contents = cluster.map((m) => m.content).join('\n');
-      // Take the most common concept or first meaningful phrase
+      const contents = cluster.map((m) => m.content);
       const concepts = cluster.map((m) => m.concept).filter(Boolean);
-      const concept = concepts[0] ?? extractConcept(contents) ?? 'Consolidated memory';
+      const concept = concepts[0] ?? extractConcept(contents.join('\n')) ?? 'Consolidated memory';
 
-      // Average importance, slightly boosted (consolidation = importance)
       const avgImportance = cluster.reduce((s, m) => s + (m.importance ?? 0.5), 0) / cluster.length;
       const importance = Math.min(1, avgImportance + 0.1);
 
-      // Summarize: keep unique lines, deduplicate
-      const lines = contents.split('\n').filter((l) => l.trim().length > 5);
-      const uniqueLines = [...new Set(lines)].slice(0, 10);
-      const summary = uniqueLines.join('\n');
+      const summary = await this.summarizeCluster(contents, concept);
 
-      // Store as semantic memory
       const { memory: semantic } = await this.store({
         content: summary,
         type: 'semantic',
@@ -745,7 +755,6 @@ export class NeuralBrain {
         metadata: { episodeCount: cluster.length, episodeIds: cluster.map((m) => m.id) },
       });
 
-      // Archive the original episodes
       for (const ep of cluster) {
         await this.forget(ep.id);
       }
@@ -761,6 +770,127 @@ export class NeuralBrain {
     }
 
     return results;
+  }
+
+  /**
+   * Summarize a cluster of memory contents using LLM or fallback to text dedup.
+   */
+  private async summarizeCluster(contents: string[], concept: string): Promise<string> {
+    const llmAvailable = await this.llmProvider.isAvailable();
+    if (!llmAvailable) {
+      const lines = contents.join('\n').split('\n').filter((l) => l.trim().length > 5);
+      return [...new Set(lines)].slice(0, 10).join('\n');
+    }
+
+    const inputText = contents.join('\n---\n');
+    const maxInput = parseInt(process.env['ENGRAM_LLM_MAX_INPUT_TOKENS'] ?? '4000', 10);
+    const tokenEstimate = this.llmProvider.estimateTokens(inputText);
+
+    let truncated = inputText;
+    if (tokenEstimate > maxInput) {
+      const ratio = maxInput / tokenEstimate;
+      truncated = inputText.slice(0, Math.floor(inputText.length * ratio));
+    }
+
+    try {
+      const result = await this.llmProvider.complete(
+        [{ role: 'user', content: truncated }],
+        {
+          system: `You are a memory consolidation system. Summarize the following related memories into a single concise paragraph that captures all key information. The topic is: "${concept}". Output ONLY the summary, no preamble or explanation.`,
+          maxTokens: 300,
+          temperature: 0.3,
+        },
+      );
+      return result.content.trim();
+    } catch {
+      const lines = contents.join('\n').split('\n').filter((l) => l.trim().length > 5);
+      return [...new Set(lines)].slice(0, 10).join('\n');
+    }
+  }
+
+  /** Get the configured LLM provider instance */
+  getLLMProvider(): LLMProvider {
+    return this.llmProvider;
+  }
+
+  /** Get the reflection engine instance */
+  getReflectionEngine(): ReflectionEngine {
+    return this.reflectionEngine;
+  }
+
+  /**
+   * Run a reflection cycle — analyze stored memories for patterns, gaps, and trends.
+   * Results are stored as semantic memories with source='reflection'.
+   */
+  async reflect(): Promise<ReflectionResult[]> {
+    this.assertInitialized();
+    const db = getDb();
+
+    const conditions = [isNull(schema.memories.archivedAt)];
+    if (this.config.namespace) {
+      conditions.push(eq(schema.memories.namespace, this.config.namespace));
+    }
+
+    const memories = await db
+      .select()
+      .from(schema.memories)
+      .where(and(...conditions))
+      .orderBy(schema.memories.updatedAt)
+      .limit(this.reflectionEngine.getConfig().maxMemoriesToAnalyze);
+
+    const results = await this.reflectionEngine.reflect(memories);
+
+    for (const result of results) {
+      await this.store({
+        content: result.insight,
+        type: 'semantic',
+        source: 'reflection',
+        tags: ['reflection', `reflection:${result.type}`],
+        importance: Math.min(0.9, 0.6 + result.confidence * 0.3),
+        metadata: {
+          reflectionType: result.type,
+          confidence: result.confidence,
+          relatedMemoryIds: result.relatedMemoryIds,
+        },
+      });
+    }
+
+    if (results.length > 0) {
+      this.webhookManager.fire('reflected', {
+        count: results.length,
+        types: results.map((r) => r.type),
+      });
+
+      void this.pluginRegistry.runHook('onReflect', {
+        insights: results.length,
+        types: results.map((r) => r.type),
+      });
+    }
+
+    return results;
+  }
+
+  /**
+   * Get stored reflection insights.
+   */
+  async getReflections(limit = 20): Promise<Memory[]> {
+    this.assertInitialized();
+    const db = getDb();
+
+    const conditions = [
+      eq(schema.memories.source, 'reflection'),
+      isNull(schema.memories.archivedAt),
+    ];
+    if (this.config.namespace) {
+      conditions.push(eq(schema.memories.namespace, this.config.namespace));
+    }
+
+    return db
+      .select()
+      .from(schema.memories)
+      .where(and(...conditions))
+      .orderBy(schema.memories.createdAt)
+      .limit(limit);
   }
 
   /**
@@ -807,6 +937,11 @@ export class NeuralBrain {
       consolidatedCount: result.consolidatedCount,
       durationMs: result.durationMs,
     });
+
+    // Trigger reflection after decay if configured (non-blocking)
+    if (!dryRun && this.reflectionEngine.notifyDecay()) {
+      void this.reflect().catch(() => {});
+    }
 
     return result;
   }
