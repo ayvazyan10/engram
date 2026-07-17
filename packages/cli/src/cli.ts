@@ -31,6 +31,10 @@ interface EngramConfig {
   embeddingModel: string;
   indexPath: string;
   repoPath: string;
+  llmProvider: string;
+  llmModel: string | null;
+  llmUrl: string;
+  anthropicKey: string | null;
 }
 
 const DEFAULT_CONFIG: EngramConfig = {
@@ -41,6 +45,10 @@ const DEFAULT_CONFIG: EngramConfig = {
   embeddingModel: 'Xenova/all-MiniLM-L6-v2',
   indexPath: path.join(ENGRAM_HOME, 'engram.db.index'),
   repoPath: path.join(ENGRAM_HOME, 'repo'),
+  llmProvider: 'none',
+  llmModel: null,
+  llmUrl: 'http://localhost:11434',
+  anthropicKey: null,
 };
 
 function loadConfig(): EngramConfig {
@@ -191,7 +199,13 @@ program
       mcpServers.engram = {
         command: 'node',
         args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')],
-        env: { ENGRAM_DB_PATH: config.dbPath },
+        env: {
+          ENGRAM_DB_PATH: config.dbPath,
+          ENGRAM_LLM_PROVIDER: config.llmProvider,
+          ENGRAM_LLM_URL: config.llmUrl,
+          ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
+          ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
+        },
       };
       mcpConfig.mcpServers = mcpServers;
       fs.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
@@ -238,6 +252,10 @@ program
       ENGRAM_INDEX_PATH: config.indexPath,
       ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
       ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
+      ENGRAM_LLM_PROVIDER: config.llmProvider,
+      ENGRAM_LLM_URL: config.llmUrl,
+      ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
+      ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
     };
 
     if (opts.foreground) {
@@ -384,16 +402,26 @@ program
 // ─── configure ───────────────────────────────────────────────────────────────
 
 const configCmd = program.command('configure').description('View or update Engram configuration');
-configCmd.command('show').description('Show current config').action(() => console.log(JSON.stringify(loadConfig(), null, 2)));
+configCmd.command('show').description('Show current config').action(() => {
+  const config = loadConfig();
+  const display = { ...config, anthropicKey: config.anthropicKey ? config.anthropicKey.slice(0, 8) + '...' : null };
+  console.log(JSON.stringify(display, null, 2));
+});
 configCmd.command('set <key> <value>').description('Set a config value').action((key: string, value: string) => {
   const config = loadConfig();
   if (!(key in config)) { fail(`Unknown key: ${key}\n  Valid: ${Object.keys(config).join(', ')}`); process.exit(1); }
-  (config as unknown as Record<string, unknown>)[key] = key === 'port' ? parseInt(value, 10) : value === 'null' ? null : value;
+  const parsed = key === 'port' ? parseInt(value, 10) : value === 'null' ? null : value;
+  (config as unknown as Record<string, unknown>)[key] = parsed;
   saveConfig(config);
-  ok(`${key} = ${(config as unknown as Record<string, unknown>)[key]}`);
+  const display = key === 'anthropicKey' && typeof parsed === 'string' ? parsed.slice(0, 8) + '...' : parsed;
+  ok(`${key} = ${display}`);
 });
 configCmd.command('path').description('Print config file path').action(() => console.log(CONFIG_PATH));
-configCmd.action(() => console.log(JSON.stringify(loadConfig(), null, 2)));
+configCmd.action(() => {
+  const config = loadConfig();
+  const display = { ...config, anthropicKey: config.anthropicKey ? config.anthropicKey.slice(0, 8) + '...' : null };
+  console.log(JSON.stringify(display, null, 2));
+});
 
 // ─── update ─────────────────────────────────────────────────────────────────
 

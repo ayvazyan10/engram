@@ -133,7 +133,7 @@ engram start       # Start the server (background)
 engram stop        # Stop the server
 engram doctor      # Health checks
 engram status      # Server status + memory count
-engram configure   # View/set config (port, dbPath, namespace, etc.)
+engram configure   # View/set config (port, dbPath, LLM, etc.)
 ```
 
 ### Manual install (alternative)
@@ -206,6 +206,29 @@ engram reflections --type pattern       # list pattern insights
 engram llm-status                       # check LLM availability
 ```
 
+### LLM configuration
+
+Enable LLM-powered summarization and reflections via `engram configure`:
+
+```bash
+# Use Ollama (local, free)
+engram configure set llmProvider ollama
+engram configure set llmModel llama3.1
+engram configure set llmUrl http://localhost:11434
+
+# Use Claude (Anthropic API)
+engram configure set llmProvider claude
+engram configure set anthropicKey sk-ant-api03-...
+
+# Check current config
+engram configure show
+
+# Disable LLM
+engram configure set llmProvider none
+```
+
+The LLM settings are persisted in `~/.engram/config.json` and automatically passed to the server on `engram start`.
+
 Set `ENGRAM_DB_PATH` to point at your database file.
 
 ---
@@ -223,7 +246,9 @@ Create `~/.mcp.json` (global) or `.mcp.json` in a project root (per-project):
       "command": "npx",
       "args": ["-y", "@engram-ai-memory/mcp@latest"],
       "env": {
-        "ENGRAM_DB_PATH": "~/.engram/engram.db"
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_LLM_PROVIDER": "claude",
+        "ENGRAM_ANTHROPIC_KEY": "sk-ant-api03-..."
       }
     }
   }
