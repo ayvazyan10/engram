@@ -6,6 +6,7 @@ node_modules/
 dist/
 build/
 .turbo/
+.next/
 *.tsbuildinfo
 
 # Database
@@ -50,3 +51,7 @@ packages/core/models/
 # Desktop extension build artifact
 *.mcpb
 packages/mcpb/.bundle/
+
+# Stray SSH keypair accidentally created in the working tree — never commit
+yes
+yes.pub
