@@ -14,6 +14,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { execSync, spawn } from 'child_process';
+import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer } from './serverControl.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
 
@@ -65,13 +66,9 @@ function getApiBase(): string {
 function isServerRunning(): { running: boolean; pid?: number } {
   if (!fs.existsSync(PID_PATH)) return { running: false };
   const pid = parseInt(fs.readFileSync(PID_PATH, 'utf8').trim(), 10);
-  try {
-    process.kill(pid, 0);
-    return { running: true, pid };
-  } catch {
-    fs.unlinkSync(PID_PATH);
-    return { running: false };
-  }
+  if (pidAlive(pid)) return { running: true, pid };
+  try { fs.unlinkSync(PID_PATH); } catch {}
+  return { running: false };
 }
 
 // ─── REST API client ─────────────────────────────────────────────────────────
@@ -256,6 +253,15 @@ program
       return;
     }
 
+    // Guard against a foreign process already holding the port. Otherwise the
+    // health check below could pass against someone else's server while our
+    // child dies on a bind conflict — printing a false success.
+    if (await isPortOpen(config.host, config.port)) {
+      fail(`Port :${config.port} is already in use by a process not managed by Engram.`);
+      console.log(`  Stop that process, or pick another port: ${C}engram configure set port <n>${X}`);
+      process.exit(1);
+    }
+
     const env = {
       ...process.env,
       PORT: String(config.port),
@@ -285,25 +291,24 @@ program
     child.unref();
     fs.writeFileSync(PID_PATH, String(child.pid));
 
-    const url = `http://${config.host}:${config.port}/api/health`;
-    let healthy = false;
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      try {
-        const res = await fetch(url);
-        if (res.ok) { healthy = true; break; }
-      } catch {}
-    }
+    const result = await awaitServerHealthy(child, config.host, config.port);
 
-    if (healthy) {
+    if (result.healthy) {
       ok(`Engram running (PID ${child.pid})`);
       console.log(`  Dashboard: ${C}http://${config.host}:${config.port}${X}`);
       console.log(`  API:       ${C}http://${config.host}:${config.port}/api${X}`);
       console.log(`  Swagger:   ${C}http://${config.host}:${config.port}/docs${X}`);
       console.log(`  Logs:      ${D}${LOG_PATH}${X}`);
     } else {
-      fail('Server did not start. Check logs:');
+      // The process we spawned never served a healthy response — don't leave a
+      // misleading pidfile, and don't orphan a half-started process.
+      try { fs.unlinkSync(PID_PATH); } catch {}
+      if (!result.exited && child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
+      fail(result.exited
+        ? `Server exited during startup${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''} — the port may already be in use. Check logs:`
+        : `Server did not become healthy on :${config.port}. Check logs:`);
       console.log(`  ${D}cat ${LOG_PATH}${X}`);
+      process.exit(1);
     }
   });
 
@@ -389,12 +394,21 @@ program
   .description('Show Engram server status and memory summary')
   .action(async () => {
     const config = loadConfig();
-    const { running, pid } = isServerRunning();
     console.log(`\n${B}  Engram Status${X}\n`);
 
+    const { running, pid } = isServerRunning();
     if (!running) {
       console.log(`  Server:  ${R}stopped${X}`);
       console.log(`  Start:   ${D}engram start${X}\n`);
+      return;
+    }
+
+    // The PID is alive — confirm it actually owns the port before claiming
+    // "running" (a stale pidfile can point at a reused, unrelated PID).
+    const liveness = verifyServer(pid!, config.port);
+    if (liveness.state === 'port_mismatch') {
+      console.log(`  Server:  ${Y}unknown${X} (PID ${pid} alive, but :${config.port} is owned by PID ${liveness.ownerPid})`);
+      console.log(`  ${D}Stale pidfile? Try: engram stop && engram start${X}\n`);
       return;
     }
 
@@ -594,20 +608,16 @@ program
         child.unref();
         fs.writeFileSync(PID_PATH, String(child.pid));
 
-        const url = `http://${config.host}:${config.port}/api/health`;
-        let healthy = false;
-        for (let i = 0; i < 20; i++) {
-          await new Promise((r) => setTimeout(r, 500));
-          try {
-            const res = await fetch(url);
-            if (res.ok) { healthy = true; break; }
-          } catch {}
-        }
+        const result = await awaitServerHealthy(child, config.host, config.port, { attempts: 20 });
 
-        if (healthy) {
+        if (result.healthy) {
           ok(`Server restarted (PID ${child.pid})`);
         } else {
-          warn('Server may not have restarted cleanly. Check logs:');
+          try { fs.unlinkSync(PID_PATH); } catch {}
+          if (!result.exited && child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
+          warn(result.exited
+            ? `Server exited during restart${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''}. Check logs:`
+            : 'Server may not have restarted cleanly. Check logs:');
           console.log(`  ${D}cat ${LOG_PATH}${X}`);
         }
       }
