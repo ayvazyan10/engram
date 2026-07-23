@@ -17,7 +17,7 @@ The Engram web dashboard provides four distinct views into your AI memory:
 | **3D Neural Graph** | Interactive Three.js visualization with 5 layouts (Cosmos, Nebula, Neural Net, Galaxy, Clusters) and 3 UI themes |
 | **Timeline** | Chronological memory feed grouped by day, showing type badges, importance, and concepts |
 | **Analytics** | Growth charts, type/source distribution, activity heatmap, top concepts cloud |
-| **Reflections** | LLM-generated insight cards with type filters, confidence scores, and manual trigger |
+| **Reflections** | AI-generated insight cards with type filters, confidence scores, and a due indicator |
 
 ## Tech Stack
 
@@ -74,7 +74,7 @@ src/
     ├── viewStore.ts         # 3D layout configs (5 views)
     ├── templateStore.ts     # UI themes (Neural, Mono, Midnight)
     ├── analyticsStore.ts    # Analytics data
-    └── reflectionStore.ts   # Reflection insights + LLM status
+    └── reflectionStore.ts   # Reflection insights + scheduling status
 ```
 
 ## View Modes
@@ -94,8 +94,8 @@ Grouped-by-day chronological feed. Each card shows memory type, content preview,
 - **Activity heatmap**: 7×24 grid (day × hour) showing memory creation density
 
 ### Reflections
-- **LLM status badge**: Shows provider, model, and availability
-- **Reflect Now button**: Manually triggers a reflection cycle
+- **Status pill**: Whether a reflection cycle is due, or how many stores until the next one
+- **Due hint**: Prompts you to have the connected AI run `request_reflection` → `store_reflection` (reflection is AI-driven; the dashboard never generates insights itself)
 - **Type filters**: Pattern, Knowledge Gap, Trend, Contradiction Summary
 - **Insight cards**: Content, confidence, importance, and creation date
 
@@ -118,8 +118,7 @@ The dashboard connects to these server endpoints:
 | `GET /api/memory` | Memory list (all views) |
 | `GET /api/analytics` | Analytics view |
 | `GET /api/reflections` | Reflections view |
-| `POST /api/reflect` | Reflect Now button |
-| `GET /api/llm/status` | LLM status badge |
+| `GET /api/reflection/status` | Reflection status pill |
 | `GET /api/graph/:id` | 3D connections |
 | `GET /api/contradictions` | Contradiction highlighting |
 | `PATCH /api/memory/:id` | Inline editing |

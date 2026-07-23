@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { format, parseISO } from 'date-fns';
 import { useReflectionStore, type ReflectionInsight } from '../../store/reflectionStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
@@ -14,61 +14,24 @@ const TYPE_META: Record<string, { icon: string; label: string; color: string }> 
 };
 
 export default function ReflectionView() {
-  const { insights, llmStatus, loading, reflecting, filterType, error, setInsights, setLLMStatus, setLoading, setReflecting, setFilterType, setError } = useReflectionStore();
+  const { insights, status, loading, filterType, error, setInsights, setStatus, setLoading, setFilterType, setError } = useReflectionStore();
   const t = useTemplateStore((s) => s.activeTemplate);
-  const [toast, setToast] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!document.getElementById('engram-spin-keyframes')) {
-      const style = document.createElement('style');
-      style.id = 'engram-spin-keyframes';
-      style.textContent = '@keyframes engram-spin{to{transform:rotate(360deg)}}@keyframes engram-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}';
-      document.head.appendChild(style);
-    }
-  }, []);
 
   useEffect(() => {
     setLoading(true);
     Promise.all([
       api.getReflections(50, filterType ?? undefined),
-      api.getLLMStatus(),
+      api.getReflectionStatus(),
     ])
-      .then(([reflRes, status]) => {
+      .then(([reflRes, statusRes]) => {
         setInsights(reflRes.reflections);
-        setLLMStatus(status);
+        setStatus(statusRes);
       })
-      .catch(() => {})
+      .catch(() => setError('Could not reach Engram API'))
       .finally(() => setLoading(false));
-  }, [filterType, setInsights, setLLMStatus, setLoading]);
+  }, [filterType, setInsights, setStatus, setLoading, setError]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 4000);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
-  const handleReflect = () => {
-    setReflecting(true);
-    setError(null);
-    setToast(null);
-    api.triggerReflection()
-      .then((res) => {
-        if (res.count > 0) {
-          setToast(`✓ ${res.count} new insight${res.count > 1 ? 's' : ''} generated`);
-          return api.getReflections(50, filterType ?? undefined)
-            .then((r) => setInsights(r.reflections));
-        }
-        setError('No insights generated. Store more memories and try again.');
-        return;
-      })
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : 'Reflection failed';
-        setError(msg.includes('500') || msg.includes('LLM') || msg.includes('503')
-          ? 'LLM provider not available. Run: engram configure set llmProvider claude'
-          : msg);
-      })
-      .finally(() => setReflecting(false));
-  };
+  const remaining = status ? Math.max(0, status.threshold - status.counter) : null;
 
   return (
     <div style={{ ...s.root, background: t.rootBg }}>
@@ -77,37 +40,41 @@ export default function ReflectionView() {
         <div>
           <h2 style={{ ...s.title, color: t.textPrimary }}>Memory Reflections</h2>
           <p style={{ ...s.subtitle, color: t.textMuted }}>
-            AI-generated insights from your memory patterns
+            Insights the AI connected to Engram draws from your memory patterns
           </p>
         </div>
         <div style={s.headerRight}>
-          {llmStatus && (
-            <div style={{ ...s.llmBadge, background: t.cardBg, borderColor: t.panelBorder }}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: llmStatus.available ? '#22c55e' : '#ef4444', display: 'inline-block' }} />
+          {status && (
+            <div style={{ ...s.statusPill, background: t.cardBg, borderColor: t.panelBorder }}>
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: !status.enabled ? '#6b7280' : status.due ? '#fbbf24' : '#22c55e',
+                  display: 'inline-block',
+                }}
+              />
               <span style={{ color: t.textSecondary, fontSize: '11px' }}>
-                {llmStatus.provider} / {llmStatus.model}
+                {!status.enabled
+                  ? 'Reflection off'
+                  : status.due
+                    ? 'Reflection due'
+                    : `${remaining} store${remaining === 1 ? '' : 's'} to next`}
               </span>
             </div>
           )}
-          <button
-            style={{
-              ...s.reflectBtn,
-              background: reflecting ? t.panelBorder : t.accent,
-              opacity: !llmStatus?.available ? 0.4 : 1,
-              cursor: reflecting || !llmStatus?.available ? 'not-allowed' : 'pointer',
-              position: 'relative' as const,
-              overflow: 'hidden' as const,
-            }}
-            onClick={handleReflect}
-            disabled={reflecting || !llmStatus?.available}
-          >
-            {reflecting && (
-              <span style={s.btnSpinner} />
-            )}
-            {reflecting ? 'Analyzing memories…' : '✦ Reflect Now'}
-          </button>
         </div>
       </div>
+
+      {/* Due hint — reflection is AI-driven, not server-generated */}
+      {status?.due && (
+        <div style={{ ...s.dueBanner, background: '#fbbf2415', borderColor: '#fbbf24' }}>
+          <span style={{ color: '#f59e0b', fontSize: '13px' }}>
+            A reflection cycle is due. Ask the AI connected to Engram to run <code style={s.code}>request_reflection</code>, then <code style={s.code}>store_reflection</code> for each insight it finds.
+          </span>
+        </div>
+      )}
 
       {/* Filters */}
       <div style={s.filters}>
@@ -132,13 +99,6 @@ export default function ReflectionView() {
         })}
       </div>
 
-      {/* Toast */}
-      {toast && (
-        <div style={{ ...s.toastBanner, background: '#22c55e18', borderColor: '#22c55e' }}>
-          <span style={{ color: '#22c55e', fontSize: '13px', fontWeight: 500 }}>{toast}</span>
-        </div>
-      )}
-
       {/* Error */}
       {error && (
         <div style={{ ...s.errorBanner, background: '#ef444415', borderColor: '#ef4444' }}>
@@ -153,21 +113,16 @@ export default function ReflectionView() {
       )}
 
       {/* Content */}
-      {reflecting && (
-        <div style={{ ...s.progressBar, background: t.panelBorder }}>
-          <div style={{ ...s.progressFill, background: t.accent }} />
-        </div>
-      )}
       {loading ? (
         <div style={{ ...s.center, color: t.textMuted }}>Loading reflections…</div>
-      ) : insights.length === 0 && !reflecting ? (
+      ) : insights.length === 0 ? (
         <div style={{ ...s.emptyState, borderColor: t.panelBorder }}>
           <div style={{ fontSize: '32px', marginBottom: '12px' }}>◈</div>
           <div style={{ color: t.textSecondary, fontSize: '14px' }}>No reflections yet</div>
-          <div style={{ color: t.textMuted, fontSize: '12px', marginTop: '4px' }}>
-            {llmStatus?.available
-              ? 'Click "Reflect Now" or store more memories to trigger automatic reflection.'
-              : 'Configure an LLM provider (Ollama or Claude) to enable reflections.'}
+          <div style={{ color: t.textMuted, fontSize: '12px', marginTop: '4px', maxWidth: 380, textAlign: 'center' }}>
+            Reflections are generated by the AI connected to Engram via MCP
+            (<code style={s.code}>request_reflection</code> → <code style={s.code}>store_reflection</code>).
+            They appear here once stored.
           </div>
         </div>
       ) : (
@@ -239,7 +194,7 @@ const s = {
     alignItems: 'center',
     gap: '10px',
   },
-  llmBadge: {
+  statusPill: {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
@@ -247,26 +202,17 @@ const s = {
     borderRadius: '6px',
     border: '1px solid',
   },
-  reflectBtn: {
-    border: 'none',
+  dueBanner: {
+    padding: '10px 14px',
     borderRadius: '8px',
-    padding: '8px 16px',
-    color: '#fff',
-    fontSize: '12px',
-    fontWeight: 600,
-    transition: 'background 0.2s, opacity 0.2s',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
+    border: '1px solid',
   },
-  btnSpinner: {
-    width: 12,
-    height: 12,
-    border: '2px solid rgba(255,255,255,0.3)',
-    borderTopColor: '#fff',
-    borderRadius: '50%',
-    animation: 'engram-spin 0.8s linear infinite',
-    flexShrink: 0,
+  code: {
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: '12px',
+    padding: '1px 4px',
+    borderRadius: '4px',
+    background: 'rgba(148,163,184,0.16)',
   } as React.CSSProperties,
   filters: {
     display: 'flex',
@@ -283,12 +229,6 @@ const s = {
     cursor: 'pointer',
     transition: 'background 0.15s',
   },
-  toastBanner: {
-    padding: '10px 14px',
-    borderRadius: '8px',
-    border: '1px solid',
-    textAlign: 'center' as const,
-  },
   errorBanner: {
     display: 'flex',
     alignItems: 'center',
@@ -297,17 +237,6 @@ const s = {
     borderRadius: '8px',
     border: '1px solid',
   },
-  progressBar: {
-    height: 3,
-    borderRadius: 2,
-    overflow: 'hidden' as const,
-  },
-  progressFill: {
-    height: '100%',
-    width: '40%',
-    borderRadius: 2,
-    animation: 'engram-shimmer 1.5s ease-in-out infinite',
-  } as React.CSSProperties,
   center: {
     flex: 1,
     display: 'flex',

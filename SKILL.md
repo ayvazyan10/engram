@@ -24,7 +24,7 @@ Universal AI memory backend — give any AI model persistent, structured memory 
 | **Tags** | `list_tags`, `tag_memory` |
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
-| **Reflection** | `trigger_reflection`, `get_reflections`, `llm_status` |
+| **Reflection** | `request_reflection`, `store_reflection`, `get_reflections` |
 
 ## Recommended workflow
 

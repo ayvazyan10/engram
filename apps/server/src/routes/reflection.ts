@@ -1,43 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain, io } from '../index.js';
+import { brain } from '../index.js';
 
 export const reflectionRoutes: FastifyPluginAsync = async (app) => {
-  // POST /api/reflect — trigger a reflection cycle
-  app.post('/reflect', {
-    schema: {
-      tags: ['reflection'],
-      summary: 'Trigger a memory reflection cycle using the configured LLM',
-    },
-    handler: async (_req, reply) => {
-      const llm = brain.getLLMProvider();
-      const available = await llm.isAvailable();
-      if (!available) {
-        reply.code(503);
-        return { error: 'LLM provider not available. Configure ENGRAM_LLM_PROVIDER.' };
-      }
-
-      const results = await brain.reflect();
-
-      if (results.length > 0) {
-        const neuralNs = io?.of('/neural');
-        neuralNs?.emit('memory:reflected', {
-          count: results.length,
-          types: results.map((r) => r.type),
-        });
-      }
-
-      return {
-        count: results.length,
-        reflections: results.map((r) => ({
-          type: r.type,
-          insight: r.insight,
-          confidence: r.confidence,
-          relatedMemoryIds: r.relatedMemoryIds,
-        })),
-      };
-    },
-  });
-
   // GET /api/reflections — list stored reflection insights
   app.get<{ Querystring: { limit?: string; type?: string } }>('/reflections', {
     schema: {
@@ -71,21 +35,16 @@ export const reflectionRoutes: FastifyPluginAsync = async (app) => {
     },
   });
 
-  // GET /api/llm/status — LLM provider health check
-  app.get('/llm/status', {
+  // GET /api/reflection/status — reflection scheduling state.
+  // Reflection itself runs on the AI connected via MCP (request_reflection /
+  // store_reflection); the server has no LLM and never generates insights.
+  app.get('/reflection/status', {
     schema: {
       tags: ['reflection'],
-      summary: 'Check LLM provider availability and configuration',
+      summary: 'Get reflection scheduling state (enabled, due, counter, threshold)',
     },
     handler: async () => {
-      const llm = brain.getLLMProvider();
-      const available = await llm.isAvailable();
-      return {
-        provider: llm.id,
-        model: llm.getModel(),
-        contextWindow: llm.getContextWindow(),
-        available,
-      };
+      return brain.getReflectionEngine().getStatus();
     },
   });
 

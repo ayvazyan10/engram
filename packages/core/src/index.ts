@@ -77,11 +77,14 @@ export type { WebhookEvent, WebhookPayload, WebhookSubscription, WebhookDelivery
 
 // Reflection
 export { ReflectionEngine, DEFAULT_REFLECTION_CONFIG } from './reflection/index.js';
-export type { ReflectionType, ReflectionConfig, ReflectionResult } from './reflection/index.js';
-
-// LLM providers
-export { createLLMProvider, NullProvider, OllamaProvider, ClaudeProvider } from './llm/index.js';
-export type { LLMProvider, LLMConfig, LLMMessage, LLMCompletionOptions, LLMCompletionResult } from './llm/index.js';
+export type {
+  ReflectionType,
+  ReflectionConfig,
+  ReflectionResult,
+  ReflectionTask,
+  ReflectionStats,
+  ReflectionStatus,
+} from './reflection/index.js';
 
 // DB client
 export { getDb, closeDb, schema, getDatabaseDialect, getDatabaseConnection } from './db/index.js';

@@ -54,7 +54,7 @@ Restart your AI client. 21 tools appear automatically.
 | **Tags** | `list_tags`, `tag_memory` |
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
-| **Reflection** | `trigger_reflection`, `get_reflections`, `llm_status` |
+| **Reflection** | `request_reflection`, `store_reflection`, `get_reflections` |
 
 ## Recommended Workflow
 
@@ -72,8 +72,6 @@ End of session → store_memory(session summary)
 | `ENGRAM_NAMESPACE` | — | Memory namespace |
 | `ENGRAM_SOURCE` | `mcp-client` | AI client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
-| `ENGRAM_LLM_PROVIDER` | `none` | LLM provider for reflection: `ollama`, `claude`, `none` |
-| `ENGRAM_ANTHROPIC_KEY` | — | Anthropic API key (for `claude` provider) |
 
 ## Links
 

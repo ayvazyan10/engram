@@ -1,5 +1,4 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { LLMProvider } from '../llm/LLMProvider.js';
 import type { Memory } from '../db/schema.js';
 import { getReflectionPrompt } from './prompts.js';
 
@@ -23,6 +22,24 @@ export const DEFAULT_REFLECTION_CONFIG: ReflectionConfig = {
   minImportance: 0.3,
 };
 
+export interface ReflectionStats {
+  total: number;
+  byType: Record<string, number>;
+}
+
+/**
+ * A reasoning task handed to the AI connected to Engram. Engram itself never
+ * runs an LLM — it selects the memories, builds the prompt, and lets the
+ * consuming AI produce the actual insight (see {@link ReflectionResult}).
+ */
+export interface ReflectionTask {
+  type: ReflectionType;
+  prompt: string;
+  relatedMemoryIds: string[];
+  stats: ReflectionStats;
+}
+
+/** An insight produced by the connected AI, ready to be stored. */
 export interface ReflectionResult {
   id: string;
   type: ReflectionType;
@@ -32,41 +49,79 @@ export interface ReflectionResult {
   createdAt: string;
 }
 
+export interface ReflectionStatus {
+  enabled: boolean;
+  due: boolean;
+  counter: number;
+  threshold: number;
+}
+
+/**
+ * The reflection engine is a planner + scheduler, not an LLM client. It decides
+ * WHEN reflection is due (store-count / decay triggers) and WHAT to reflect on
+ * (memory selection + prompt building). The connected AI does the reasoning and
+ * writes results back via `buildResult` → store.
+ */
 export class ReflectionEngine {
   private storeCounter = 0;
+  private due = false;
   private config: ReflectionConfig;
-  private llmProvider: LLMProvider;
 
-  constructor(llmProvider: LLMProvider, config?: Partial<ReflectionConfig>) {
-    this.llmProvider = llmProvider;
+  constructor(config?: Partial<ReflectionConfig>) {
     this.config = { ...DEFAULT_REFLECTION_CONFIG, ...config };
   }
 
+  /** Count a store event. Returns true (and marks reflection due) at the threshold. */
   notifyStore(): boolean {
     if (!this.config.enabled) return false;
     this.storeCounter++;
     if (this.storeCounter >= this.config.storeCountThreshold) {
       this.storeCounter = 0;
+      this.due = true;
       return true;
     }
     return false;
   }
 
+  /** Signal a decay sweep. Returns true (and marks reflection due) when configured. */
   notifyDecay(): boolean {
-    return this.config.enabled && this.config.triggerOnDecay;
+    if (!(this.config.enabled && this.config.triggerOnDecay)) return false;
+    this.due = true;
+    return true;
   }
 
-  async reflect(memories: Memory[]): Promise<ReflectionResult[]> {
-    const available = await this.llmProvider.isAvailable();
-    if (!available) return [];
+  /** Whether a reflection cycle is pending for the connected AI to pick up. */
+  isReflectionDue(): boolean {
+    return this.config.enabled && this.due;
+  }
 
+  /** Clear the pending flag (called once the AI has pulled the reflection tasks). */
+  clearPending(): void {
+    this.due = false;
+  }
+
+  getStatus(): ReflectionStatus {
+    return {
+      enabled: this.config.enabled,
+      due: this.isReflectionDue(),
+      counter: this.storeCounter,
+      threshold: this.config.storeCountThreshold,
+    };
+  }
+
+  /**
+   * Build reasoning tasks from candidate memories. Pure and deterministic — no
+   * network, no LLM. The connected AI consumes these prompts and produces
+   * insights via {@link buildResult}.
+   */
+  buildTasks(memories: Memory[]): ReflectionTask[] {
     const filtered = memories.filter(
       (m) => (m.importance ?? 0) >= this.config.minImportance && !m.archivedAt,
     );
 
     if (filtered.length < 3) return [];
 
-    const stats = {
+    const stats: ReflectionStats = {
       total: filtered.length,
       byType: filtered.reduce<Record<string, number>>((acc, m) => {
         acc[m.type] = (acc[m.type] ?? 0) + 1;
@@ -83,64 +138,38 @@ export class ReflectionEngine {
       })
       .join('\n');
 
-    const results: ReflectionResult[] = [];
+    const relatedMemoryIds = filtered.slice(0, 5).map((m) => m.id);
 
-    for (const type of this.config.types) {
-      const result = await this.reflectType(type, filtered, memorySummary, stats);
-      if (result) results.push(result);
-    }
-
-    return results;
+    return this.config.types.map((type) => ({
+      type,
+      prompt: getReflectionPrompt(type, memorySummary, stats),
+      relatedMemoryIds,
+      stats,
+    }));
   }
 
-  async reflectType(
+  /**
+   * Turn an AI-provided insight into a storable result. Returns null for empty
+   * or NO_INSIGHT responses. Confidence is AI-supplied when available, otherwise
+   * derived from a light heuristic.
+   */
+  buildResult(
     type: ReflectionType,
-    memories: Memory[],
-    memorySummary?: string,
-    stats?: { total: number; byType: Record<string, number> },
-  ): Promise<ReflectionResult | null> {
-    const available = await this.llmProvider.isAvailable();
-    if (!available) return null;
+    insight: string,
+    relatedMemoryIds: string[] = [],
+    confidence?: number,
+  ): ReflectionResult | null {
+    const text = insight.trim();
+    if (!text || text.includes('NO_INSIGHT')) return null;
 
-    const effectiveStats = stats ?? {
-      total: memories.length,
-      byType: memories.reduce<Record<string, number>>((acc, m) => {
-        acc[m.type] = (acc[m.type] ?? 0) + 1;
-        return acc;
-      }, {}),
+    return {
+      id: uuidv4(),
+      type,
+      insight: text,
+      confidence: confidence ?? this.computeConfidence(text, relatedMemoryIds.length),
+      relatedMemoryIds,
+      createdAt: new Date().toISOString(),
     };
-
-    const effectiveSummary = memorySummary ?? memories
-      .slice(0, this.config.maxMemoriesToAnalyze)
-      .map((m) => `• [${m.type}]: ${m.content.slice(0, 200)}`)
-      .join('\n');
-
-    const prompt = getReflectionPrompt(type, effectiveSummary, effectiveStats);
-
-    try {
-      const completion = await this.llmProvider.complete(
-        [{ role: 'user', content: prompt }],
-        { maxTokens: 200, temperature: 0.4 },
-      );
-
-      const insight = completion.content.trim();
-      if (!insight || insight === 'NO_INSIGHT' || insight.includes('NO_INSIGHT')) {
-        return null;
-      }
-
-      const relatedIds = memories.slice(0, 5).map((m) => m.id);
-
-      return {
-        id: uuidv4(),
-        type,
-        insight,
-        confidence: this.computeConfidence(insight, memories.length),
-        relatedMemoryIds: relatedIds,
-        createdAt: new Date().toISOString(),
-      };
-    } catch {
-      return null;
-    }
   }
 
   resetCounter(): void {

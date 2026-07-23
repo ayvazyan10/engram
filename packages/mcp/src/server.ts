@@ -778,36 +778,63 @@ server.tool(
 );
 
 // ─── Reflection Tools ────────────────────────────────────────────────────────
-
+//
+// Engram runs no LLM of its own. Reflection is a two-step, AI-driven flow:
+//   1. request_reflection — Engram returns reasoning tasks (prompts + memory ids)
+//   2. YOU analyze each task and call store_reflection with the insight you find
+//
 server.tool(
-  'trigger_reflection',
-  'Trigger a memory reflection cycle. Analyzes stored memories using the configured LLM to find patterns, knowledge gaps, trends, and contradictions. Results are stored as new semantic memories.',
+  'request_reflection',
+  'Get memory reflection tasks to reason over. Engram selects and summarizes your memories and returns one prompt per reflection type (pattern, knowledge_gap, trend, contradiction_summary). YOU — the AI connected to Engram — analyze each prompt and call store_reflection with any genuine insight. Do not store an insight if none exists.',
   {},
   async () => {
     await ensureInitialized();
 
-    const llm = brain.getLLMProvider();
-    const available = await llm.isAvailable();
-    if (!available) {
+    const tasks = await brain.getReflectionTasks();
+
+    if (tasks.length === 0) {
       return {
-        content: [{ type: 'text' as const, text: 'LLM provider not available. Configure ENGRAM_LLM_PROVIDER to enable reflection.' }],
+        content: [{ type: 'text' as const, text: 'Not enough qualifying memories to reflect on yet (need at least 3). Store more memories and try again.' }],
       };
     }
 
-    const results = await brain.reflect();
-
-    if (results.length === 0) {
-      return {
-        content: [{ type: 'text' as const, text: 'Reflection completed but no new insights were generated.' }],
-      };
-    }
-
-    const summary = results
-      .map((r) => `[${r.type}] (confidence: ${r.confidence.toFixed(2)}): ${r.insight}`)
-      .join('\n\n');
+    const payload = tasks.map((t) => ({
+      type: t.type,
+      relatedMemoryIds: t.relatedMemoryIds,
+      prompt: t.prompt,
+    }));
 
     return {
-      content: [{ type: 'text' as const, text: `Generated ${results.length} reflection insights:\n\n${summary}` }],
+      content: [{
+        type: 'text' as const,
+        text: `${tasks.length} reflection task(s). For EACH task: analyze the prompt, then call store_reflection with { type, insight, relatedMemoryIds }. Skip any task with no genuine insight.\n\n${JSON.stringify(payload, null, 2)}`,
+      }],
+    };
+  }
+);
+
+server.tool(
+  'store_reflection',
+  'Store a reflection insight you generated from request_reflection. Saved as a semantic memory tagged reflection:<type>. Provide a confidence (0-1) reflecting how strongly the memories support the insight. Do not call this for empty or NO_INSIGHT results.',
+  {
+    type: z.enum(['pattern', 'knowledge_gap', 'trend', 'contradiction_summary']).describe('The reflection type this insight answers'),
+    insight: z.string().min(1).describe('The insight text (1-3 concise sentences)'),
+    relatedMemoryIds: z.array(z.string()).optional().default([]).describe('IDs of the memories this insight is drawn from (from the task)'),
+    confidence: z.number().min(0).max(1).optional().describe('How strongly the memories support this insight (0-1)'),
+  },
+  async ({ type, insight, relatedMemoryIds, confidence }) => {
+    await ensureInitialized();
+
+    const stored = await brain.storeReflection({ type, insight, relatedMemoryIds, confidence });
+
+    if (!stored) {
+      return {
+        content: [{ type: 'text' as const, text: 'Insight was empty or marked NO_INSIGHT — nothing stored.' }],
+      };
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: `Stored ${type} reflection (${stored.id}).` }],
     };
   }
 );
@@ -846,23 +873,6 @@ server.tool(
 
     return {
       content: [{ type: 'text' as const, text: `${filtered.length} reflections:\n\n${text}` }],
-    };
-  }
-);
-
-server.tool(
-  'llm_status',
-  'Check the LLM provider configuration and availability for summarization and reflection.',
-  {},
-  async () => {
-    await ensureInitialized();
-    const llm = brain.getLLMProvider();
-    const available = await llm.isAvailable();
-    return {
-      content: [{
-        type: 'text' as const,
-        text: JSON.stringify({ provider: llm.id, model: llm.getModel(), contextWindow: llm.getContextWindow(), available }, null, 2),
-      }],
     };
   }
 );

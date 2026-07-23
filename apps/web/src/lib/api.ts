@@ -115,14 +115,10 @@ export const api = {
     }>(`/reflections?${q}`);
   },
 
-  triggerReflection: () =>
-    request<{
-      count: number;
-      reflections: Array<{ type: string; insight: string; confidence: number; relatedMemoryIds: string[] }>;
-    }>('/reflect', { method: 'POST' }),
-
-  getLLMStatus: () =>
-    request<{ provider: string; model: string; contextWindow: number; available: boolean }>('/llm/status'),
+  // Reflection is AI-driven (via MCP request_reflection / store_reflection).
+  // The dashboard only reports scheduling state and lists stored insights.
+  getReflectionStatus: () =>
+    request<{ enabled: boolean; due: boolean; counter: number; threshold: number }>('/reflection/status'),
 
   // Inline edit
   updateMemory: (id: string, body: { content?: string; importance?: number; tags?: string[]; concept?: string }) =>

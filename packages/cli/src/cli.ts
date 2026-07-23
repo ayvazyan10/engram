@@ -31,10 +31,6 @@ interface EngramConfig {
   embeddingModel: string;
   indexPath: string;
   repoPath: string;
-  llmProvider: string;
-  llmModel: string | null;
-  llmUrl: string;
-  anthropicKey: string | null;
 }
 
 const DEFAULT_CONFIG: EngramConfig = {
@@ -45,10 +41,6 @@ const DEFAULT_CONFIG: EngramConfig = {
   embeddingModel: 'Xenova/all-MiniLM-L6-v2',
   indexPath: path.join(ENGRAM_HOME, 'engram.db.index'),
   repoPath: path.join(ENGRAM_HOME, 'repo'),
-  llmProvider: 'none',
-  llmModel: null,
-  llmUrl: 'http://localhost:11434',
-  anthropicKey: null,
 };
 
 function loadConfig(): EngramConfig {
@@ -206,10 +198,6 @@ program
       const engramEnv: Record<string, string> = {
         ENGRAM_DB_PATH: config.dbPath,
         ENGRAM_SOURCE: opts.source,
-        ENGRAM_LLM_PROVIDER: config.llmProvider,
-        ENGRAM_LLM_URL: config.llmUrl,
-        ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
-        ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
       };
 
       if (opts.npx) {
@@ -276,10 +264,6 @@ program
       ENGRAM_INDEX_PATH: config.indexPath,
       ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
       ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
-      ENGRAM_LLM_PROVIDER: config.llmProvider,
-      ENGRAM_LLM_URL: config.llmUrl,
-      ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
-      ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
     };
 
     if (opts.foreground) {
@@ -435,8 +419,7 @@ program
 const configCmd = program.command('configure').description('View or update Engram configuration');
 configCmd.command('show').description('Show current config').action(() => {
   const config = loadConfig();
-  const display = { ...config, anthropicKey: config.anthropicKey ? config.anthropicKey.slice(0, 8) + '...' : null };
-  console.log(JSON.stringify(display, null, 2));
+  console.log(JSON.stringify(config, null, 2));
 });
 configCmd.command('set <key> <value>').description('Set a config value').action((key: string, value: string) => {
   const config = loadConfig();
@@ -444,14 +427,12 @@ configCmd.command('set <key> <value>').description('Set a config value').action(
   const parsed = key === 'port' ? parseInt(value, 10) : value === 'null' ? null : value;
   (config as unknown as Record<string, unknown>)[key] = parsed;
   saveConfig(config);
-  const display = key === 'anthropicKey' && typeof parsed === 'string' ? parsed.slice(0, 8) + '...' : parsed;
-  ok(`${key} = ${display}`);
+  ok(`${key} = ${parsed}`);
 });
 configCmd.command('path').description('Print config file path').action(() => console.log(CONFIG_PATH));
 configCmd.action(() => {
   const config = loadConfig();
-  const display = { ...config, anthropicKey: config.anthropicKey ? config.anthropicKey.slice(0, 8) + '...' : null };
-  console.log(JSON.stringify(display, null, 2));
+  console.log(JSON.stringify(config, null, 2));
 });
 
 // ─── init ───────────────────────────────────────────────────────────────────
@@ -601,10 +582,6 @@ program
           ENGRAM_INDEX_PATH: config.indexPath,
           ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
           ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
-          ENGRAM_LLM_PROVIDER: config.llmProvider,
-          ENGRAM_LLM_URL: config.llmUrl,
-          ...(config.llmModel ? { ENGRAM_LLM_MODEL: config.llmModel } : {}),
-          ...(config.anthropicKey ? { ENGRAM_ANTHROPIC_KEY: config.anthropicKey } : {}),
         };
         fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
         const logFd = fs.openSync(LOG_PATH, 'a');
@@ -800,24 +777,6 @@ program
 // ─── Reflection ─────────────────────────────────────────────────────────────
 
 program
-  .command('reflect')
-  .description('Trigger a memory reflection cycle (requires LLM provider)')
-  .action(async () => {
-    const res = await api<{ error?: string; count: number; reflections?: Array<{ type: string; insight: string; confidence: number }> }>('POST', '/api/reflect');
-    if (res.error) {
-      console.error(`Error: ${res.error}`);
-      process.exit(1);
-    }
-    console.log(`Generated ${res.count} reflection insights`);
-    if (res.reflections) {
-      for (const r of res.reflections) {
-        console.log(`\n  [${r.type}] (confidence: ${r.confidence?.toFixed(2) ?? '?'})`);
-        console.log(`  ${r.insight}`);
-      }
-    }
-  });
-
-program
   .command('reflections')
   .description('List stored reflection insights')
   .option('-l, --limit <n>', 'Max results', '20')
@@ -840,14 +799,13 @@ program
   });
 
 program
-  .command('llm-status')
-  .description('Check LLM provider availability')
+  .command('reflect-status')
+  .description('Show reflection scheduling state (reflection itself runs on the connected AI)')
   .action(async () => {
-    const res = await api<{ provider: string; model: string; contextWindow: number; available: boolean }>('GET', '/api/llm/status');
-    console.log(`Provider:  ${res.provider}`);
-    console.log(`Model:     ${res.model}`);
-    console.log(`Context:   ${res.contextWindow} tokens`);
-    console.log(`Available: ${res.available ? 'Yes' : 'No'}`);
+    const res = await api<{ enabled: boolean; due: boolean; counter: number; threshold: number }>('GET', '/api/reflection/status');
+    console.log(`Enabled:   ${res.enabled ? 'Yes' : 'No'}`);
+    console.log(`Due:       ${res.due ? 'Yes — ask the connected AI to run request_reflection' : 'No'}`);
+    console.log(`Progress:  ${res.counter}/${res.threshold} stores to next cycle`);
   });
 
 // ─── Run ─────────────────────────────────────────────────────────────────────

@@ -40,15 +40,14 @@ Most AI tools forget everything the moment a session ends. Engram solves this by
 | **3 Memory Types** | Episodic (events), Semantic (facts + knowledge graph), Procedural (trigger→action patterns) |
 | **7-Step Recall Pipeline** | Embed → Vector search → Graph expand → Score → Rank → Truncate → Log |
 | **Memory Decay & GC** | Ebbinghaus forgetting curve, auto-archive stale memories, episodic→semantic consolidation |
-| **LLM-Powered Summarization** | Pluggable LLM backend (Ollama / Claude) for intelligent memory consolidation instead of naive concatenation |
-| **Memory Reflection** | Autonomous insight engine — detects patterns, knowledge gaps, trends, and contradictions across memories |
+| **Memory Reflection** | AI-driven insight engine — the AI connected over MCP reasons over your memories to surface patterns, knowledge gaps, trends, and contradictions. Engram runs no LLM of its own — no API keys, no external calls. |
 | **Dashboard v2** | Multi-view dashboard: 3D neural graph, Timeline, Analytics (charts + heatmaps), Reflections panel |
 | **Namespace Isolation** | Isolated memory workspaces per project/agent, opt-in cross-namespace recall |
 | **Contradiction Detection** | Auto-detect conflicting memories, 5 resolution strategies (keep_newest/oldest/important/both/manual) |
 | **Embedding Upgradability** | Swap embedding models, store model ID alongside vectors, batch re-embedding pipeline |
 | **Streaming Recall** | SSE endpoint — high-confidence memories first, graph-expanded backfill later |
 | **Index Persistence** | Save/load vector index to disk for fast startup (27-37x speedup) |
-| **CLI Tool** | `engram store/search/recall/stats/forget/export/import/reflect` from the terminal |
+| **CLI Tool** | `engram store/search/recall/stats/forget/export/import/reflections` from the terminal |
 | **Import/Export** | Full backup & restore as JSON or NDJSON via CLI or API |
 | **Webhooks** | Subscribe external systems to memory events (stored, forgotten, decayed, consolidated, contradiction, reflected) |
 | **Tagging & Collections** | Tag cloud, filter by tag, prefix-based collections (e.g. `project:alpha`) |
@@ -98,7 +97,7 @@ CLI            ──direct───────→ ┘
 
 | Integration | Method | How |
 |---|---|---|
-| **Claude Code** | MCP (21 native tools) | `store_memory`, `recall_context`, `trigger_reflection`, … |
+| **Claude Code** | MCP (21 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
 | **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/skills/ayvazyan10/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
 | **OpenClaw** | REST adapter | `EngramClient` or `withMemory()` wrapper |
@@ -137,7 +136,7 @@ engram start                # Start the server (background)
 engram stop                 # Stop the server
 engram doctor               # Health checks (verifies ~/.mcp.json config)
 engram status               # Server status + memory count
-engram configure            # View/set config (port, dbPath, LLM, etc.)
+engram configure            # View/set config (port, dbPath, namespace, etc.)
 ```
 
 ### Manual install (alternative)
@@ -204,34 +203,14 @@ engram import < backup.json
 # Forget
 engram forget a1b2c3d4-...
 
-# Reflection (requires LLM provider)
-engram reflect                          # trigger reflection cycle
-engram reflections --type pattern       # list pattern insights
-engram llm-status                       # check LLM availability
+# Reflection (AI-driven — runs on the AI connected via MCP)
+engram reflect-status                   # show whether a reflection cycle is due
+engram reflections --type pattern       # list stored pattern insights
 ```
 
-### LLM configuration
+### Reflection needs no LLM configuration
 
-Enable LLM-powered summarization and reflections via `engram configure`:
-
-```bash
-# Use Ollama (local, free)
-engram configure set llmProvider ollama
-engram configure set llmModel llama3.1
-engram configure set llmUrl http://localhost:11434
-
-# Use Claude (Anthropic API)
-engram configure set llmProvider claude
-engram configure set anthropicKey sk-ant-api03-...
-
-# Check current config
-engram configure show
-
-# Disable LLM
-engram configure set llmProvider none
-```
-
-The LLM settings are persisted in `~/.engram/config.json` and automatically passed to the server on `engram start`.
+Engram never calls a model itself. When a reflection cycle is due, the AI connected over MCP does the reasoning via `request_reflection` → `store_reflection`. There are no providers, models, or API keys to configure.
 
 Set `ENGRAM_DB_PATH` to point at your database file.
 
@@ -250,9 +229,7 @@ Create `~/.mcp.json` (global) or `.mcp.json` in a project root (per-project):
       "command": "npx",
       "args": ["-y", "@engram-ai-memory/mcp@latest"],
       "env": {
-        "ENGRAM_DB_PATH": "~/.engram/engram.db",
-        "ENGRAM_LLM_PROVIDER": "claude",
-        "ENGRAM_ANTHROPIC_KEY": "sk-ant-api03-..."
+        "ENGRAM_DB_PATH": "~/.engram/engram.db"
       }
     }
   }
@@ -285,7 +262,7 @@ Restart your AI client. **21 tools** are now available:
 | **Stats & Health** | `memory_stats`, `index_status`, `embedding_status` |
 | **Lifecycle** | `decay_sweep`, `decay_policy`, `re_embed` |
 | **Contradictions** | `check_contradictions`, `resolve_contradiction` |
-| **Reflection** | `trigger_reflection`, `get_reflections`, `llm_status` |
+| **Reflection** | `request_reflection`, `store_reflection`, `get_reflections` |
 | **Tags** | `list_tags`, `tag_memory` |
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
@@ -347,9 +324,9 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 
 | Package | Description | npm |
 |---|---|---|
-| `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, LLM summarization, reflection | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
+| `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, reflection | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
 | `@engram-ai-memory/mcp` | MCP Server — 21 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
-| `@engram-ai-memory/cli` | CLI — store, search, recall, reflect, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
+| `@engram-ai-memory/cli` | CLI — store, search, recall, reflections, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
 | `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (45+ endpoints) | — |
 | `@engram-ai-memory/web` | Multi-view dashboard — 3D neural graph, Timeline, Analytics, Reflections | — |
 | `@engram-ai-memory/vis` | Force-directed layout + animation helpers | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/vis?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/vis) |
@@ -371,10 +348,6 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
-| `ENGRAM_LLM_PROVIDER` | `none` | LLM backend: `ollama`, `claude`, or `none` |
-| `ENGRAM_LLM_MODEL` | auto | Model name (e.g. `llama3.1`, `claude-sonnet-4-20250514`) |
-| `ENGRAM_LLM_URL` | `http://localhost:11434` | Ollama base URL |
-| `ENGRAM_ANTHROPIC_KEY` | *(none)* | Anthropic API key (required for `claude` provider) |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 

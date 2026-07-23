@@ -43,10 +43,8 @@ import type { EngramPlugin, PluginInfo } from './plugins/PluginRegistry.js';
 import { ContextAssembler } from './retrieval/ContextAssembler.js';
 import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
-import { createLLMProvider } from './llm/index.js';
-import type { LLMProvider, LLMConfig } from './llm/index.js';
 import { ReflectionEngine } from './reflection/ReflectionEngine.js';
-import type { ReflectionConfig, ReflectionResult } from './reflection/ReflectionEngine.js';
+import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflection/ReflectionEngine.js';
 
 /**
  * Extract a short concept label (2–5 words) from memory content.
@@ -78,8 +76,6 @@ export interface BrainConfig {
   contradictionConfig?: Partial<ContradictionConfig>;
   /** Path to persist the vector index for fast startup. Defaults to {dbPath}.index */
   indexPath?: string;
-  /** LLM provider configuration for summarization and reflection */
-  llm?: Partial<LLMConfig>;
   /** Reflection engine configuration */
   reflection?: Partial<ReflectionConfig>;
 }
@@ -199,7 +195,6 @@ export class NeuralBrain {
   private contradictionDetector: ContradictionDetector;
   private webhookManager: WebhookManager;
   private pluginRegistry: PluginRegistry;
-  private llmProvider: LLMProvider;
   private reflectionEngine: ReflectionEngine;
 
   readonly episodic: EpisodicMemory;
@@ -226,8 +221,7 @@ export class NeuralBrain {
     this.contradictionDetector = new ContradictionDetector(config.contradictionConfig ?? {});
     this.webhookManager = new WebhookManager();
     this.pluginRegistry = new PluginRegistry();
-    this.llmProvider = createLLMProvider(config.llm);
-    this.reflectionEngine = new ReflectionEngine(this.llmProvider, config.reflection);
+    this.reflectionEngine = new ReflectionEngine(config.reflection);
     this.episodic = new EpisodicMemory();
     this.semantic = new SemanticMemory();
     this.procedural = new ProceduralMemory();
@@ -526,9 +520,11 @@ export class NeuralBrain {
       contradictions: contradictionResult.contradictions.length,
     });
 
-    // Check if reflection should trigger (non-blocking)
-    if (inserted!.source !== 'reflection' && this.reflectionEngine.notifyStore()) {
-      void this.reflect().catch(() => {});
+    // Count the store toward reflection. When it becomes due, the connected AI
+    // picks it up via getReflectionTasks() (request_reflection) — Engram runs no
+    // LLM of its own.
+    if (inserted!.source !== 'reflection') {
+      this.reflectionEngine.notifyStore();
     }
 
     return { memory: inserted!, contradictions: contradictionResult };
@@ -743,7 +739,7 @@ export class NeuralBrain {
       const avgImportance = cluster.reduce((s, m) => s + (m.importance ?? 0.5), 0) / cluster.length;
       const importance = Math.min(1, avgImportance + 0.1);
 
-      const summary = await this.summarizeCluster(contents, concept);
+      const summary = this.summarizeCluster(contents);
 
       const { memory: semantic } = await this.store({
         content: summary,
@@ -773,44 +769,12 @@ export class NeuralBrain {
   }
 
   /**
-   * Summarize a cluster of memory contents using LLM or fallback to text dedup.
+   * Summarize a cluster of memory contents via deterministic text dedup.
+   * Engram runs no LLM; richer summarization is left to the AI connected to it.
    */
-  private async summarizeCluster(contents: string[], concept: string): Promise<string> {
-    const llmAvailable = await this.llmProvider.isAvailable();
-    if (!llmAvailable) {
-      const lines = contents.join('\n').split('\n').filter((l) => l.trim().length > 5);
-      return [...new Set(lines)].slice(0, 10).join('\n');
-    }
-
-    const inputText = contents.join('\n---\n');
-    const maxInput = parseInt(process.env['ENGRAM_LLM_MAX_INPUT_TOKENS'] ?? '4000', 10);
-    const tokenEstimate = this.llmProvider.estimateTokens(inputText);
-
-    let truncated = inputText;
-    if (tokenEstimate > maxInput) {
-      const ratio = maxInput / tokenEstimate;
-      truncated = inputText.slice(0, Math.floor(inputText.length * ratio));
-    }
-
-    try {
-      const result = await this.llmProvider.complete(
-        [{ role: 'user', content: truncated }],
-        {
-          system: `You are a memory consolidation system. Summarize the following related memories into a single concise paragraph that captures all key information. The topic is: "${concept}". Output ONLY the summary, no preamble or explanation.`,
-          maxTokens: 300,
-          temperature: 0.3,
-        },
-      );
-      return result.content.trim();
-    } catch {
-      const lines = contents.join('\n').split('\n').filter((l) => l.trim().length > 5);
-      return [...new Set(lines)].slice(0, 10).join('\n');
-    }
-  }
-
-  /** Get the configured LLM provider instance */
-  getLLMProvider(): LLMProvider {
-    return this.llmProvider;
+  private summarizeCluster(contents: string[]): string {
+    const lines = contents.join('\n').split('\n').filter((l) => l.trim().length > 5);
+    return [...new Set(lines)].slice(0, 10).join('\n');
   }
 
   /** Get the reflection engine instance */
@@ -819,10 +783,12 @@ export class NeuralBrain {
   }
 
   /**
-   * Run a reflection cycle — analyze stored memories for patterns, gaps, and trends.
-   * Results are stored as semantic memories with source='reflection'.
+   * Build reflection tasks for the AI connected to Engram to reason over.
+   * Engram selects and summarizes the memories and returns prompts; the AI
+   * produces the insights and writes them back via {@link storeReflection}.
+   * Clears the pending flag once tasks are handed out.
    */
-  async reflect(): Promise<ReflectionResult[]> {
+  async getReflectionTasks(): Promise<ReflectionTask[]> {
     this.assertInitialized();
     const db = getDb();
 
@@ -838,36 +804,57 @@ export class NeuralBrain {
       .orderBy(schema.memories.updatedAt)
       .limit(this.reflectionEngine.getConfig().maxMemoriesToAnalyze);
 
-    const results = await this.reflectionEngine.reflect(memories);
+    const tasks = this.reflectionEngine.buildTasks(memories);
+    if (tasks.length > 0) this.reflectionEngine.clearPending();
+    return tasks;
+  }
 
-    for (const result of results) {
-      await this.store({
-        content: result.insight,
-        type: 'semantic',
-        source: 'reflection',
-        tags: ['reflection', `reflection:${result.type}`],
-        importance: Math.min(0.9, 0.6 + result.confidence * 0.3),
-        metadata: {
-          reflectionType: result.type,
-          confidence: result.confidence,
-          relatedMemoryIds: result.relatedMemoryIds,
-        },
-      });
-    }
+  /**
+   * Store an insight produced by the connected AI as a semantic memory tagged
+   * `reflection:<type>`. Returns null when the insight is empty or NO_INSIGHT.
+   */
+  async storeReflection(input: {
+    type: ReflectionType;
+    insight: string;
+    relatedMemoryIds?: string[];
+    confidence?: number;
+  }): Promise<Memory | null> {
+    this.assertInitialized();
 
-    if (results.length > 0) {
-      this.webhookManager.fire('reflected', {
-        count: results.length,
-        types: results.map((r) => r.type),
-      });
+    const result = this.reflectionEngine.buildResult(
+      input.type,
+      input.insight,
+      input.relatedMemoryIds ?? [],
+      input.confidence,
+    );
+    if (!result) return null;
 
-      void this.pluginRegistry.runHook('onReflect', {
-        insights: results.length,
-        types: results.map((r) => r.type),
-      });
-    }
+    const { memory } = await this.store({
+      content: result.insight,
+      type: 'semantic',
+      source: 'reflection',
+      tags: ['reflection', `reflection:${result.type}`],
+      importance: Math.min(0.9, 0.6 + result.confidence * 0.3),
+      metadata: {
+        reflectionType: result.type,
+        confidence: result.confidence,
+        relatedMemoryIds: result.relatedMemoryIds,
+      },
+    });
 
-    return results;
+    this.reflectionEngine.clearPending();
+
+    this.webhookManager.fire('reflected', {
+      count: 1,
+      types: [result.type],
+    });
+
+    void this.pluginRegistry.runHook('onReflect', {
+      insights: 1,
+      types: [result.type],
+    });
+
+    return memory;
   }
 
   /**
@@ -938,9 +925,10 @@ export class NeuralBrain {
       durationMs: result.durationMs,
     });
 
-    // Trigger reflection after decay if configured (non-blocking)
-    if (!dryRun && this.reflectionEngine.notifyDecay()) {
-      void this.reflect().catch(() => {});
+    // Mark reflection due after a decay sweep if configured; the connected AI
+    // picks it up via getReflectionTasks() (request_reflection).
+    if (!dryRun) {
+      this.reflectionEngine.notifyDecay();
     }
 
     return result;
