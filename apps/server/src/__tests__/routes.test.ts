@@ -114,6 +114,26 @@ describe('memory CRUD', () => {
     expect(res.json().memories).toHaveLength(1);
   });
 
+  it('batch store honours per-item importance and source', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/memory/batch',
+      payload: {
+        memories: [
+          { content: 'Batched memory with explicit fields', type: 'semantic', source: 'batch-test', importance: 0.93 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(201);
+
+    const id = res.json().ids[0] as string;
+    const stored = await app.inject({ method: 'GET', url: `/api/memory/${id}` });
+    const body = stored.json();
+    // Only content and type used to be forwarded; everything else was dropped.
+    expect(body.importance).toBeCloseTo(0.93, 5);
+    expect(body.source).toBe('batch-test');
+  });
+
   it('bounds the batch array', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -135,6 +155,24 @@ describe('memory CRUD', () => {
 });
 
 describe('search & recall', () => {
+  it('returns a similarity score on every hit', async () => {
+    await storeMemory('Kubernetes schedules containers across a cluster');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/search',
+      payload: { query: 'kubernetes container scheduling', topK: 5, threshold: 0.1 },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const hits = res.json().results as Array<{ score?: number }>;
+    expect(hits.length).toBeGreaterThan(0);
+    // The similarity used for ranking was computed and then discarded, so every
+    // consumer rendering a relevance percentage showed 0%.
+    expect(typeof hits[0]!.score).toBe('number');
+    expect(hits[0]!.score!).toBeGreaterThan(0);
+  });
+
   it('returns semantically related memories', async () => {
     await storeMemory('PostgreSQL uses multiversion concurrency control');
 

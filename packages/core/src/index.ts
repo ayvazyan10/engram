@@ -6,7 +6,7 @@
  */
 
 export { NeuralBrain } from './NeuralBrain.js';
-export type { BrainConfig, StoreInput, StoreResult, SearchOptions, EmbeddingStatus, ReEmbedProgress, IndexStatus, TagInfo, Collection } from './NeuralBrain.js';
+export type { BrainConfig, StoreInput, StoreResult, SearchOptions, SearchHit, EmbeddingStatus, ReEmbedProgress, IndexStatus, TagInfo, Collection } from './NeuralBrain.js';
 
 // Memory type classes
 export { EpisodicMemory } from './memory/EpisodicMemory.js';

@@ -150,9 +150,12 @@ const engramPlugin = {
               importance,
               source: src,
             });
+            // POST /api/memory returns { memory, contradictions } — reading
+            // result.id gave "Stored (id: undefined, type: undefined)".
+            const stored = result.memory ?? result;
             return {
-              content: `Stored (id: ${result.id}, type: ${result.type})`,
-              details: { id: result.id, type: result.type },
+              content: `Stored (id: ${stored.id}, type: ${stored.type})`,
+              details: { id: stored.id, type: stored.type },
             };
           } catch (err) {
             return {

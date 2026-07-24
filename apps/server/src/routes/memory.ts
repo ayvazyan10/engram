@@ -53,7 +53,19 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // POST /api/memory/batch — bulk store
-  app.post<{ Body: { memories: Array<{ content: string; type?: string }> } }>(
+  app.post<{
+    Body: {
+      memories: Array<{
+        content: string;
+        type?: string;
+        source?: string;
+        importance?: number;
+        tags?: string[];
+        concept?: string;
+        namespace?: string;
+      }>;
+    };
+  }>(
     '/memory/batch',
     {
       schema: {
@@ -73,9 +85,12 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
                 required: ['content'],
                 properties: {
                   content: { type: 'string' },
-                  type: { type: 'string' },
+                  type: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
                   source: { type: 'string' },
-                  importance: { type: 'number' },
+                  importance: { type: 'number', minimum: 0, maximum: 1 },
+                  tags: { type: 'array', items: { type: 'string' } },
+                  concept: { type: 'string' },
+                  namespace: { type: 'string' },
                 },
               },
             },
@@ -85,10 +100,18 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       handler: async (req, reply) => {
         const start = Date.now();
         const results = await Promise.all(
+          // Forward every documented per-item field. Only content and type were
+          // passed through, so importance/source/tags/concept/namespace were
+          // silently dropped for batched writes.
           req.body.memories.map((m) =>
             brain.store({
               content: m.content,
               type: (m.type as 'episodic' | 'semantic' | 'procedural') ?? 'episodic',
+              source: m.source,
+              importance: m.importance,
+              tags: m.tags,
+              concept: m.concept,
+              namespace: m.namespace,
             })
           )
         );

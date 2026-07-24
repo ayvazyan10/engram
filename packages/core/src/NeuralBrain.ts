@@ -172,6 +172,9 @@ export interface Collection {
   totalMemories: number;
 }
 
+/** A search result: the stored memory plus its cosine similarity to the query. */
+export type SearchHit = Memory & { score: number };
+
 export interface SearchOptions {
   topK?: number;
   threshold?: number;
@@ -585,7 +588,7 @@ export class NeuralBrain {
   /**
    * Semantic search across memories.
    */
-  async search(query: string, options: SearchOptions = {}): Promise<Memory[]> {
+  async search(query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
     this.assertInitialized();
 
     const queryVec = await embed(query);
@@ -599,23 +602,31 @@ export class NeuralBrain {
     );
 
     const db = getDb();
-    const memories: Memory[] = [];
 
+    // One query for all hits instead of one per result.
+    const ids = results.map((r) => r.id);
+    const rows = ids.length
+      ? await db
+          .select()
+          .from(schema.memories)
+          .where(and(inArray(schema.memories.id, ids), isNull(schema.memories.archivedAt)))
+      : [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    // Iterate `results` (not `rows`) so similarity ordering is preserved.
+    const hits: SearchHit[] = [];
     for (const result of results) {
-      const [m] = await db
-        .select()
-        .from(schema.memories)
-        .where(and(eq(schema.memories.id, result.id), isNull(schema.memories.archivedAt)))
-        .limit(1);
-
+      const m = byId.get(result.id);
       if (!m) continue;
       if (options.sources && m.source && !options.sources.includes(m.source)) continue;
       // Namespace filtering (defense in depth — vector search already filters)
       if (this.config.namespace && !options.crossNamespace && m.namespace !== this.config.namespace) continue;
-      memories.push(m);
+      // The similarity was computed and then thrown away, so every consumer that
+      // wanted to show a relevance score rendered 0.
+      hits.push({ ...m, score: result.similarity });
     }
 
-    return memories;
+    return hits;
   }
 
   /**
