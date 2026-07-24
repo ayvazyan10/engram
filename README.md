@@ -388,7 +388,7 @@ cd packages/core && npx tsx scripts/demo.ts
 
 | Metric | Value | Approach |
 |---|---|---|
-| Recall latency (100 memories) | ~18ms p50 | HNSW index + importance scoring |
+| Recall latency (100 memories) | ~18ms p50 | In-memory cosine scan + importance scoring |
 | Store throughput | ~120 mem/s | SQLite WAL + auto-linking |
 | Embedding | 8ms/text | Local ONNX/WASM (all-MiniLM-L6-v2) |
 | Cold startup (1k memories) | ~1.2s | Full DB scan + index build |
@@ -428,7 +428,7 @@ Key areas where help is especially welcome:
 - **Mobile / browser** — lightweight browser-side memory client
 - **Multi-modal embeddings** — images, audio alongside text
 - **PostgreSQL backend** — the adapter exists but ships no schema/migrations (the Drizzle schema is SQLite-only), so it currently refuses to start; see `ENGRAM_DATABASE` below
-- **pgvector native search** — use PostgreSQL's vector index instead of in-memory HNSW
+- **ANN vector index** — replace the brute-force cosine scan with HNSW (or pgvector) so recall stops scaling linearly with memory count
 
 ---
 
