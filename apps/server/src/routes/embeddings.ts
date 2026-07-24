@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain, io } from '../index.js';
+import { brain, realtime } from '../index.js';
 
 export const embeddingRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/embeddings/status — embedding model status and stale counts
@@ -35,10 +35,10 @@ export const embeddingRoutes: FastifyPluginAsync = async (app) => {
       const { onlyStale = true, batchSize = 32 } = req.body ?? {};
 
       const result = await brain.reEmbed(onlyStale, batchSize, (progress) => {
-        io?.emit('embedding:progress', progress);
+        realtime?.emit('embedding:progress', progress);
       });
 
-      io?.emit('embedding:complete', result);
+      realtime?.emit('embedding:complete', result);
 
       return {
         ...result,

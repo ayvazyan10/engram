@@ -19,7 +19,7 @@ import { api } from '../../lib/api.js';
 import { useWebSocket } from '../../hooks/useWebSocket.js';
 
 export default function AppLayout() {
-  const { neurons, setNeurons, setTargetPositions, setConnections, setContradictionPairs } = useNeuralStore();
+  const { neurons, setNeurons, reconcileNeurons, setConnections, setContradictionPairs } = useNeuralStore();
   const { records, setRecords } = useMemoryStore();
   const { activeView } = useViewStore();
   const viewMode = useDashboardStore((s) => s.viewMode);
@@ -61,7 +61,10 @@ export default function AppLayout() {
       setNeurons(positions.map((p) => ({ ...p, activation: 0, tx: p.x, ty: p.y, tz: p.z })));
       setFirstLoad(false);
     } else {
-      setTargetPositions(positions);
+      // Reconcile rather than only retarget: setTargetPositions mapped over the
+      // EXISTING array, so memories stored during the session never appeared as
+      // neurons until a full page reload.
+      reconcileNeurons(positions);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records, activeView, viewMode]);

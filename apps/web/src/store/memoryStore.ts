@@ -30,6 +30,8 @@ interface MemoryState {
   setHighlightedIds: (ids: Set<string>) => void;
   addRecord: (record: MemoryRecord) => void;
   removeRecord: (id: string) => void;
+  /** Persist a tag edit into the record so re-selecting it doesn't show stale tags. */
+  updateRecordTags: (id: string, tags: string[]) => void;
 }
 
 export const useMemoryStore = create<MemoryState>((set) => ({
@@ -57,5 +59,11 @@ export const useMemoryStore = create<MemoryState>((set) => ({
     set((state) => ({
       records: state.records.filter((r) => r.id !== id),
       totalCount: Math.max(0, state.totalCount - 1),
+    })),
+  updateRecordTags: (id, tags) =>
+    set((state) => ({
+      records: state.records.map((r) =>
+        r.id === id ? { ...r, tags: JSON.stringify(tags) } : r
+      ),
     })),
 }));

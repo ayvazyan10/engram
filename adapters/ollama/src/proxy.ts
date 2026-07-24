@@ -27,6 +27,27 @@ const OLLAMA_TARGET = process.env['OLLAMA_TARGET'] ?? 'http://localhost:11434';
 const ENGRAM_API = process.env['ENGRAM_API'] ?? 'http://localhost:4901';
 const MAX_TOKENS = parseInt(process.env['ENGRAM_MAX_TOKENS'] ?? '1500', 10);
 const TOOL_RETRY = process.env['ENGRAM_TOOL_RETRY'] !== 'false';
+/** Abort an upstream request that never responds, so sockets are not held forever. */
+const UPSTREAM_TIMEOUT_MS = parseInt(process.env['ENGRAM_UPSTREAM_TIMEOUT_MS'] ?? '300000', 10);
+
+/**
+ * Headers never forwarded upstream: `host`/`content-length` are recomputed, the
+ * hop-by-hop set is per-connection and must not be proxied, and `accept-encoding`
+ * is dropped so responses stay parseable for auto-store.
+ */
+const STRIPPED_REQUEST_HEADERS = new Set([
+  'host',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'upgrade',
+  'accept-encoding',
+]);
 
 // ─── Engram API ───────────────────────────────────────────────────────────────
 
@@ -125,23 +146,34 @@ interface ParsedResponse {
 }
 
 function parseOllamaResponse(body: string): ParsedResponse {
+  // /api/chat and /api/generate default to stream:true and emit newline-delimited
+  // JSON, where the terminal {done:true} chunk carries EMPTY content. Reading only
+  // the last line therefore produced an empty text on the default path, so the
+  // "store AI responses as memories" feature silently never fired. Aggregate
+  // across every chunk instead (mirrors parseOpenAIResponse).
   const lines = body.split('\n').filter(Boolean);
-  const last = lines[lines.length - 1];
-  if (!last) return { text: '', hasToolCalls: false, finishReason: '' };
-  try {
-    const d = JSON.parse(last) as {
-      response?: string;
-      message?: { content?: string; tool_calls?: unknown[] };
-      done?: boolean;
-    };
-    return {
-      text: d.response ?? d.message?.content ?? '',
-      hasToolCalls: !!(d.message?.tool_calls?.length),
-      finishReason: d.done ? 'stop' : '',
-    };
-  } catch {
-    return { text: '', hasToolCalls: false, finishReason: '' };
+  if (lines.length === 0) return { text: '', hasToolCalls: false, finishReason: '' };
+
+  let text = '';
+  let hasToolCalls = false;
+  let finishReason = '';
+
+  for (const line of lines) {
+    try {
+      const d = JSON.parse(line) as {
+        response?: string;
+        message?: { content?: string; tool_calls?: unknown[] };
+        done?: boolean;
+      };
+      text += d.response ?? d.message?.content ?? '';
+      if (d.message?.tool_calls?.length) hasToolCalls = true;
+      if (d.done) finishReason = 'stop';
+    } catch {
+      // Not JSON (or a partial chunk) — skip this line.
+    }
   }
+
+  return { text, hasToolCalls, finishReason };
 }
 
 function parseOpenAIResponse(body: string): ParsedResponse {
@@ -212,11 +244,18 @@ function makeBufferedRequest(
     const req = proto.request(options, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
+      // The response stream had no 'error' listener: a mid-response socket reset
+      // emitted an unhandled 'error' and crashed the proxy.
+      res.on('error', reject);
       res.on('end', () =>
         resolve({ status: res.statusCode ?? 200, headers: res.headers, body: Buffer.concat(chunks) })
       );
     });
     req.on('error', reject);
+    // Without a timeout a hung upstream kept the socket and this promise alive forever.
+    req.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Upstream timed out after ${UPSTREAM_TIMEOUT_MS}ms`));
+    });
     req.write(body);
     req.end();
   });
@@ -238,13 +277,38 @@ function streamRequest(
       headers: { ...reqHeaders, 'content-length': body.length.toString(), host: targetUrl.host },
     };
     const proto = targetUrl.protocol === 'https:' ? https : http;
+
+    // On failure the client MUST be answered here — the caller cannot, because
+    // headers may already be sent. Previously nothing was written and the
+    // client hung until its own timeout.
+    const failClient = (err: Error) => {
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'text/plain' });
+        res.end('Bad Gateway');
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+      reject(err);
+    };
+
     const req = proto.request(options, (proxyRes) => {
       res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
       const chunks: Buffer[] = [];
       proxyRes.on('data', (c: Buffer) => { chunks.push(c); res.write(c); });
+      proxyRes.on('error', failClient);
       proxyRes.on('end', () => { res.end(); resolve(Buffer.concat(chunks)); });
     });
-    req.on('error', reject);
+
+    req.on('error', failClient);
+    req.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Upstream timed out after ${UPSTREAM_TIMEOUT_MS}ms`));
+    });
+
+    // Client went away — release the upstream instead of streaming into a dead socket.
+    res.on('close', () => {
+      if (!res.writableEnded) req.destroy();
+    });
+
     req.write(body);
     req.end();
   });
@@ -328,10 +392,15 @@ const proxy = http.createServer(async (req, res) => {
       }
     }
 
-    // Strip headers that will be recalculated
+    // Strip headers that will be recalculated, plus all hop-by-hop headers.
+    // Forwarding the client's transfer-encoding alongside our recomputed
+    // content-length produced a request with BOTH framings — invalid per
+    // RFC 7230, a request-smuggling shape, and rejected by strict upstreams.
+    // accept-encoding is dropped too so responses stay plaintext and the
+    // auto-store parser can read them.
     const forwardHeaders = Object.fromEntries(
       Object.entries(req.headers)
-        .filter(([k]) => k !== 'host' && k !== 'content-length')
+        .filter(([k]) => !STRIPPED_REQUEST_HEADERS.has(k.toLowerCase()))
         .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : (v ?? '')])
     );
 

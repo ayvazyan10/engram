@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
 import { eq, isNull, desc, and } from 'drizzle-orm';
-import { brain, io } from '../index.js';
+import { brain, realtime } from '../index.js';
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/memory — store a memory
@@ -38,9 +38,11 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req, reply) => {
       const result = await brain.store(req.body);
-      io?.emit('memory:stored', { id: result.memory.id, type: result.memory.type });
+      // Broadcast the full record: the dashboard appends this straight into its
+      // store, and a {id,type} stub left content undefined and crashed rendering.
+      realtime?.emit('memory:stored', result.memory);
       if (result.contradictions.hasContradictions) {
-        io?.emit('memory:contradiction', {
+        realtime?.emit('memory:contradiction', {
           memoryId: result.memory.id,
           contradictions: result.contradictions.contradictions,
         });

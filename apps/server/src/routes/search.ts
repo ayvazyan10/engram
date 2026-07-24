@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain, io } from '../index.js';
+import { brain, realtime } from '../index.js';
 import type { MemoryType } from '@engram-ai-memory/core';
 
 export const searchRoutes: FastifyPluginAsync = async (app) => {
@@ -162,9 +162,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
 
           // Also emit on WebSocket
           if (chunk.phase !== 'complete') {
-            io?.emit('recall:chunk', chunk);
+            realtime?.emit('recall:chunk', chunk);
           } else {
-            io?.emit('recall:complete', chunk);
+            realtime?.emit('recall:complete', chunk);
           }
         }
       } catch (err: unknown) {

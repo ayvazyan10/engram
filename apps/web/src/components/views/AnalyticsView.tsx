@@ -15,19 +15,52 @@ const TYPE_COLORS: Record<string, string> = {
 };
 
 export default function AnalyticsView() {
-  const { data, loading, days, setData, setLoading, setError } = useAnalyticsStore();
+  const { data, loading, days, error, setData, setLoading, setError } = useAnalyticsStore();
   const t = useTemplateStore((s) => s.activeTemplate);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     api.getAnalytics(days)
       .then(setData)
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => setError(e.message))
+      // Without this, loading stayed true forever after a successful load.
+      .finally(() => setLoading(false));
   }, [days, setData, setLoading, setError]);
 
   if (loading && !data) {
     return (
       <div style={{ ...s.center, color: t.textMuted }}>Loading analytics…</div>
+    );
+  }
+
+  // A failed request used to be indistinguishable from an empty dataset.
+  if (error && !data) {
+    return (
+      <div style={{ ...s.center, flexDirection: 'column', gap: 12, color: '#ef4444' }}>
+        <div>Could not load analytics: {error}</div>
+        <button
+          style={{
+            background: 'transparent',
+            border: '1px solid #ef4444',
+            color: '#ef4444',
+            borderRadius: 6,
+            padding: '6px 14px',
+            cursor: 'pointer',
+            fontSize: 12,
+          }}
+          onClick={() => {
+            setLoading(true);
+            setError(null);
+            api.getAnalytics(days)
+              .then(setData)
+              .catch((e: Error) => setError(e.message))
+              .finally(() => setLoading(false));
+          }}
+        >
+          Retry
+        </button>
+      </div>
     );
   }
 

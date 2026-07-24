@@ -30,6 +30,9 @@ export interface ContradictionPair {
   confidence: number;
 }
 
+/** A laid-out node before it gains runtime state (activation, tween targets). */
+export type NeuronLayoutNode = Omit<NeuronNode, 'activation' | 'tx' | 'ty' | 'tz'>;
+
 interface NeuralState {
   neurons: NeuronNode[];
   connections: NeuronConnection[];
@@ -41,6 +44,12 @@ interface NeuralState {
   setNeurons: (neurons: NeuronNode[]) => void;
   /** Set target positions for smooth transitions (doesn't change current x/y/z) */
   setTargetPositions: (targets: Array<{ id: string; x: number; y: number; z: number }>) => void;
+  /**
+   * Reconcile the node set against a fresh layout: retarget existing nodes
+   * (keeping their current position and activation), append nodes that appeared
+   * since the last render, and drop ones that are gone.
+   */
+  reconcileNeurons: (targets: NeuronLayoutNode[]) => void;
   setConnections: (connections: NeuronConnection[]) => void;
   setContradictionPairs: (pairs: ContradictionPair[]) => void;
   selectNeuron: (id: string | null) => void;
@@ -68,6 +77,37 @@ export const useNeuralStore = create<NeuralState>((set) => ({
           const t = targetMap.get(n.id);
           return t ? { ...n, tx: t.x, ty: t.y, tz: t.z } : n;
         }),
+      };
+    }),
+
+  reconcileNeurons: (targets) =>
+    set((state) => {
+      const existing = new Map(state.neurons.map((n) => [n.id, n]));
+      const neurons: NeuronNode[] = targets.map((t) => {
+        const prev = existing.get(t.id);
+        if (!prev) {
+          // New node — seed it at its target so it doesn't fly in from origin.
+          return { ...t, activation: 0, tx: t.x, ty: t.y, tz: t.z };
+        }
+        return {
+          ...prev,
+          ...t,
+          // Keep where it currently is; only the target moves.
+          x: prev.x,
+          y: prev.y,
+          z: prev.z,
+          activation: prev.activation,
+          tx: t.x,
+          ty: t.y,
+          tz: t.z,
+        };
+      });
+
+      const ids = new Set(targets.map((t) => t.id));
+      return {
+        neurons,
+        selectedNeuronId:
+          state.selectedNeuronId && ids.has(state.selectedNeuronId) ? state.selectedNeuronId : null,
       };
     }),
 

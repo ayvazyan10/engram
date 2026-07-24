@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { NeuralBrain } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
+import type { Namespace } from 'socket.io';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -87,6 +88,12 @@ export const brain = new NeuralBrain({
 
 // Shared Socket.io instance
 export let io: SocketIOServer;
+
+/**
+ * The '/neural' namespace the dashboard connects to. All route broadcasts must
+ * go through this — emitting on the default namespace silently reaches nobody.
+ */
+export let realtime: Namespace | undefined;
 
 async function start() {
   // Initialize brain
@@ -203,7 +210,11 @@ async function start() {
     },
   });
 
-  const neuralNs = io.of('/neural');
+  // Routes must emit on the SAME namespace the dashboard connects to.
+  // Namespaces are isolated, so the previous top-level io.emit() calls were
+  // broadcast on '/' and never reached the client on '/neural'.
+  realtime = io.of('/neural');
+  const neuralNs = realtime;
   neuralNs.on('connection', (socket) => {
     console.info(`WebSocket connected: ${socket.id}`);
     socket.on('disconnect', () => {

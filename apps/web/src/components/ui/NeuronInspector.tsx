@@ -19,7 +19,7 @@ type GraphConn = { id: string; targetId: string; relationship: string; strength:
 
 export default function NeuronInspector() {
   const { selectedNeuronId, selectNeuron, contradictionPairs, removeNeuron, setContradictionPairs } = useNeuralStore();
-  const { records, removeRecord } = useMemoryStore();
+  const { records, removeRecord, updateRecordTags } = useMemoryStore();
   const [conns, setConns] = useState<GraphConn[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [localTags, setLocalTags] = useState<string[]>([]);
@@ -65,21 +65,25 @@ export default function NeuronInspector() {
     try {
       const res = await api.addTag(selectedNeuronId, tagInput.trim());
       setLocalTags(res.tags);
+      // Also write through to the store: the sync effect re-derives localTags
+      // from the record, so without this the edit reverted on reselect.
+      updateRecordTags(selectedNeuronId, res.tags);
       setTagInput('');
     } catch (err) {
       console.error('Add tag failed:', err);
     }
-  }, [selectedNeuronId, tagInput]);
+  }, [selectedNeuronId, tagInput, updateRecordTags]);
 
   const handleRemoveTag = useCallback(async (tag: string) => {
     if (!selectedNeuronId) return;
     try {
       const res = await api.removeTag(selectedNeuronId, tag);
       setLocalTags(res.tags);
+      updateRecordTags(selectedNeuronId, res.tags);
     } catch (err) {
       console.error('Remove tag failed:', err);
     }
-  }, [selectedNeuronId]);
+  }, [selectedNeuronId, updateRecordTags]);
 
   const handleResolve = useCallback(async (sourceId: string, targetId: string, strategy: string) => {
     setResolving(true);
