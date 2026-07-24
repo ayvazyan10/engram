@@ -21,6 +21,11 @@ import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
 import { WebhookManager } from '../WebhookManager.js';
 
+// These tests exercise CRUD, event filtering and delivery mechanics using
+// placeholder/loopback URLs. The SSRF guard (covered by urlGuard.test.ts) would
+// otherwise reject them, so opt into private targets explicitly.
+process.env['ENGRAM_WEBHOOK_ALLOW_PRIVATE'] = 'true';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
   path.join(__dirname, '../../db/migrations/0000_cynical_marauders.sql'),

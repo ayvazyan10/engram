@@ -13,11 +13,12 @@
  * the webhook is auto-disabled.
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { createHmac } from 'crypto';
 import { getDb, schema } from '../db/index.js';
 import type { Webhook } from '../db/schema.js';
+import { assertSafeWebhookUrl } from './urlGuard.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,10 @@ export class WebhookManager {
     description?: string;
   }): Promise<WebhookSubscription> {
     const db = getDb();
+    // Reject SSRF targets (loopback, link-local metadata, RFC1918) before the
+    // subscription is ever persisted.
+    await assertSafeWebhookUrl(opts.url);
+
     const id = uuidv4();
     const now = new Date().toISOString();
 
@@ -145,8 +150,12 @@ export class WebhookManager {
    * Non-blocking — fires in background, does not throw.
    */
   fire(event: WebhookEvent, data: Record<string, unknown>): void {
-    // Fire-and-forget — errors are caught and logged
-    void this.fireAsync(event, data);
+    // Fire-and-forget, but the rejection MUST be handled here: fireAsync used to
+    // be launched bare, so a DB error during background dispatch became an
+    // unhandled rejection and terminated the process.
+    this.fireAsync(event, data).catch((err: unknown) => {
+      console.error('[engram] webhook dispatch failed:', err);
+    });
   }
 
   /**
@@ -169,11 +178,24 @@ export class WebhookManager {
     const results: WebhookDeliveryResult[] = [];
 
     for (const wh of activeWebhooks) {
-      const events: WebhookEvent[] = JSON.parse(wh.events);
-      if (!events.includes(event)) continue;
+      // One corrupt row or one failing delivery must not abort dispatch to the
+      // remaining webhooks.
+      try {
+        const events: WebhookEvent[] = JSON.parse(wh.events);
+        if (!Array.isArray(events) || !events.includes(event)) continue;
 
-      const result = await this.deliver(wh, payload);
-      results.push(result);
+        const result = await this.deliver(wh, payload);
+        results.push(result);
+      } catch (err: unknown) {
+        console.error(`[engram] webhook ${wh.id} dispatch failed:`, err);
+        results.push({
+          webhookId: wh.id,
+          url: wh.url,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          attempts: 0,
+        });
+      }
     }
 
     return results;
@@ -218,12 +240,25 @@ export class WebhookManager {
     let lastError: string | undefined;
     let statusCode: number | undefined;
 
+    // Re-validate at delivery time, not just at subscribe time: DNS can be
+    // repointed at a private address after the subscription was created.
+    try {
+      await assertSafeWebhookUrl(wh.url);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.recordFailure(wh.id);
+      return { webhookId: wh.id, url: wh.url, success: false, error: message, attempts: 0 };
+    }
+
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const res = await fetch(wh.url, {
           method: 'POST',
           headers,
           body,
+          // Never follow redirects — a 302 to 169.254.169.254 would bypass the
+          // pre-flight address check.
+          redirect: 'manual',
           signal: AbortSignal.timeout(10000), // 10s timeout
         });
 
@@ -242,6 +277,11 @@ export class WebhookManager {
         }
 
         lastError = `HTTP ${res.status}: ${res.statusText}`;
+
+        // 4xx (other than 408/429) are permanent — retrying just hammers the
+        // endpoint and burns the retry budget.
+        const retryable = res.status >= 500 || res.status === 408 || res.status === 429;
+        if (!retryable) break;
       } catch (err: unknown) {
         lastError = err instanceof Error ? err.message : String(err);
       }
@@ -278,23 +318,17 @@ export class WebhookManager {
 
   private async recordFailure(id: string): Promise<void> {
     const db = getDb();
-    const [wh] = await db.select().from(schema.webhooks).where(eq(schema.webhooks.id, id)).limit(1);
-    if (!wh) return;
 
-    const newFailCount = (wh.failCount ?? 0) + 1;
-    const updates: Record<string, unknown> = {
-      failCount: newFailCount,
-      lastTriggeredAt: new Date().toISOString(),
-    };
-
-    // Auto-disable after too many failures
-    if (newFailCount >= MAX_FAIL_COUNT) {
-      updates.active = false;
-    }
-
+    // Increment and auto-disable in a single statement. The previous
+    // read-compute-write lost increments under concurrent deliveries, so a dead
+    // endpoint kept being hammered well past MAX_FAIL_COUNT.
     await db
       .update(schema.webhooks)
-      .set(updates)
+      .set({
+        failCount: sql`${schema.webhooks.failCount} + 1`,
+        lastTriggeredAt: new Date().toISOString(),
+        active: sql`CASE WHEN ${schema.webhooks.failCount} + 1 >= ${MAX_FAIL_COUNT} THEN 0 ELSE ${schema.webhooks.active} END`,
+      })
       .where(eq(schema.webhooks.id, id));
   }
 }

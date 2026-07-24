@@ -7,6 +7,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
+import { timingSafeEqual } from 'crypto';
 // Read the real release version instead of hardcoding it. This package has no
 // "type":"module", so tsc emits CommonJS here and __dirname is available;
 // ../package.json resolves from both src/ during dev and dist/ in the image.
@@ -29,6 +30,47 @@ import { analyticsRoutes } from './routes/analytics.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '4901', 10);
 const HOST = process.env['HOST'] ?? '127.0.0.1';
+
+/**
+ * Browser origins allowed to call the API.
+ *
+ * Reflecting the caller's Origin (the previous `origin: true`) defeats the
+ * same-origin policy that is the only thing protecting an unauthenticated
+ * loopback service — any page the user visited could read and delete every
+ * memory. Override with a comma-separated ENGRAM_ALLOWED_ORIGINS.
+ */
+const ALLOWED_ORIGINS = (process.env['ENGRAM_ALLOWED_ORIGINS'] ?? '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const DEFAULT_ORIGINS = [
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+  'http://localhost:4902', // dashboard container
+  'http://127.0.0.1:4902',
+  'http://localhost:5173', // vite dev server
+  'http://127.0.0.1:5173',
+];
+
+const originAllowlist = ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_ORIGINS;
+
+/** Optional shared secret. When unset the API stays open (local-first default). */
+const API_KEY = process.env['ENGRAM_API_KEY'];
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  // Non-browser clients (CLI, MCP, curl) send no Origin header.
+  if (!origin) return true;
+  return originAllowlist.includes(origin);
+}
+
+/** Constant-time comparison so the key cannot be recovered by timing. */
+function secretsMatch(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 const DECAY_INTERVAL = parseInt(process.env['ENGRAM_DECAY_INTERVAL'] ?? '', 10);
 const DECAY_THRESHOLD = parseFloat(process.env['ENGRAM_DECAY_THRESHOLD'] ?? '');
 
@@ -54,11 +96,30 @@ async function start() {
 
   const app = Fastify({ logger: { level: 'warn' } });
 
-  // CORS
+  // CORS — explicit allowlist, no credentials (the API uses no cookies).
   await app.register(cors, {
-    origin: true,
-    credentials: true,
+    origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
+    credentials: false,
   });
+
+  // Optional API-key auth. Enabled only when ENGRAM_API_KEY is set, so the
+  // local-first default is unchanged; health stays open for container probes.
+  if (API_KEY) {
+    app.addHook('onRequest', async (req, reply) => {
+      if (req.url === '/api/health' || req.url.startsWith('/docs')) return;
+
+      const header = req.headers['authorization'];
+      const bearer = typeof header === 'string' && header.startsWith('Bearer ')
+        ? header.slice(7)
+        : undefined;
+      const provided = (req.headers['x-api-key'] as string | undefined) ?? bearer;
+
+      if (!provided || !secretsMatch(provided, API_KEY)) {
+        reply.code(401).send({ error: 'Unauthorized' });
+      }
+    });
+    console.info('API key authentication: enabled');
+  }
 
   // Swagger
   await app.register(swagger, {
@@ -134,7 +195,12 @@ async function start() {
 
   // Attach Socket.io to Fastify's underlying HTTP server
   io = new SocketIOServer(app.server, {
-    cors: { origin: '*' },
+    // Same allowlist as the REST API — '*' let any page open a socket and read
+    // every broadcast memory event.
+    cors: {
+      origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
+      credentials: false,
+    },
   });
 
   const neuralNs = io.of('/neural');
@@ -168,11 +234,35 @@ async function start() {
   }
 }
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  brain.shutdown();
-  process.exit(0);
+// Process-level safety net. Many background paths (webhook dispatch, plugin
+// hooks, SSE streams, decay sweeps) are intentionally fire-and-forget; without
+// these handlers a single stray rejection terminated the whole memory backend.
+// We log and keep serving rather than exiting — losing the service is worse
+// than the failed background task.
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[engram] unhandled promise rejection:', reason);
 });
+
+process.on('uncaughtException', (err: unknown) => {
+  console.error('[engram] uncaught exception:', err);
+});
+
+// Graceful shutdown
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.info(`Received ${signal}, shutting down...`);
+  try {
+    await brain.shutdown();
+  } catch (err: unknown) {
+    console.error('[engram] shutdown failed:', err);
+  }
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 start().catch((err: unknown) => {
   console.error('Failed to start server:', err);

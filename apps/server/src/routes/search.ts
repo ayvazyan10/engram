@@ -111,7 +111,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         required: ['query'],
         properties: {
           query: { type: 'string' },
-          maxTokens: { type: 'integer', default: 2000 },
+          maxTokens: { type: 'integer', minimum: 1, maximum: 32000, default: 2000 },
           types: { type: 'string', description: 'Comma-separated memory types' },
           sources: { type: 'string', description: 'Comma-separated sources' },
           crossNamespace: { type: 'boolean', default: false },
@@ -144,19 +144,38 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         crossNamespace,
       });
 
-      for await (const chunk of stream) {
-        const data = JSON.stringify(chunk);
-        reply.raw.write(`event: ${chunk.phase}\ndata: ${data}\n\n`);
+      // Headers are already sent, so Fastify can no longer produce an error
+      // response — surface failures as an SSE error frame and always end the
+      // stream. Stop generating as soon as the client goes away, otherwise the
+      // generator keeps querying and writing into a dead socket.
+      let clientGone = false;
+      req.raw.on('close', () => {
+        clientGone = true;
+      });
 
-        // Also emit on WebSocket
-        if (chunk.phase !== 'complete') {
-          io?.emit('recall:chunk', chunk);
-        } else {
-          io?.emit('recall:complete', chunk);
+      try {
+        for await (const chunk of stream) {
+          if (clientGone) break;
+
+          const data = JSON.stringify(chunk);
+          reply.raw.write(`event: ${chunk.phase}\ndata: ${data}\n\n`);
+
+          // Also emit on WebSocket
+          if (chunk.phase !== 'complete') {
+            io?.emit('recall:chunk', chunk);
+          } else {
+            io?.emit('recall:complete', chunk);
+          }
         }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!clientGone) {
+          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+        }
+        req.log.error({ err }, 'recall stream failed');
+      } finally {
+        if (!reply.raw.writableEnded) reply.raw.end();
       }
-
-      reply.raw.end();
     },
   });
 };

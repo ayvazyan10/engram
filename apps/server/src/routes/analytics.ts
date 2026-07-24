@@ -9,6 +9,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     schema: {
       tags: ['analytics'],
       summary: 'Aggregated memory analytics: growth, activity heatmap, top concepts',
+      // Without bounds, ?days=abc produced NaN and the Date math threw a 500.
+      querystring: {
+        type: 'object',
+        properties: {
+          days: { type: 'integer', minimum: 1, maximum: 365, default: 30 },
+        },
+      },
     },
     handler: async (req) => {
       const db = getDb();
@@ -181,6 +188,16 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     schema: {
       tags: ['memory'],
       summary: 'Add a tag to multiple memories at once',
+      body: {
+        type: 'object',
+        required: ['ids', 'tag'],
+        properties: {
+          // Bounded: this loops one query per id, so an unbounded array is a
+          // trivial resource-exhaustion vector.
+          ids: { type: 'array', maxItems: 1000, items: { type: 'string' } },
+          tag: { type: 'string', minLength: 1 },
+        },
+      },
     },
     handler: async (req) => {
       const db = getDb();

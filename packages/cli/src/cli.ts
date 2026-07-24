@@ -13,7 +13,7 @@ import { Command } from 'commander';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { execSync, spawn } from 'child_process';
+import { execSync, spawn, spawnSync } from 'child_process';
 import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer } from './serverControl.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
@@ -146,7 +146,16 @@ program
         }
       } else {
         try {
-          execSync(`git clone --depth=1 ${REPO} "${config.repoPath}"`, { stdio: 'pipe',  });
+          // spawnSync with an argv array — never build a shell string from
+          // config.repoPath. Double quotes do not neutralise $(), backticks or
+          // embedded quotes, and repoPath is user-controlled via
+          // `configure set repoPath` / ENGRAM_HOME.
+          const clone = spawnSync('git', ['clone', '--depth=1', REPO, config.repoPath], {
+            stdio: 'pipe',
+          });
+          if (clone.status !== 0) {
+            throw new Error(clone.stderr?.toString().trim() || `git exited with ${clone.status}`);
+          }
           ok('Repository cloned');
         } catch (err) {
           fail(`Clone failed: ${err instanceof Error ? err.message : err}`);

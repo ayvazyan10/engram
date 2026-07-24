@@ -73,6 +73,8 @@ export type {
 
 // Webhooks
 export { WebhookManager, ALL_EVENTS } from './webhooks/index.js';
+export { assertSafeWebhookUrl, isPrivateAddress, UnsafeWebhookUrlError } from './webhooks/urlGuard.js';
+export type { HostResolver, UrlGuardOptions } from './webhooks/urlGuard.js';
 export type { WebhookEvent, WebhookPayload, WebhookSubscription, WebhookDeliveryResult } from './webhooks/index.js';
 
 // Reflection

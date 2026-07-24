@@ -63,6 +63,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           properties: {
             memories: {
               type: 'array',
+              // Bounded so a single request cannot pin the event loop and fan
+              // out an unbounded number of background webhook deliveries.
+              maxItems: 1000,
               items: {
                 type: 'object',
                 required: ['content'],

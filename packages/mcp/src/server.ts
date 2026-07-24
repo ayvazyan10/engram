@@ -887,17 +887,56 @@ let initPromise: Promise<void> | null = null;
 
 async function ensureInitialized(): Promise<void> {
   if (!initPromise) {
-    initPromise = brain.initialize();
+    // Clear the cached promise on failure, otherwise a single transient error
+    // (a momentary SQLITE_BUSY from a concurrent writer) left this long-lived
+    // stdio server permanently bricked — every later tool call re-awaited the
+    // same rejected promise.
+    initPromise = brain.initialize().catch((err: unknown) => {
+      initPromise = null;
+      throw err;
+    });
   }
   await initPromise;
 }
 
 // ─── Start server ─────────────────────────────────────────────────────────────
 
+// Safety net — a stray rejection from a background path must not kill the
+// long-lived stdio server.
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[engram-mcp] unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err: unknown) => {
+  console.error('[engram-mcp] uncaught exception:', err);
+});
+
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`[engram-mcp] received ${signal}, shutting down...`);
+  try {
+    await server.close();
+  } catch { /* transport may already be gone */ }
+  try {
+    await brain.shutdown();
+  } catch (err: unknown) {
+    console.error('[engram-mcp] shutdown failed:', err);
+  }
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Engram MCP server running on stdio');
+
+  // The client closing stdin is our shutdown signal over stdio transport.
+  process.stdin.on('close', () => void shutdown('stdin close'));
 }
 
 main().catch((err: unknown) => {
