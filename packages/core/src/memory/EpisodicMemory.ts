@@ -12,6 +12,8 @@ export interface StoreEpisodicInput {
   metadata?: Record<string, unknown>;
   importance?: number;
   eventAt?: Date;
+  /** Namespace to scope this memory to. Defaults to the instance namespace. */
+  namespace?: string;
 }
 
 /**
@@ -20,6 +22,13 @@ export interface StoreEpisodicInput {
  * Analogous to the hippocampus: records what happened, when, and in what context.
  */
 export class EpisodicMemory {
+  /**
+   * @param namespace Scopes writes and reads. NeuralBrain passes its own
+   *   namespace so `brain.episodic` cannot leak across tenants — these getters
+   *   previously spanned every namespace.
+   */
+  constructor(private readonly namespace?: string) {}
+
   async store(input: StoreEpisodicInput): Promise<Memory> {
     const db = getDb();
     const now = new Date().toISOString();
@@ -37,6 +46,7 @@ export class EpisodicMemory {
       source: input.source ?? null,
       sessionId: input.sessionId ?? null,
       eventAt: (input.eventAt ?? new Date()).toISOString(),
+      namespace: input.namespace ?? this.namespace ?? null,
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
@@ -59,13 +69,11 @@ export class EpisodicMemory {
     return db
       .select()
       .from(schema.memories)
-      .where(
-        and(
-          eq(schema.memories.type, 'episodic'),
-          eq(schema.memories.sessionId, sessionId),
-          isNull(schema.memories.archivedAt)
-        )
-      )
+      .where(and(...this.scoped([
+        eq(schema.memories.type, 'episodic'),
+        eq(schema.memories.sessionId, sessionId),
+        isNull(schema.memories.archivedAt),
+      ])))
       .orderBy(desc(schema.memories.eventAt));
   }
 
@@ -74,13 +82,11 @@ export class EpisodicMemory {
     return db
       .select()
       .from(schema.memories)
-      .where(
-        and(
-          eq(schema.memories.type, 'episodic'),
-          eq(schema.memories.source, source),
-          isNull(schema.memories.archivedAt)
-        )
-      )
+      .where(and(...this.scoped([
+        eq(schema.memories.type, 'episodic'),
+        eq(schema.memories.source, source),
+        isNull(schema.memories.archivedAt),
+      ])))
       .orderBy(desc(schema.memories.createdAt))
       .limit(limit);
   }
@@ -88,10 +94,10 @@ export class EpisodicMemory {
   async getRecent(limit: number = 20, since?: Date): Promise<Memory[]> {
     const db = getDb();
 
-    const conditions = [
+    const conditions = this.scoped([
       eq(schema.memories.type, 'episodic'),
       isNull(schema.memories.archivedAt),
-    ];
+    ]);
 
     if (since) {
       conditions.push(gt(schema.memories.createdAt, since.toISOString()));
@@ -103,5 +109,12 @@ export class EpisodicMemory {
       .where(and(...conditions))
       .orderBy(desc(schema.memories.createdAt))
       .limit(limit);
+  }
+
+  /** Append the namespace predicate when this instance is scoped. */
+  private scoped<T>(conditions: T[]): T[] {
+    return this.namespace
+      ? [...conditions, eq(schema.memories.namespace, this.namespace) as T]
+      : conditions;
   }
 }

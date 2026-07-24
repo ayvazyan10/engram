@@ -101,16 +101,29 @@ function injectContext(body: Record<string, unknown>, context: string): Record<s
   if (!context) return body;
 
   if (Array.isArray(body['messages'])) {
-    const messages = body['messages'] as Array<{ role: string; content: string }>;
+    const messages = body['messages'] as Array<{ role: string; content: MessageContent }>;
     const sysIdx = messages.findIndex((m) => m.role === 'system');
 
     if (sysIdx >= 0) {
-      return {
-        ...body,
-        messages: messages.map((m, i) =>
-          i === sysIdx ? { ...m, content: `${m.content}\n\n${context}` } : m
-        ),
-      };
+      const system = messages[sysIdx]!;
+      // Only string content can be concatenated. Multimodal content is an array
+      // of parts; templating it produced the literal "[object Object]".
+      if (typeof system.content === 'string') {
+        return {
+          ...body,
+          messages: messages.map((m, i) =>
+            i === sysIdx ? { ...m, content: `${m.content as string}\n\n${context}` } : m
+          ),
+        };
+      }
+      if (Array.isArray(system.content)) {
+        return {
+          ...body,
+          messages: messages.map((m, i) =>
+            i === sysIdx ? { ...m, content: [...(m.content as Array<{ type: string; text?: string }>), { type: 'text', text: context }] } : m
+          ),
+        };
+      }
     }
     return {
       ...body,

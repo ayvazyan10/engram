@@ -14,25 +14,37 @@ Peer dependencies: `three`, `react`, `react-dom`, `@react-three/fiber`
 
 | Export | Description |
 |---|---|
-| `NeuralGraph` | Force-directed 3D layout algorithm (Fibonacci sphere, spiral arms, layered, cloud clusters) |
-| `ColorMapper` | Maps memory types to theme colors |
-| `AnimationEngine` | Activity pulse and activation event animation system |
+| `NeuralGraph` | Force-directed 3D layout — incremental simulation (`addNode` / `addEdge` / `tick`) |
+| `ColorMapper` | Maps an activation value (0–1) to a colour |
+| `AnimationEngine` | Activation decay loop and activity-event emission |
 
 ## Usage
 
 ```typescript
-import { NeuralGraph, ColorMapper } from '@engram-ai-memory/vis';
+import { NeuralGraph, ColorMapper, AnimationEngine } from '@engram-ai-memory/vis';
 
-// Create layout positions for memories
+// Build the graph, then run the force simulation.
 const graph = new NeuralGraph();
-const positions = graph.layout(memories, {
-  style: 'fibonacci',  // fibonacci | spiral | layered | clusters
-  radius: 40,
-  spread: 1.2,
-});
+for (const memory of memories) {
+  graph.addNode(memory.id, memory.type, memory.content.slice(0, 40));
+}
+graph.addEdge(sourceId, targetId, 0.8);
 
-// Map memory type to color
-const color = ColorMapper.getColor('semantic', 'cosmos');
+const positions = graph.tick(50); // LayoutNode[] — run N simulation steps
+// ...or read them back later:
+graph.getPositions();
+
+// Colour is derived from activation, not from the memory type.
+const hex = ColorMapper.toHex(0.7);
+const intensity = ColorMapper.emissiveIntensity(0.7);
+
+// Activation decays over time and emits events.
+const engine = new AnimationEngine(0.05); // decayRate must be > 0
+const unsubscribe = engine.onActivation((events) => {
+  for (const e of events) graph.setActivation(e.neuronId, e.activation);
+});
+engine.trigger(memoryId, 1.0);
+// engine.stop() cancels the loop and any pending triggerWave timers.
 ```
 
 ## View Modes

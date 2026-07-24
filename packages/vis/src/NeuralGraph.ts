@@ -93,10 +93,23 @@ export class NeuralGraph {
         const a = nodeArray[i]!;
         const b = nodeArray[j]!;
 
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dz = b.z - a.z;
-        const dist = Math.max(MIN_DIST, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dz = b.z - a.z;
+        const raw = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        // Coincident nodes yield a zero direction vector, so (dx/dist) is 0 and
+        // they never repel apart — they stay stacked forever. Nudge them along a
+        // deterministic axis derived from their index so the layout can separate
+        // them without introducing frame-to-frame randomness.
+        if (raw < 1e-6) {
+          const angle = (i * 2.399963) + j; // golden-angle spread, stable per pair
+          dx = Math.cos(angle) * MIN_DIST;
+          dy = Math.sin(angle) * MIN_DIST;
+          dz = Math.cos(angle * 0.5) * MIN_DIST;
+        }
+
+        const dist = Math.max(MIN_DIST, raw);
         const force = REPULSION / (dist * dist);
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;

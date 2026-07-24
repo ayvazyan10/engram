@@ -119,6 +119,9 @@ export function mergePolicy(partial: Partial<DecayPolicyConfig>): DecayPolicyCon
       ...DEFAULT_CONSOLIDATION,
       ...partial.consolidation,
     },
-    protectionRules: partial.protectionRules ?? DEFAULT_DECAY_POLICY.protectionRules,
+    // Copy the array: returning the module-level DEFAULT_PROTECTION_RULES by
+    // reference meant every brain shared one mutable array with the exported
+    // default, so a push/splice by any consumer altered the defaults globally.
+    protectionRules: [...(partial.protectionRules ?? DEFAULT_DECAY_POLICY.protectionRules)],
   };
 }

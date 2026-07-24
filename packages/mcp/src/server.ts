@@ -446,7 +446,12 @@ server.tool(
       if (importanceDecayRate !== undefined) updates.importanceDecayRate = importanceDecayRate;
       if (importanceFloor !== undefined) updates.importanceFloor = importanceFloor;
       if (consolidationEnabled !== undefined) {
-        updates.consolidation = { enabled: consolidationEnabled };
+        // Merge — replacing the object wiped minClusterSize / minEpisodicAgeMs /
+        // similarityThreshold back to whatever the caller omitted.
+        updates.consolidation = {
+          ...brain.getDecayPolicy().consolidation,
+          enabled: consolidationEnabled,
+        };
       }
       brain.updateDecayPolicy(updates as any);
     }

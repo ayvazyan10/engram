@@ -65,6 +65,15 @@ function getApiBase(): string {
   return `http://${config.host}:${config.port}`;
 }
 
+/** Delete the pidfile only when it still contains the given pid. */
+function releasePidFileIfOwnedBy(pid: number | undefined): void {
+  if (pid === undefined) return;
+  try {
+    const current = parseInt(fs.readFileSync(PID_PATH, 'utf8').trim(), 10);
+    if (current === pid) fs.unlinkSync(PID_PATH);
+  } catch { /* no pidfile, or already replaced */ }
+}
+
 function isServerRunning(): { running: boolean; pid?: number } {
   if (!fs.existsSync(PID_PATH)) return { running: false };
   const pid = parseInt(fs.readFileSync(PID_PATH, 'utf8').trim(), 10);
@@ -300,7 +309,16 @@ program
       cwd: config.repoPath,
     });
     child.unref();
-    fs.writeFileSync(PID_PATH, String(child.pid));
+    // Exclusive create: two concurrent `engram start` invocations both passed
+    // the non-atomic pre-checks, and the loser's cleanup then unlinked the
+    // winner's pidfile, orphaning a healthy server.
+    try {
+      fs.writeFileSync(PID_PATH, String(child.pid), { flag: 'wx' });
+    } catch {
+      fail('Another `engram start` is already in progress (pidfile exists).');
+      if (child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
+      process.exit(1);
+    }
 
     const result = await awaitServerHealthy(child, config.host, config.port);
 
@@ -311,9 +329,9 @@ program
       console.log(`  Swagger:   ${C}http://${config.host}:${config.port}/docs${X}`);
       console.log(`  Logs:      ${D}${LOG_PATH}${X}`);
     } else {
-      // The process we spawned never served a healthy response — don't leave a
-      // misleading pidfile, and don't orphan a half-started process.
-      try { fs.unlinkSync(PID_PATH); } catch {}
+      // Remove the pidfile only if it still points at OUR child, so we cannot
+      // delete a pidfile another start already replaced.
+      releasePidFileIfOwnedBy(child.pid);
       if (!result.exited && child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
       fail(result.exited
         ? `Server exited during startup${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''} — the port may already be in use. Check logs:`
@@ -449,7 +467,22 @@ configCmd.command('show').description('Show current config').action(() => {
 configCmd.command('set <key> <value>').description('Set a config value').action((key: string, value: string) => {
   const config = loadConfig();
   if (!(key in config)) { fail(`Unknown key: ${key}\n  Valid: ${Object.keys(config).join(', ')}`); process.exit(1); }
-  const parsed = key === 'port' ? parseInt(value, 10) : value === 'null' ? null : value;
+
+  let parsed: string | number | null;
+  if (key === 'port') {
+    // Previously an unparseable port became NaN, which JSON.stringify writes as
+    // null — loadConfig then spread null over the default, so every later
+    // command talked to http://127.0.0.1:null.
+    const port = Number(value);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      fail(`Invalid port: ${value} (expected an integer between 1 and 65535)`);
+      process.exit(1);
+    }
+    parsed = port;
+  } else {
+    parsed = value === 'null' ? null : value;
+  }
+
   (config as unknown as Record<string, unknown>)[key] = parsed;
   saveConfig(config);
   ok(`${key} = ${parsed}`);
@@ -624,7 +657,7 @@ program
         if (result.healthy) {
           ok(`Server restarted (PID ${child.pid})`);
         } else {
-          try { fs.unlinkSync(PID_PATH); } catch {}
+          releasePidFileIfOwnedBy(child.pid);
           if (!result.exited && child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
           warn(result.exited
             ? `Server exited during restart${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''}. Check logs:`
@@ -770,7 +803,7 @@ program
 
 program
   .command('import')
-  .description('Import memories from JSON (stdin)')
+  .description('Import memories from JSON or NDJSON (stdin). Creates NEW records — ids and timestamps are not preserved, so re-running duplicates.')
   .option('--dry-run', 'Preview only')
   .action(async (opts) => {
     const chunks: Buffer[] = [];
@@ -778,21 +811,43 @@ program
     const input = Buffer.concat(chunks).toString('utf8').trim();
     if (!input) { console.error('No input. Pipe a JSON file: engram import < backup.json'); process.exit(1); }
 
+    // Detect the format by trying to parse the whole document first. The old
+    // heuristic (starts with '{' AND contains '\n{') misread a single-line
+    // NDJSON file as JSON and imported nothing, and a pretty-printed JSON export
+    // as NDJSON.
     let memories: Array<Record<string, unknown>> = [];
-    if (input.startsWith('{') && input.includes('\n{')) {
+    let parseFailures = 0;
+
+    try {
+      const doc = JSON.parse(input) as { memories?: Array<Record<string, unknown>> };
+      memories = doc.memories ?? [];
+    } catch {
       for (const line of input.split('\n')) {
-        if (!line.trim()) continue;
-        const e = JSON.parse(line);
-        if (e.type === 'memory') memories.push(e.data);
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const entry = JSON.parse(trimmed) as { type?: string; data?: Record<string, unknown> };
+          if (entry.type === 'memory' && entry.data) memories.push(entry.data);
+        } catch {
+          // One malformed line must not abort the whole import.
+          parseFailures++;
+        }
       }
-    } else {
-      memories = JSON.parse(input).memories ?? [];
     }
 
+    if (parseFailures > 0) warn(`${parseFailures} malformed line(s) skipped`);
+
     console.log(`Found ${memories.length} memories to import`);
+    if (memories.length === 0) {
+      console.error('Nothing to import — input is neither a JSON export nor NDJSON.');
+      process.exit(1);
+    }
     if (opts.dryRun) { console.log('Dry run — no changes.'); return; }
 
-    let imported = 0, skipped = 0;
+    let imported = 0;
+    let skipped = 0;
+    let firstError: string | undefined;
+
     for (const m of memories) {
       try {
         await api('POST', '/api/memory', {
@@ -802,9 +857,28 @@ program
           namespace: m.namespace,
         });
         imported++;
-      } catch { skipped++; }
+      } catch (err) {
+        skipped++;
+        const message = err instanceof Error ? err.message : String(err);
+        // Capture the reason. Swallowing every error made a stopped server look
+        // like 500 bad records ("Imported: 0  Skipped: 500") with no clue why.
+        if (!firstError) {
+          firstError = message;
+          // A connection error on the very first record means the server is not
+          // reachable at all — fail fast instead of "skipping" the whole file.
+          if (imported === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
+            fail(`Cannot reach the Engram API at ${getApiBase()} — is the server running? (engram start)`);
+            process.exit(1);
+          }
+        }
+      }
     }
+
     console.log(`Imported: ${imported}  Skipped: ${skipped}`);
+    if (firstError) {
+      fail(`First failure: ${firstError}`);
+      process.exit(1);
+    }
   });
 
 // ─── Reflection ─────────────────────────────────────────────────────────────

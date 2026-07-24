@@ -45,14 +45,38 @@ export interface SearchResult {
 
 export class VectorSearch {
   private entries: VectorEntry[] = [];
-  private readonly dim: number;
+  private dim: number;
 
   constructor(dim: number = 384) {
     this.dim = dim;
   }
 
+  /** The dimension this index currently holds vectors for. */
+  get dimension(): number {
+    return this.dim;
+  }
+
+  /**
+   * Change the index dimension, dropping every existing vector.
+   *
+   * Required when the active embedding model changes: mixing dimensions made
+   * cosine similarity iterate only the first N components and silently score
+   * garbage, because upsert accepted any length.
+   */
+  setDimension(dim: number): void {
+    if (dim === this.dim) return;
+    this.dim = dim;
+    this.entries = [];
+  }
+
   /** Add or update a vector in the index. */
   upsert(entry: VectorEntry): void {
+    if (entry.vector.length !== this.dim) {
+      throw new Error(
+        `Vector dimension mismatch for "${entry.id}": index holds ${this.dim}-dim vectors, got ${entry.vector.length}. ` +
+          `Rebuild the index after switching embedding models.`
+      );
+    }
     const existing = this.entries.findIndex((e) => e.id === entry.id);
     if (existing >= 0) {
       this.entries[existing] = entry;

@@ -205,7 +205,9 @@ export async function withMemory(
   try {
     const client = new EngramClient({ url: options.url, source: options.source });
     const result = await client.recall(query, options.maxTokens);
-    return result.context;
+    // recall() is typed as returning a context, but the response is unvalidated
+    // JSON — return the documented empty string rather than leaking undefined.
+    return typeof result?.context === 'string' ? result.context : '';
   } catch {
     return ''; // Engram unavailable — continue without memory
   }

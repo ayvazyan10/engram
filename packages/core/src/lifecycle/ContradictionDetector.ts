@@ -10,7 +10,7 @@
  * then pattern-based content analysis to detect actual contradictions. No LLM needed.
  */
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, MemoryType } from '../db/schema.js';
 import { embed, unpackFP16 } from '../embedding/Embedder.js';
@@ -174,13 +174,19 @@ export class ContradictionDetector {
     const db = getDb();
     const contradictions: Contradiction[] = [];
 
-    for (const candidate of others) {
-      const [existing] = await db
-        .select()
-        .from(schema.memories)
-        .where(and(eq(schema.memories.id, candidate.id), isNull(schema.memories.archivedAt)))
-        .limit(1);
+    // Load every candidate in one query. This runs on the store() hot path, so
+    // one round-trip per candidate directly slowed down every write.
+    const candidateIds = others.map((c) => c.id);
+    const existingRows = candidateIds.length
+      ? await db
+          .select()
+          .from(schema.memories)
+          .where(and(inArray(schema.memories.id, candidateIds), isNull(schema.memories.archivedAt)))
+      : [];
+    const existingById = new Map(existingRows.map((r) => [r.id, r]));
 
+    for (const candidate of others) {
+      const existing = existingById.get(candidate.id);
       if (!existing) continue;
 
       // Step 3: Analyze content for contradiction signals

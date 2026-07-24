@@ -18,7 +18,7 @@ import { closeDb, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   EMBEDDING_DIMENSION, embed, embedBatch, packFP16, unpackFP16,
-  getEmbeddingModelId, getModelDimension, switchEmbeddingModel,
+  getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
 import { EpisodicMemory } from './memory/EpisodicMemory.js';
@@ -105,6 +105,12 @@ export interface StoreResult {
   memory: Memory;
   /** Contradiction check results (empty if detection is disabled) */
   contradictions: ContradictionCheckResult;
+  /**
+   * True when contradiction auto-resolution archived this memory immediately
+   * (keep_oldest / keep_important). The returned record is already archived and
+   * will never be recalled — no 'stored' event is fired for it.
+   */
+  discarded?: boolean;
 }
 
 export interface EmbeddingStatus {
@@ -205,7 +211,7 @@ export class NeuralBrain {
   private indexStatus: IndexStatus = {
     loadedFrom: 'not_loaded',
     entryCount: 0,
-    dimension: EMBEDDING_DIMENSION,
+    dimension: getEmbeddingDimension(),
     indexPath: null,
     indexFileExists: false,
     incrementalCount: 0,
@@ -214,7 +220,9 @@ export class NeuralBrain {
 
   constructor(config: BrainConfig = {}) {
     this.config = config;
-    this.vectorSearch = new VectorSearch(EMBEDDING_DIMENSION);
+    // Use the ACTIVE model's dimension, not the frozen module constant, so a
+    // configured model switch cannot leave the index sized for the default.
+    this.vectorSearch = new VectorSearch(getEmbeddingDimension());
     this.graph = new KnowledgeGraph();
     this.assembler = new ContextAssembler(this.vectorSearch, this.graph, config.namespace);
     this.decayEngine = new DecayEngine(mergePolicy(config.decayPolicy ?? {}));
@@ -222,9 +230,12 @@ export class NeuralBrain {
     this.webhookManager = new WebhookManager();
     this.pluginRegistry = new PluginRegistry();
     this.reflectionEngine = new ReflectionEngine(config.reflection);
-    this.episodic = new EpisodicMemory();
-    this.semantic = new SemanticMemory();
-    this.procedural = new ProceduralMemory();
+    // Pass the namespace down: these classes are public (brain.episodic etc.)
+    // and previously wrote to the shared null-namespace pool while their getters
+    // read across every tenant.
+    this.episodic = new EpisodicMemory(config.namespace);
+    this.semantic = new SemanticMemory(config.namespace);
+    this.procedural = new ProceduralMemory(config.namespace);
   }
 
   /**
@@ -496,6 +507,15 @@ export class NeuralBrain {
       .from(schema.memories)
       .where(eq(schema.memories.id, record.id!))
       .limit(1);
+
+    // Auto-resolution can discard the memory we just created: keep_oldest /
+    // keep_important forget() the newest row, which is always this one. Because
+    // forget is a soft-delete the row still reads back, so store() used to
+    // report success, fire a 'stored' webhook alongside 'forgotten', and hand
+    // back an id that can never be recalled.
+    if (inserted!.archivedAt) {
+      return { memory: inserted!, contradictions: contradictionResult, discarded: true };
+    }
 
     // ── Fire webhooks ──
     this.webhookManager.fire('stored', {
@@ -1195,6 +1215,13 @@ export class NeuralBrain {
     const db = getDb();
     const currentModel = getEmbeddingModelId();
     const currentDim = getModelDimension();
+
+    // Re-embedding under a different model produces different-length vectors.
+    // Resize (and clear) the index first — upsert now rejects mismatches rather
+    // than silently corrupting similarity.
+    if (currentDim !== this.vectorSearch.dimension) {
+      this.vectorSearch.setDimension(currentDim);
+    }
 
     // Select memories to re-embed
     const all = await db

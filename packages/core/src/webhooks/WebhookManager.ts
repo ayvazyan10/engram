@@ -67,12 +67,23 @@ const MAX_FAIL_COUNT = 10;
 /** Max retry attempts per delivery. */
 const MAX_RETRIES = 3;
 
+/** Upper bound on concurrent background dispatches (see fire()). */
+const MAX_CONCURRENT_DISPATCH = parseInt(
+  process.env['ENGRAM_WEBHOOK_MAX_CONCURRENCY'] ?? '32',
+  10
+);
+
 /** Base delay for exponential backoff (ms). */
 const RETRY_BASE_MS = 500;
 
 // ─── Manager ─────────────────────────────────────────────────────────────────
 
 export class WebhookManager {
+  /** Background dispatches currently in flight (bounded by MAX_CONCURRENT_DISPATCH). */
+  private inFlight = 0;
+  /** Events dropped because the dispatch queue was saturated. */
+  private dropped = 0;
+
   /**
    * Subscribe a new webhook.
    */
@@ -150,12 +161,39 @@ export class WebhookManager {
    * Non-blocking — fires in background, does not throw.
    */
   fire(event: WebhookEvent, data: Record<string, unknown>): void {
+    // Bounded queue. Each delivery can take ~30s (3 attempts x 10s timeout plus
+    // backoff) and nothing limited how many ran at once — a single batch-store
+    // request could stack hundreds of detached deliveries, each holding a socket
+    // and its payload.
+    if (this.inFlight >= MAX_CONCURRENT_DISPATCH) {
+      this.dropped++;
+      console.error(
+        `[engram] webhook dispatch saturated (${MAX_CONCURRENT_DISPATCH} in flight) — dropped '${event}' (${this.dropped} total dropped)`
+      );
+      return;
+    }
+
+    this.inFlight++;
     // Fire-and-forget, but the rejection MUST be handled here: fireAsync used to
     // be launched bare, so a DB error during background dispatch became an
     // unhandled rejection and terminated the process.
-    this.fireAsync(event, data).catch((err: unknown) => {
-      console.error('[engram] webhook dispatch failed:', err);
-    });
+    this.fireAsync(event, data)
+      .catch((err: unknown) => {
+        console.error('[engram] webhook dispatch failed:', err);
+      })
+      .finally(() => {
+        this.inFlight--;
+      });
+  }
+
+  /** Number of background dispatches currently running. */
+  getInFlightCount(): number {
+    return this.inFlight;
+  }
+
+  /** Number of events dropped because the dispatch queue was saturated. */
+  getDroppedCount(): number {
+    return this.dropped;
   }
 
   /**

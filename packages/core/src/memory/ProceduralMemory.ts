@@ -29,6 +29,8 @@ export interface StoreProceduralInput {
   tags?: string[];
   metadata?: Record<string, unknown>;
   confidence?: number;
+  /** Namespace to scope this memory to. Defaults to the instance namespace. */
+  namespace?: string;
 }
 
 /**
@@ -38,6 +40,12 @@ export interface StoreProceduralInput {
  * before, and applies learned patterns to new situations.
  */
 export class ProceduralMemory {
+  /**
+   * @param namespace Scopes writes and reads. NeuralBrain passes its own
+   *   namespace so `brain.procedural` cannot leak across tenants.
+   */
+  constructor(private readonly namespace?: string) {}
+
   async store(input: StoreProceduralInput): Promise<Memory> {
     const db = getDb();
     const now = new Date().toISOString();
@@ -57,6 +65,7 @@ export class ProceduralMemory {
       embeddingDim: embedding.length,
       importance: 0.6,
       confidence: input.confidence ?? 1.0,
+      namespace: input.namespace ?? this.namespace ?? null,
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
@@ -87,15 +96,16 @@ export class ProceduralMemory {
     if (!query) return [];
 
     const db = getDb();
+    const conditions = [
+      eq(schema.memories.type, 'procedural'),
+      isNull(schema.memories.archivedAt),
+    ];
+    if (this.namespace) conditions.push(eq(schema.memories.namespace, this.namespace));
+
     const candidates = await db
       .select()
       .from(schema.memories)
-      .where(
-        and(
-          eq(schema.memories.type, 'procedural'),
-          isNull(schema.memories.archivedAt)
-        )
-      )
+      .where(and(...conditions))
       .orderBy(desc(schema.memories.importance));
 
     if (candidates.length === 0) return [];

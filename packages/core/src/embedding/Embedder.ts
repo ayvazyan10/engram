@@ -30,19 +30,41 @@ const MODEL_DIMENSIONS: Record<string, number> = {
 
 const EMBEDDING_DIM = MODEL_DIMENSIONS[activeModelId] ?? DEFAULT_EMBEDDING_DIM;
 
+/**
+ * In-flight load, memoized so concurrent callers share one model load.
+ * Without this, N simultaneous first embed() calls each downloaded and
+ * instantiated the model, and a switchEmbeddingModel racing them could bind the
+ * wrong model.
+ */
+let embedderLoading: Promise<typeof embedder> | null = null;
+
 export async function getEmbedder(): Promise<typeof embedder> {
   if (embedder) return embedder;
+  if (embedderLoading) return embedderLoading;
 
-  if (!pipeline) {
-    const transformers = await import('@xenova/transformers');
-    pipeline = transformers.pipeline;
+  const loadingFor = activeModelId;
+
+  embedderLoading = (async () => {
+    if (!pipeline) {
+      const transformers = await import('@xenova/transformers');
+      pipeline = transformers.pipeline;
+    }
+
+    const loaded = await pipeline('feature-extraction', loadingFor, {
+      quantized: true, // use quantized ONNX model (~25MB vs ~90MB)
+    });
+
+    // The active model may have been switched while we were loading — discard
+    // this result rather than binding a stale model.
+    if (loadingFor === activeModelId) embedder = loaded;
+    return loaded;
+  })();
+
+  try {
+    return await embedderLoading;
+  } finally {
+    embedderLoading = null;
   }
-
-  embedder = await pipeline('feature-extraction', activeModelId, {
-    quantized: true, // use quantized ONNX model (~25MB vs ~90MB)
-  });
-
-  return embedder;
 }
 
 /**
@@ -74,7 +96,19 @@ export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
   return results;
 }
 
+/**
+ * Dimension of the DEFAULT model, frozen at module load.
+ *
+ * @deprecated Prefer {@link getEmbeddingDimension} — this constant does not
+ * follow switchEmbeddingModel, so using it after a model switch silently
+ * desyncs the vector index from the vectors actually being produced.
+ */
 export const EMBEDDING_DIMENSION = EMBEDDING_DIM;
+
+/** Dimension of the CURRENTLY ACTIVE embedding model. */
+export function getEmbeddingDimension(): number {
+  return getModelDimension();
+}
 
 /** Get the currently active embedding model ID. */
 export function getEmbeddingModelId(): string {
@@ -94,6 +128,7 @@ export function getModelDimension(modelId?: string): number {
 export function switchEmbeddingModel(modelId: string): number {
   activeModelId = modelId;
   embedder = null; // force reload on next embed()
+  embedderLoading = null; // abandon any in-flight load of the previous model
   return MODEL_DIMENSIONS[modelId] ?? DEFAULT_EMBEDDING_DIM;
 }
 

@@ -48,7 +48,7 @@ export { KnowledgeGraph } from './graph/KnowledgeGraph.js';
 // Embedder
 export {
   embed, embedBatch, packFP16, unpackFP16, EMBEDDING_DIMENSION,
-  getEmbeddingModelId, getModelDimension, switchEmbeddingModel, MODEL_DIMENSIONS,
+  getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel, MODEL_DIMENSIONS,
 } from './embedding/Embedder.js';
 
 // DB types
