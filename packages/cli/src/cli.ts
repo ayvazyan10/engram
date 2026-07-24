@@ -23,6 +23,8 @@ const CONFIG_PATH = path.join(ENGRAM_HOME, 'config.json');
 const PID_PATH = path.join(ENGRAM_HOME, 'server.pid');
 const LOG_PATH = path.join(ENGRAM_HOME, 'logs', 'server.log');
 const REPO = 'https://github.com/ayvazyan10/engram.git';
+/** Schema version of the `engram export` payload (independent of the package version). */
+const EXPORT_FORMAT_VERSION = '0.1.0';
 
 interface EngramConfig {
   dbPath: string;
@@ -735,11 +737,23 @@ program
   .description('Export all memories as JSON')
   .option('-f, --format <fmt>', 'json or ndjson', 'json')
   .action(async (opts) => {
-    const result = await api<{ count: number; memories: unknown[] }>('GET', '/api/memory?limit=100000');
+    // The list route caps `limit` at 200 (ajv rejects anything larger with a
+    // 400), so page through the whole store instead of asking for it in one go.
+    const PAGE_SIZE = 200;
+    const memories: unknown[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const page = await api<{ count: number; memories: unknown[] }>(
+        'GET',
+        `/api/memory?limit=${PAGE_SIZE}&offset=${offset}`,
+      );
+      memories.push(...page.memories);
+      if (page.memories.length < PAGE_SIZE) break;
+    }
+
     if (opts.format === 'ndjson') {
-      for (const m of result.memories) console.log(JSON.stringify({ type: 'memory', data: m }));
+      for (const m of memories) console.log(JSON.stringify({ type: 'memory', data: m }));
     } else {
-      console.log(JSON.stringify({ version: '0.1.0', exportedAt: new Date().toISOString(), count: result.count, memories: result.memories }, null, 2));
+      console.log(JSON.stringify({ version: EXPORT_FORMAT_VERSION, exportedAt: new Date().toISOString(), count: memories.length, memories }, null, 2));
     }
   });
 

@@ -45,7 +45,7 @@ export const webhookRoutes: FastifyPluginAsync = async (app) => {
             type: 'array',
             items: {
               type: 'string',
-              enum: ['stored', 'forgotten', 'decayed', 'consolidated', 'contradiction'],
+              enum: ['stored', 'forgotten', 'decayed', 'consolidated', 'contradiction', 'reflected'],
             },
           },
           secret: { type: 'string' },

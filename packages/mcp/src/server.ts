@@ -14,6 +14,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { NeuralBrain } from '@engram-ai-memory/core';
 import { z } from 'zod';
+import fs from 'fs';
+import path from 'path';
+
+// Report the real release version instead of hardcoding it. This package has no
+// "type":"module", so tsc emits CommonJS here and __dirname is available;
+// ../package.json resolves from both src/ and dist/.
+const VERSION: string = (
+  JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')) as { version: string }
+).version;
 
 const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
 
@@ -26,7 +35,7 @@ const brain = new NeuralBrain({
 const server = new McpServer(
   {
     name: 'engram',
-    version: '0.1.0',
+    version: VERSION,
   },
   {
     instructions: [
@@ -653,10 +662,10 @@ server.tool(
 // ─── Tool: webhook_subscribe ──────────────────────────────────────────────────
 server.tool(
   'webhook_subscribe',
-  'Subscribe a URL to receive HTTP callbacks when memory events occur. Events: stored, forgotten, decayed, consolidated, contradiction.',
+  'Subscribe a URL to receive HTTP callbacks when memory events occur. Events: stored, forgotten, decayed, consolidated, contradiction, reflected.',
   {
     url: z.string().url().describe('The HTTP(S) URL to receive webhook POST requests'),
-    events: z.array(z.enum(['stored', 'forgotten', 'decayed', 'consolidated', 'contradiction'])).describe('Events to subscribe to'),
+    events: z.array(z.enum(['stored', 'forgotten', 'decayed', 'consolidated', 'contradiction', 'reflected'])).describe('Events to subscribe to'),
     secret: z.string().optional().describe('Shared secret for HMAC-SHA256 signature verification'),
     description: z.string().optional().describe('Human-readable description of this webhook'),
   },

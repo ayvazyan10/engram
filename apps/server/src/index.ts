@@ -7,6 +7,12 @@ import swaggerUi from '@fastify/swagger-ui';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
+// Read the real release version instead of hardcoding it. This package has no
+// "type":"module", so tsc emits CommonJS here and __dirname is available;
+// ../package.json resolves from both src/ during dev and dist/ in the image.
+export const VERSION: string = (
+  JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')) as { version: string }
+).version;
 
 import { healthRoutes } from './routes/health.js';
 import { memoryRoutes } from './routes/memory.js';
@@ -57,7 +63,7 @@ async function start() {
   // Swagger
   await app.register(swagger, {
     openapi: {
-      info: { title: 'Engram API', description: 'Universal AI Brain REST API', version: '0.1.0' },
+      info: { title: 'Engram API', description: 'Universal AI Brain REST API', version: VERSION },
       tags: [
         { name: 'memory', description: 'Memory CRUD operations' },
         { name: 'search', description: 'Semantic search and recall' },

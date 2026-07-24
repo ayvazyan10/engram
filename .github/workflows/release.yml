@@ -31,10 +31,25 @@ jobs:
       - name: Build
         run: pnpm turbo run build
 
+      # Publishing by directory (not by --filter) so a renamed package can never
+      # silently match zero projects and let the release pass while shipping nothing.
+      - name: Verify package names
+        run: |
+          set -euo pipefail
+          for dir in packages/core packages/mcp packages/cli packages/vis; do
+            name=$(node -p "require('./$dir/package.json').name")
+            case "$name" in
+              @engram-ai-memory/*) echo "ok: $name ($dir)" ;;
+              *) echo "::error::unexpected package name '$name' in $dir"; exit 1 ;;
+            esac
+          done
+
       - name: Publish packages
         run: |
-          pnpm --filter @engram/core publish --access public --no-git-checks
-          pnpm --filter @engram/mcp publish --access public --no-git-checks
-          pnpm --filter @engram/vis publish --access public --no-git-checks
+          set -euo pipefail
+          for dir in packages/core packages/mcp packages/cli packages/vis; do
+            echo "Publishing $dir..."
+            (cd "$dir" && pnpm publish --access public --no-git-checks)
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -30,9 +30,9 @@ services:
       NODE_ENV: production
     volumes:
       - api_data:/data
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # No depends_on postgres: this service is configured for SQLite
+    # (ENGRAM_DB_PATH only). Add ENGRAM_DATABASE=postgresql + DATABASE_URL and
+    # restore the dependency if you switch it to the Postgres backend.
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost:4901/api/health']
       interval: 10s

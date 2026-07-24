@@ -15,7 +15,7 @@ COPY apps/server/ ./apps/server/
 RUN pnpm install --frozen-lockfile
 
 # Build
-RUN pnpm turbo run build --filter=@neural-core/server...
+RUN pnpm turbo run build --filter=@engram-ai-memory/server...
 
 # ── Runtime stage ──────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime
@@ -37,8 +37,17 @@ COPY --from=builder /app/apps/server/node_modules/ ./apps/server/node_modules/
 COPY --from=builder /app/packages/core/src/db/migrations/ ./packages/core/src/db/migrations/
 COPY --from=builder /app/packages/core/drizzle.config.ts ./packages/core/
 
+# Run as an unprivileged user; /data holds the SQLite volume so it must be owned by it.
+RUN addgroup -S engram && adduser -S engram -G engram \
+    && mkdir -p /data \
+    && chown -R engram:engram /app /data
+USER engram
+
 ENV NODE_ENV=production
-ENV PORT=3001
-EXPOSE 3001
+# HOST must be 0.0.0.0 — the server defaults to 127.0.0.1, which is unreachable
+# from outside the container no matter which port is published.
+ENV HOST=0.0.0.0
+ENV PORT=4901
+EXPOSE 4901
 
 CMD ["node", "apps/server/dist/index.js"]
