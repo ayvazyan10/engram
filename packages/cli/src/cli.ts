@@ -15,6 +15,10 @@ import fs from 'fs';
 import os from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer } from './serverControl.js';
+import {
+  CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
+  readJson, installHookScript, registerHook,
+} from './claudeSetup.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
 
@@ -110,6 +114,48 @@ const fail = (msg: string) => console.log(`${R}  ✗${X} ${msg}`);
 const step = (msg: string) => console.log(`${C}  →${X} ${msg}`);
 const warn = (msg: string) => console.log(`${Y}  !${X} ${msg}`);
 
+// ─── Claude Code auto-memory ───────────────────────────────────────────────────
+
+const HOOKS_DIR = path.join(ENGRAM_HOME, 'hooks');
+
+/**
+ * Wire Engram into Claude Code as automatic memory: register the MCP server at
+ * user scope (loads in every session with no manual approval — a project-scope
+ * ~/.mcp.json entry does not) and, for a full local install, install the recall
+ * and session-end hooks. Best-effort: a malformed Claude config warns and is
+ * skipped rather than aborting setup.
+ */
+function setupClaudeCode(config: EngramConfig, engramServer: Record<string, unknown>, withHooks: boolean): void {
+  if (!fs.existsSync(CLAUDE_DIR)) {
+    warn('Claude Code not detected (~/.claude absent) — skipping auto-memory');
+    return;
+  }
+  try {
+    const claudeJson = readJson(CLAUDE_JSON);
+    const servers = claudeJson.mcpServers || (claudeJson.mcpServers = {});
+    servers.engram = engramServer;
+    fs.writeFileSync(CLAUDE_JSON, JSON.stringify(claudeJson, null, 2) + '\n');
+    ok('MCP registered at user scope (~/.claude.json) — loads in every session');
+
+    if (withHooks) {
+      const templateDir = path.join(config.repoPath, 'packages', 'cli', 'templates');
+      const apiBase = `http://localhost:${config.port}`;
+      const settings = readJson(CLAUDE_SETTINGS);
+      for (const h of CLAUDE_HOOKS) {
+        registerHook(settings, h.event, installHookScript(templateDir, HOOKS_DIR, h.file, apiBase), h.timeout);
+      }
+      fs.mkdirSync(CLAUDE_DIR, { recursive: true });
+      fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+      ok('Recall + session-end hooks installed (~/.engram/hooks/)');
+    } else {
+      warn('npx mode has no local server — skipping recall/session-end hooks');
+    }
+    warn('Restart Claude Code (or run /mcp) to activate.');
+  } catch (err) {
+    warn(`Claude Code auto-memory skipped: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 // ─── Program ─────────────────────────────────────────────────────────────────
 
 const program = new Command();
@@ -125,6 +171,7 @@ program
   .command('setup')
   .description('Initialize Engram — clone, build, configure, and set up MCP for any AI client')
   .option('--no-mcp', 'Skip MCP configuration')
+  .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP + recall/session-end hooks)')
   .option('--npx', 'Use npx instead of cloning repo (fastest setup)')
   .option('--source <name>', 'AI client identifier (e.g. claude-code, cursor, windsurf)', 'mcp-client')
   .option('--non-interactive', 'Run without prompts')
@@ -203,37 +250,29 @@ program
       ok('Using npx mode — skipping clone/build');
     }
 
+    const engramEnv: Record<string, string> = {
+      ENGRAM_DB_PATH: config.dbPath,
+      ENGRAM_SOURCE: opts.source,
+    };
+    const engramServer: Record<string, unknown> = opts.npx
+      ? { command: 'npx', args: ['-y', '@engram-ai-memory/mcp@latest'], env: engramEnv }
+      : { command: 'node', args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')], env: engramEnv };
+
     if (opts.mcp !== false) {
       step('Configuring MCP integration...');
       const mcpPath = path.join(os.homedir(), '.mcp.json');
-      let mcpConfig: Record<string, unknown> = {};
-      if (fs.existsSync(mcpPath)) {
-        try { mcpConfig = JSON.parse(fs.readFileSync(mcpPath, 'utf8')); } catch {}
-      }
-      const mcpServers = (mcpConfig.mcpServers ?? {}) as Record<string, unknown>;
-
-      const engramEnv: Record<string, string> = {
-        ENGRAM_DB_PATH: config.dbPath,
-        ENGRAM_SOURCE: opts.source,
-      };
-
-      if (opts.npx) {
-        mcpServers.engram = {
-          command: 'npx',
-          args: ['-y', '@engram-ai-memory/mcp@latest'],
-          env: engramEnv,
-        };
-      } else {
-        mcpServers.engram = {
-          command: 'node',
-          args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')],
-          env: engramEnv,
-        };
-      }
-
-      mcpConfig.mcpServers = mcpServers;
+      const mcpConfig = readJson(mcpPath);
+      const mcpServers = mcpConfig.mcpServers || (mcpConfig.mcpServers = {});
+      mcpServers.engram = engramServer;
       fs.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
       ok(`MCP configured: ${mcpPath}`);
+    }
+
+    // Claude Code gets the full auto-memory wiring: user-scope MCP so it loads
+    // without manual approval, plus recall/session-end hooks for a local install.
+    if (opts.claudeHooks !== false) {
+      step('Setting up Claude Code auto-memory...');
+      setupClaudeCode(config, engramServer, !opts.npx);
     }
 
     console.log(`\n${B}${G}  Engram installed successfully!${X}\n`);
@@ -410,6 +449,22 @@ program
         const mc = JSON.parse(fs.readFileSync(legacyMcpPath, 'utf8'));
         if (mc.mcpServers?.engram) { warn('Legacy: engram found in ~/.claude/settings.json — migrate to ~/.mcp.json'); }
       } catch {}
+    }
+
+    // Claude Code auto-memory: user-scope MCP + the two hooks.
+    if (fs.existsSync(CLAUDE_DIR)) {
+      const userMcp = readJson(CLAUDE_JSON).mcpServers?.engram;
+      if (userMcp) { ok('Claude Code: MCP at user scope (auto-loads)'); }
+      else { warn('Claude Code: MCP not at user scope — run: engram setup'); }
+
+      const settings = readJson(CLAUDE_SETTINGS);
+      for (const h of CLAUDE_HOOKS) {
+        const installed = fs.existsSync(path.join(HOOKS_DIR, h.file));
+        const registered = (settings.hooks?.[h.event] || []).some(
+          (e: { hooks?: Array<{ command?: string }> }) => (e.hooks || []).some((x) => x.command?.endsWith(h.file)));
+        if (installed && registered) ok(`Claude Code hook: ${h.event} (${h.file})`);
+        else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
+      }
     }
 
     console.log();

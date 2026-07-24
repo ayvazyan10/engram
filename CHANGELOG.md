@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Added
+
+- **`@engram-ai-memory/cli`** — `engram setup` now wires up Claude Code automatic memory end to end. It registers the MCP server at **user scope** (`~/.claude.json`) so it loads in every session without the manual approval a project-scope `~/.mcp.json` entry needs, and installs two hooks: a `UserPromptSubmit` recall hook that injects relevant long-term memories on each prompt (relevance-gated, fail-open) and a `SessionEnd` hook that stores a session summary. Detected automatically when `~/.claude` is present; opt out with `--no-claude-hooks`. Hooks are shipped as templates (`packages/cli/templates/`) and installed to `~/.engram/hooks/`. `engram doctor` reports their status.
+
 ---
 
 ## [0.3.1] — 2026-07-25
