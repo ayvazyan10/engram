@@ -1,6 +1,6 @@
 {
   "name": "@engram-ai-memory/server",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Engram REST API + WebSocket server",
   "main": "./dist/index.js",
   "scripts": {

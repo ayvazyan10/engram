@@ -1,6 +1,6 @@
 {
   "name": "@engram-ai-memory/web",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Engram visualization dashboard \u2014 3D neural graph with React Three Fiber",
   "private": true,
   "scripts": {

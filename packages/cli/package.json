@@ -1,6 +1,6 @@
 {
   "name": "@engram-ai-memory/cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Engram CLI \u2014 store, search, recall, and manage AI memories from the terminal",
   "type": "module",
   "bin": {

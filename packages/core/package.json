@@ -1,6 +1,6 @@
 {
   "name": "@engram-ai-memory/core",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "The Brain \u2014 memory engine, embeddings, graph, and retrieval",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
