@@ -10,11 +10,13 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@engram-ai-memory/tsconfig": "workspace:*",
     "typescript": "5.7.3",
-    "vitest": "^3.1.1"
+    "vitest": "^3.1.1",
+    "@vitest/coverage-v8": "^3.1.1"
   }
 }

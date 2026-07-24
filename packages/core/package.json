@@ -20,7 +20,8 @@
     "lint": "eslint src",
     "clean": "rm -rf dist *.tsbuildinfo",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
@@ -39,6 +40,7 @@
     "@types/uuid": "^10.0.0",
     "drizzle-kit": "^0.30.0",
     "typescript": "5.7.3",
-    "vitest": "^3.1.1"
+    "vitest": "^3.1.1",
+    "@vitest/coverage-v8": "^3.1.1"
   }
 }

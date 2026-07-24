@@ -56,3 +56,6 @@ packages/mcpb/.bundle/
 # Stray SSH keypair accidentally created in the working tree — never commit
 yes
 yes.pub
+
+# Coverage reports
+coverage/
