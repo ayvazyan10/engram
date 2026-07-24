@@ -11,7 +11,7 @@
  * 7. Log to context_assemblies
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, MemoryType } from '../db/schema.js';
@@ -137,22 +137,21 @@ export class ContextAssembler {
     const idList = [...candidateIds];
     const records: Memory[] = [];
 
-    // Fetch in batches of 50
+    // Fetch in batches of 50 — one query per batch, not one per id.
     for (let i = 0; i < idList.length; i += 50) {
       const batch = idList.slice(i, i + 50);
-      for (const id of batch) {
-        const [record] = await db
-          .select()
-          .from(schema.memories)
-          .where(eq(schema.memories.id, id))
-          .limit(1);
-        if (record && !record.archivedAt) {
-          // Apply source filter
-          if (sources && record.source && !sources.includes(record.source)) continue;
-          // Apply namespace filter
-          if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
-          records.push(record);
-        }
+      const rows = await db
+        .select()
+        .from(schema.memories)
+        .where(inArray(schema.memories.id, batch));
+
+      for (const record of rows) {
+        if (record.archivedAt) continue;
+        // Apply source filter
+        if (sources && record.source && !sources.includes(record.source)) continue;
+        // Apply namespace filter
+        if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
+        records.push(record);
       }
     }
 
@@ -181,22 +180,28 @@ export class ContextAssembler {
     const selected: typeof scored = [];
 
     for (const item of scored) {
-      const charLen = item.record.content.length;
-      if (totalChars + charLen > maxChars) break;
+      // formatContext emits `summary ?? content`, so budget against what is
+      // actually rendered. Skip (not break) oversized entries so smaller,
+      // lower-ranked memories can still fill the budget, and always admit the
+      // top-scored memory so recall never returns an empty context.
+      const charLen = (item.record.summary ?? item.record.content).length;
+      if (selected.length > 0 && totalChars + charLen > maxChars) continue;
       selected.push(item);
       totalChars += charLen;
     }
 
-    // Update access counts in DB (fire and forget)
+    // Update access counts in DB. These must be awaited: drizzle query builders
+    // are lazy, so a bare `void db.update(...)` never sends the statement. The
+    // increment is done in SQL so concurrent recalls cannot clobber each other.
     const now = new Date().toISOString();
-    for (const { record } of selected) {
-      void db
+    if (selected.length > 0) {
+      await db
         .update(schema.memories)
         .set({
-          accessCount: record.accessCount + 1,
+          accessCount: sql`${schema.memories.accessCount} + 1`,
           lastAccessedAt: now,
         })
-        .where(eq(schema.memories.id, record.id));
+        .where(inArray(schema.memories.id, selected.map((s) => s.record.id)));
     }
 
     // Format context
@@ -221,7 +226,7 @@ export class ContextAssembler {
       latencyMs,
     };
 
-    void db.insert(schema.contextAssemblies).values(assemblyLog);
+    await db.insert(schema.contextAssemblies).values(assemblyLog);
 
     return {
       context,
@@ -378,21 +383,21 @@ export class ContextAssembler {
       };
     }
 
-    // Update access counts (fire and forget)
+    // Update access counts — awaited and incremented in SQL (see recall()).
     const now = new Date().toISOString();
-    for (const { record } of allYielded) {
-      void db
+    if (allYielded.length > 0) {
+      await db
         .update(schema.memories)
         .set({
-          accessCount: record.accessCount + 1,
+          accessCount: sql`${schema.memories.accessCount} + 1`,
           lastAccessedAt: now,
         })
-        .where(eq(schema.memories.id, record.id));
+        .where(inArray(schema.memories.id, allYielded.map((y) => y.record.id)));
     }
 
     // Log to context_assemblies
     const latencyMs = Date.now() - startTime;
-    void db.insert(schema.contextAssemblies).values({
+    await db.insert(schema.contextAssemblies).values({
       id: uuidv4(),
       query,
       queryEmbedding: packFP16(queryVec),

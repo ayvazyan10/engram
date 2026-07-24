@@ -2,7 +2,22 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
-import { embed, packFP16 } from '../embedding/Embedder.js';
+import { embed, packFP16, unpackFP16 } from '../embedding/Embedder.js';
+
+/** Cosine similarity between two equal-length embedding vectors. */
+function cosineSimilarity(a: Float32Array | number[], b: Float32Array | number[]): number {
+  const len = Math.min(a.length, b.length);
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < len; i++) {
+    dot += a[i]! * b[i]!;
+    normA += a[i]! * a[i]!;
+    normB += b[i]! * b[i]!;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
 
 export interface StoreProceduralInput {
   /** Description of when this pattern/skill applies */
@@ -59,9 +74,20 @@ export class ProceduralMemory {
     return inserted!;
   }
 
-  async getByTrigger(triggerQuery: string): Promise<Memory[]> {
+  /**
+   * Retrieve procedural rules whose trigger matches the given situation.
+   *
+   * Ranks by embedding similarity between the query and the stored
+   * "trigger → action" text. Previously this ignored `triggerQuery` entirely
+   * and returned the top-20 procedural memories by importance, so callers got
+   * unrelated rules back.
+   */
+  async getByTrigger(triggerQuery: string, minSimilarity = 0.3, limit = 20): Promise<Memory[]> {
+    const query = triggerQuery.trim();
+    if (!query) return [];
+
     const db = getDb();
-    return db
+    const candidates = await db
       .select()
       .from(schema.memories)
       .where(
@@ -70,8 +96,22 @@ export class ProceduralMemory {
           isNull(schema.memories.archivedAt)
         )
       )
-      .orderBy(desc(schema.memories.importance))
-      .limit(20);
+      .orderBy(desc(schema.memories.importance));
+
+    if (candidates.length === 0) return [];
+
+    const queryVec = await embed(query);
+
+    const ranked = candidates
+      .map((memory) => {
+        if (!memory.embedding) return { memory, similarity: 0 };
+        const vec = unpackFP16(Buffer.from(memory.embedding as ArrayBuffer));
+        return { memory, similarity: cosineSimilarity(queryVec, vec) };
+      })
+      .filter((r) => r.similarity >= minSimilarity)
+      .sort((a, b) => b.similarity - a.similarity);
+
+    return ranked.slice(0, limit).map((r) => r.memory);
   }
 
   async updateConfidence(id: string, newConfidence: number): Promise<void> {

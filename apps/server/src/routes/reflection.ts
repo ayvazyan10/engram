@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { ReflectionType } from '@engram-ai-memory/core';
 import { brain } from '../index.js';
 
 export const reflectionRoutes: FastifyPluginAsync = async (app) => {
@@ -10,15 +11,8 @@ export const reflectionRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req) => {
       const limit = parseInt(req.query.limit ?? '20', 10);
-      const reflections = await brain.getReflections(limit);
-
-      let filtered = reflections;
-      if (req.query.type) {
-        filtered = reflections.filter((m) => {
-          const meta = JSON.parse(m.metadata ?? '{}');
-          return meta.reflectionType === req.query.type;
-        });
-      }
+      // Filter by type in SQL so LIMIT is applied after the filter.
+      const filtered = await brain.getReflections(limit, req.query.type as ReflectionType | undefined);
 
       return {
         count: filtered.length,

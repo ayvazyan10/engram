@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, schema } from '@engram-ai-memory/core';
+import { getDb, schema, embed, packFP16 } from '@engram-ai-memory/core';
+import type { MemoryType } from '@engram-ai-memory/core';
 import { isNull, and, eq, sql, gte, desc } from 'drizzle-orm';
 import { brain } from '../index.js';
 
@@ -106,6 +107,16 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     schema: {
       tags: ['memory'],
       summary: 'Inline edit a memory (content, importance, tags, concept)',
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          content: { type: 'string', minLength: 1 },
+          importance: { type: 'number', minimum: 0, maximum: 1 },
+          tags: { type: 'array', items: { type: 'string' } },
+          concept: { type: 'string' },
+        },
+      },
     },
     handler: async (req, reply) => {
       const db = getDb();
@@ -129,10 +140,32 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       if (tags !== undefined) updates['tags'] = JSON.stringify(tags);
       if (concept !== undefined) updates['concept'] = concept;
 
+      // Editing content invalidates the stored vector. Without re-embedding, the
+      // persisted embedding and the in-memory index keep describing the OLD text,
+      // so search silently returns the wrong rows (and survives restart).
+      let newVector: Float32Array | null = null;
+      if (content !== undefined && content !== existing.content) {
+        const embeddableText = existing.concept
+          ? `${concept ?? existing.concept}: ${content}`
+          : content;
+        newVector = await embed(embeddableText);
+        updates['embedding'] = packFP16(newVector);
+        updates['embeddingDim'] = newVector.length;
+      }
+
       await db
         .update(schema.memories)
         .set(updates)
         .where(eq(schema.memories.id, id));
+
+      if (newVector) {
+        brain.getVectorSearch().upsert({
+          id,
+          vector: newVector,
+          type: existing.type as MemoryType,
+          namespace: existing.namespace ?? undefined,
+        });
+      }
 
       const [updated] = await db
         .select()

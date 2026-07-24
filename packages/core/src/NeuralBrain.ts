@@ -12,7 +12,7 @@
  */
 
 import fs from 'fs';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, like, lt } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { closeDb, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
@@ -387,7 +387,9 @@ export class NeuralBrain {
     // This builds the neural network organically — every new memory
     // connects to its most similar neighbors.
     try {
-      const similar = this.vectorSearch.search(embedding, 4, 0.5);
+      // Namespace-scoped: the shared in-memory index holds every tenant's
+      // vectors, so an unscoped search created cross-namespace graph edges.
+      const similar = this.vectorSearch.search(embedding, 4, 0.5, undefined, record.namespace ?? undefined);
       // Exclude self
       const neighbors = similar.filter((s) => s.id !== record.id);
       if (neighbors.length > 0) {
@@ -687,9 +689,12 @@ export class NeuralBrain {
    *
    * @param minClusterSize Minimum episodes to form a cluster (default: 3)
    * @param threshold Similarity threshold for clustering (default: 0.6)
+   * @param olderThanIso Only consider episodes created before this timestamp.
+   *   Auto-consolidation passes its minEpisodicAgeMs cutoff here; without it,
+   *   brand-new memories were clustered and archived immediately.
    * @returns Array of newly created semantic memories
    */
-  async consolidate(minClusterSize = 3, threshold = 0.6): Promise<Memory[]> {
+  async consolidate(minClusterSize = 3, threshold = 0.6, olderThanIso?: string): Promise<Memory[]> {
     this.assertInitialized();
     const db = getDb();
 
@@ -697,6 +702,9 @@ export class NeuralBrain {
     const consolidateConditions = [eq(schema.memories.type, 'episodic'), isNull(schema.memories.archivedAt)];
     if (this.config.namespace) {
       consolidateConditions.push(eq(schema.memories.namespace, this.config.namespace));
+    }
+    if (olderThanIso) {
+      consolidateConditions.push(lt(schema.memories.createdAt, olderThanIso));
     }
     const episodes = await db
       .select()
@@ -714,7 +722,9 @@ export class NeuralBrain {
       if (!ep.embedding) continue;
 
       const vec = unpackFP16(Buffer.from(ep.embedding as ArrayBuffer));
-      const similar = this.vectorSearch.search(vec, 10, threshold, ['episodic']);
+      // Scope to the namespace, otherwise foreign-namespace episodes consume
+      // the top-10 slots and are then discarded, silently shrinking clusters.
+      const similar = this.vectorSearch.search(vec, 10, threshold, ['episodic'], this.config.namespace);
       const cluster = similar
         .filter((s) => !used.has(s.id) && s.id !== ep.id)
         .map((s) => episodes.find((e) => e.id === s.id)!)
@@ -783,6 +793,14 @@ export class NeuralBrain {
   }
 
   /**
+   * Get the in-memory vector index. Callers that write an embedding directly to
+   * the DB must upsert here too, or search will keep using the stale vector.
+   */
+  getVectorSearch(): VectorSearch {
+    return this.vectorSearch;
+  }
+
+  /**
    * Build reflection tasks for the AI connected to Engram to reason over.
    * Engram selects and summarizes the memories and returns prompts; the AI
    * produces the insights and writes them back via {@link storeReflection}.
@@ -801,7 +819,9 @@ export class NeuralBrain {
       .select()
       .from(schema.memories)
       .where(and(...conditions))
-      .orderBy(schema.memories.updatedAt)
+      // Newest first — a bare orderBy is ASC, which fed the reflection prompt
+      // the OLDEST memories while claiming they were "the most recent".
+      .orderBy(desc(schema.memories.updatedAt))
       .limit(this.reflectionEngine.getConfig().maxMemoriesToAnalyze);
 
     const tasks = this.reflectionEngine.buildTasks(memories);
@@ -858,9 +878,14 @@ export class NeuralBrain {
   }
 
   /**
-   * Get stored reflection insights.
+   * Get stored reflection insights, newest first.
+   *
+   * @param limit Maximum rows to return
+   * @param type  Optional reflection type. Filtered in SQL so LIMIT applies
+   *   AFTER the filter — filtering the limited rows in memory could return
+   *   zero results while matching reflections existed.
    */
-  async getReflections(limit = 20): Promise<Memory[]> {
+  async getReflections(limit = 20, type?: ReflectionType): Promise<Memory[]> {
     this.assertInitialized();
     const db = getDb();
 
@@ -871,12 +896,15 @@ export class NeuralBrain {
     if (this.config.namespace) {
       conditions.push(eq(schema.memories.namespace, this.config.namespace));
     }
+    if (type) {
+      conditions.push(like(schema.memories.tags, `%"reflection:${type}"%`));
+    }
 
     return db
       .select()
       .from(schema.memories)
       .where(and(...conditions))
-      .orderBy(schema.memories.createdAt)
+      .orderBy(desc(schema.memories.createdAt))
       .limit(limit);
   }
 
@@ -898,10 +926,11 @@ export class NeuralBrain {
     // Auto-consolidation
     if (!dryRun) {
       const newIds = await this.decayEngine.autoConsolidate(
-        async (minClusterSize, threshold) => {
-          const consolidated = await this.consolidate(minClusterSize, threshold);
+        async (minClusterSize, threshold, olderThanIso) => {
+          const consolidated = await this.consolidate(minClusterSize, threshold, olderThanIso);
           return consolidated.map((m) => ({ id: m.id }));
-        }
+        },
+        this.config.namespace
       );
       result.consolidatedCount = newIds.length;
       result.newSemanticIds = newIds;

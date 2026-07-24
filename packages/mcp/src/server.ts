@@ -857,15 +857,10 @@ server.tool(
   },
   async ({ limit, type }) => {
     await ensureInitialized();
-    const reflections = await brain.getReflections(limit);
-
-    let filtered = reflections;
-    if (type) {
-      filtered = reflections.filter((m) => {
-        const meta = JSON.parse(m.metadata ?? '{}');
-        return meta.reflectionType === type;
-      });
-    }
+    // Type filtering happens in SQL so LIMIT applies after it. Filtering the
+    // already-limited rows in memory could return nothing while matching
+    // reflections existed just past the limit.
+    const filtered = await brain.getReflections(limit, type);
 
     if (filtered.length === 0) {
       return {

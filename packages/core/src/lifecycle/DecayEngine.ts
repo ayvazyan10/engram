@@ -5,7 +5,7 @@
  * are responsible for scheduling. The engine just runs a single pass when asked.
  */
 
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { Memory } from '../db/schema.js';
 import { computeRetentionScore, decayImportance } from '../retrieval/ImportanceScorer.js';
@@ -138,9 +138,18 @@ export class DecayEngine {
           result.archivedCount++;
           result.archivedIds.push(memory.id);
         } else {
-          // Decay importance progressively
-          const lastTouch = memory.lastAccessedAt ?? memory.createdAt;
-          const daysSince = Math.max(0, (now.getTime() - new Date(lastTouch).getTime()) / (24 * 60 * 60 * 1000));
+          // Decay importance progressively.
+          //
+          // The elapsed interval must be measured from the last decay
+          // checkpoint, not from lastAccessedAt: decayImportance subtracts
+          // rate*days from the ALREADY decayed stored value, so measuring from
+          // the last access made every sweep re-apply the whole idle period and
+          // importance collapsed quadratically (floor in ~2 days instead of
+          // ~45). `updatedAt` is advanced by the decay write below, so each
+          // sweep now only applies the time that actually elapsed since the
+          // previous one — making decay frequency-independent.
+          const checkpoint = memory.updatedAt ?? memory.lastAccessedAt ?? memory.createdAt;
+          const daysSince = Math.max(0, (now.getTime() - new Date(checkpoint).getTime()) / (24 * 60 * 60 * 1000));
 
           if (daysSince > 0) {
             const newImportance = decayImportance(
@@ -181,33 +190,41 @@ export class DecayEngine {
    * @returns IDs of new semantic memories created
    */
   async autoConsolidate(
-    consolidateFn: (minClusterSize: number, threshold: number) => Promise<{ id: string }[]>
+    consolidateFn: (
+      minClusterSize: number,
+      threshold: number,
+      olderThanIso: string
+    ) => Promise<{ id: string }[]>,
+    namespace?: string
   ): Promise<string[]> {
     const config = this.policy.consolidation;
     if (!config.enabled) return [];
 
     const db = getDb();
 
-    // Count episodic memories older than the minimum age
     const cutoff = new Date(Date.now() - config.minEpisodicAgeMs).toISOString();
-    const oldEpisodes = await db
-      .select()
+
+    // Count only. Previously this materialised every episodic row (embedding
+    // blobs included, no LIMIT) purely to compare a length, and ignored the
+    // namespace that consolidate() actually scopes to.
+    const conditions = [
+      eq(schema.memories.type, 'episodic'),
+      isNull(schema.memories.archivedAt),
+      lt(schema.memories.createdAt, cutoff),
+    ];
+    if (namespace) conditions.push(eq(schema.memories.namespace, namespace));
+
+    const [row] = await db
+      .select({ n: sql<number>`count(*)` })
       .from(schema.memories)
-      .where(
-        and(
-          eq(schema.memories.type, 'episodic'),
-          isNull(schema.memories.archivedAt)
-        )
-      );
+      .where(and(...conditions));
 
-    // Filter to only episodes old enough
-    const eligible = oldEpisodes.filter(
-      (m) => new Date(m.createdAt).getTime() < new Date(cutoff).getTime()
-    );
+    const eligibleCount = Number(row?.n ?? 0);
+    if (eligibleCount < config.minClusterSize) return [];
 
-    if (eligible.length < config.minClusterSize) return [];
-
-    const results = await consolidateFn(config.minClusterSize, config.similarityThreshold);
+    // The cutoff must reach consolidate() itself — using it only as a run/no-run
+    // gate let consolidation fold in (and archive) brand-new memories.
+    const results = await consolidateFn(config.minClusterSize, config.similarityThreshold, cutoff);
     return results.map((m) => m.id);
   }
 }
