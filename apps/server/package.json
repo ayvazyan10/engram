@@ -9,7 +9,9 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@engram-ai-memory/core": "workspace:*",
@@ -27,6 +29,8 @@
     "@engram-ai-memory/tsconfig": "workspace:*",
     "@types/uuid": "^10.0.0",
     "tsx": "^4.19.4",
-    "typescript": "5.7.3"
+    "typescript": "5.7.3",
+    "vitest": "^3.1.1",
+    "@vitest/coverage-v8": "^3.1.1"
   }
 }

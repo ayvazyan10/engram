@@ -95,12 +95,16 @@ export let io: SocketIOServer;
  */
 export let realtime: Namespace | undefined;
 
-async function start() {
-  // Initialize brain
-  console.info('Initializing Engram brain...');
-  await brain.initialize();
-  console.info('Brain initialized.');
-
+/**
+ * Build the fully-configured Fastify instance WITHOUT listening.
+ *
+ * Separated from start() so tests can drive every route through `app.inject()`
+ * — previously all registration happened inside start(), so nothing was
+ * reachable without binding a real port.
+ *
+ * The caller is responsible for `brain.initialize()`.
+ */
+export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   const app = Fastify({ logger: { level: 'warn' } });
 
   // CORS — explicit allowlist, no credentials (the API uses no cookies).
@@ -194,6 +198,17 @@ async function start() {
     console.info(`Dashboard: http://${HOST}:${PORT}`);
   }
 
+  return app;
+}
+
+async function start() {
+  // Initialize brain
+  console.info('Initializing Engram brain...');
+  await brain.initialize();
+  console.info('Brain initialized.');
+
+  const app = await buildApp();
+
   // Start Fastify — it creates and owns the HTTP server
   await app.listen({ port: PORT, host: HOST });
   console.info(`Engram running at http://${HOST}:${PORT}`);
@@ -245,19 +260,6 @@ async function start() {
   }
 }
 
-// Process-level safety net. Many background paths (webhook dispatch, plugin
-// hooks, SSE streams, decay sweeps) are intentionally fire-and-forget; without
-// these handlers a single stray rejection terminated the whole memory backend.
-// We log and keep serving rather than exiting — losing the service is worse
-// than the failed background task.
-process.on('unhandledRejection', (reason: unknown) => {
-  console.error('[engram] unhandled promise rejection:', reason);
-});
-
-process.on('uncaughtException', (err: unknown) => {
-  console.error('[engram] uncaught exception:', err);
-});
-
 // Graceful shutdown
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
@@ -272,10 +274,28 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT', () => void shutdown('SIGINT'));
+// Only wire process-level handlers and boot the server when this module is the
+// entrypoint. Tests import buildApp() from here and must not get a listening
+// server, signal handlers or a decay timer as a side effect.
+if (require.main === module) {
+  // Process-level safety net. Many background paths (webhook dispatch, plugin
+  // hooks, SSE streams, decay sweeps) are intentionally fire-and-forget; without
+  // these handlers a single stray rejection terminated the whole memory backend.
+  // We log and keep serving rather than exiting — losing the service is worse
+  // than the failed background task.
+  process.on('unhandledRejection', (reason: unknown) => {
+    console.error('[engram] unhandled promise rejection:', reason);
+  });
 
-start().catch((err: unknown) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+  process.on('uncaughtException', (err: unknown) => {
+    console.error('[engram] uncaught exception:', err);
+  });
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  start().catch((err: unknown) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}

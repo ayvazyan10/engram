@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { brain } from '../index.js';
+import { UnsafeWebhookUrlError } from '@engram-ai-memory/core';
 import type { WebhookEvent } from '@engram-ai-memory/core';
 
 export const webhookRoutes: FastifyPluginAsync = async (app) => {
@@ -54,9 +55,19 @@ export const webhookRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     handler: async (req, reply) => {
-      const hook = await mgr.subscribe(req.body);
-      reply.code(201);
-      return hook;
+      try {
+        const hook = await mgr.subscribe(req.body);
+        reply.code(201);
+        return hook;
+      } catch (err: unknown) {
+        // A rejected webhook URL is bad client input, not a server fault —
+        // letting UnsafeWebhookUrlError escape produced a 500.
+        if (err instanceof UnsafeWebhookUrlError) {
+          reply.code(400);
+          return { error: err.message };
+        }
+        throw err;
+      }
     },
   });
 
