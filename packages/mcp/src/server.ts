@@ -906,16 +906,9 @@ async function ensureInitialized(): Promise<void> {
 
 // ─── Start server ─────────────────────────────────────────────────────────────
 
-// Safety net — a stray rejection from a background path must not kill the
-// long-lived stdio server.
-process.on('unhandledRejection', (reason: unknown) => {
-  console.error('[engram-mcp] unhandled promise rejection:', reason);
-});
-
-process.on('uncaughtException', (err: unknown) => {
-  console.error('[engram-mcp] uncaught exception:', err);
-});
-
+/* v8 ignore start — stdio boot path: binds process stdio and signal handlers,
+   so it cannot run under a unit test. Tool behaviour is covered via an
+   in-memory transport in src/__tests__. */
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
@@ -932,9 +925,6 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT', () => void shutdown('SIGINT'));
-
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -944,7 +934,32 @@ async function main(): Promise<void> {
   process.stdin.on('close', () => void shutdown('stdin close'));
 }
 
-main().catch((err: unknown) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+/**
+ * The configured MCP server and its brain, exported for tests.
+ *
+ * Tests connect this over an in-memory transport instead of stdio; the stdio
+ * boot below only runs when this module is the entrypoint.
+ */
+export { server, brain, ensureInitialized };
+
+if (require.main === module) {
+  // Safety net — a stray rejection from a background path must not kill the
+  // long-lived stdio server. Registered only when running as the entrypoint so
+  // tests do not inherit process-wide handlers.
+  process.on('unhandledRejection', (reason: unknown) => {
+    console.error('[engram-mcp] unhandled promise rejection:', reason);
+  });
+
+  process.on('uncaughtException', (err: unknown) => {
+    console.error('[engram-mcp] uncaught exception:', err);
+  });
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  main().catch((err: unknown) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
+/* v8 ignore stop */
