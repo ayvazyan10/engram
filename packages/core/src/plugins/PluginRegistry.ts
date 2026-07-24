@@ -112,6 +112,11 @@ export class PluginRegistry {
     if (!plugin.id || !plugin.name || !plugin.version) {
       throw new Error('Plugin must have id, name, and version');
     }
+    // TS types are not enforced at runtime; reject a bad `hooks` at the boundary
+    // rather than throwing later inside runHook/list.
+    if (plugin.hooks !== undefined && (plugin.hooks === null || typeof plugin.hooks !== 'object')) {
+      throw new Error(`Plugin "${plugin.id}" has an invalid hooks object`);
+    }
     this.plugins.set(plugin.id, {
       plugin,
       registeredAt: new Date().toISOString(),
@@ -148,8 +153,8 @@ export class PluginRegistry {
       name: plugin.name,
       version: plugin.version,
       description: plugin.description,
-      hooks: Object.keys(plugin.hooks).filter(
-        (k) => typeof (plugin.hooks as Record<string, unknown>)[k] === 'function'
+      hooks: Object.keys(plugin.hooks ?? {}).filter(
+        (k) => typeof (plugin.hooks as Record<string, unknown> | undefined)?.[k] === 'function'
       ),
       registeredAt,
     }));
@@ -173,14 +178,18 @@ export class PluginRegistry {
     context: Parameters<NonNullable<PluginHooks[K]>>[0]
   ): Promise<void> {
     for (const { plugin } of this.plugins.values()) {
-      const hook = plugin.hooks[hookName];
-      if (hook) {
-        try {
-          await (hook as (ctx: typeof context) => Promise<void> | void)(context);
-        } catch (err) {
-          // Log but don't propagate — plugin errors shouldn't break the brain
-          console.error(`[engram] Plugin "${plugin.id}" hook "${hookName}" failed:`, err);
-        }
+      // The lookup itself must be inside the try: a plugin registered with a
+      // null/undefined `hooks` (reachable from JS callers, since TS types are
+      // not enforced at runtime) threw a TypeError BEFORE the try, aborting the
+      // whole loop and rejecting — and callers invoke this as `void runHook(...)`,
+      // turning that into an unhandled rejection.
+      try {
+        const hook = plugin.hooks?.[hookName];
+        if (!hook) continue;
+        await (hook as (ctx: typeof context) => Promise<void> | void)(context);
+      } catch (err) {
+        // Log but don't propagate — plugin errors shouldn't break the brain
+        console.error(`[engram] Plugin "${plugin.id}" hook "${hookName}" failed:`, err);
       }
     }
   }

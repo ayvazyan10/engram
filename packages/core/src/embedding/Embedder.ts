@@ -145,7 +145,16 @@ function float32ToFloat16(val: number): number {
 
   const newExp = exp - 127 + 15;
   if (newExp >= 31) return (sign << 15) | 0x7c00; // overflow → Inf
-  if (newExp <= 0) return (sign << 15) | (frac >> (14 - newExp) & 0x3ff); // underflow
+
+  if (newExp <= 0) {
+    // Underflow into the FP16 subnormal range. A normal FP32 significand is
+    // 1.frac — the implicit leading 1 (0x800000) must be restored before
+    // shifting, otherwise the most significant mantissa bit is dropped and
+    // values like 2^-15 collapse to zero.
+    const shift = 14 - newExp;
+    if (shift >= 32) return sign << 15; // below the smallest subnormal → signed zero
+    return (sign << 15) | (((frac | 0x800000) >> shift) & 0x3ff);
+  }
 
   return (sign << 15) | (newExp << 10) | (frac >> 13);
 }

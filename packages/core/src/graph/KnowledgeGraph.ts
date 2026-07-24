@@ -40,10 +40,12 @@ export class KnowledgeGraph {
   removeNode(id: string): void {
     this.nodes.delete(id);
     this.adjacency.delete(id);
-    // Remove all edges pointing to this node
-    for (const [, edges] of this.adjacency) {
-      const idx = edges.findIndex((e) => e.targetId === id);
-      if (idx >= 0) edges.splice(idx, 1);
+    // Remove ALL edges pointing to this node. findIndex+splice removed only the
+    // first match per source, so a pair connected by several relationships
+    // (relates_to AND contradicts) kept dangling edges to a deleted node.
+    for (const [sourceId, edges] of this.adjacency) {
+      const remaining = edges.filter((e) => e.targetId !== id);
+      if (remaining.length !== edges.length) this.adjacency.set(sourceId, remaining);
     }
   }
 
@@ -66,12 +68,25 @@ export class KnowledgeGraph {
   }
 
   removeEdge(sourceId: string, targetId: string, relationship: RelationshipType): void {
-    const edges = this.adjacency.get(sourceId);
-    if (!edges) return;
-    const idx = edges.findIndex(
-      (e) => e.targetId === targetId && e.relationship === relationship
-    );
-    if (idx >= 0) edges.splice(idx, 1);
+    const forward = this.adjacency.get(sourceId);
+    if (forward) {
+      this.adjacency.set(
+        sourceId,
+        forward.filter((e) => !(e.targetId === targetId && e.relationship === relationship))
+      );
+    }
+
+    // addEdge stores a bidirectional edge as a mirrored pair, so the reverse
+    // copy has to go too — otherwise it survived as a half-removed edge.
+    const reverse = this.adjacency.get(targetId);
+    if (reverse) {
+      this.adjacency.set(
+        targetId,
+        reverse.filter(
+          (e) => !(e.targetId === sourceId && e.relationship === relationship && e.bidirectional)
+        )
+      );
+    }
   }
 
   /**

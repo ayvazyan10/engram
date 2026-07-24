@@ -12,7 +12,7 @@
  */
 
 import fs from 'fs';
-import { and, desc, eq, isNull, like, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, like, lt, or } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { closeDb, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
@@ -608,6 +608,19 @@ export class NeuralBrain {
       .update(schema.memories)
       .set({ archivedAt: new Date().toISOString() })
       .where(eq(schema.memories.id, id));
+
+    // Prune the memory's edges. They were previously left behind forever, so
+    // memory_connections grew monotonically and initialize() reloaded dangling
+    // edges pointing at nodes that no longer exist — inflating edge counts and
+    // wasting per-edge lookups during graph-expanded recall.
+    await db
+      .delete(schema.memoryConnections)
+      .where(
+        or(
+          eq(schema.memoryConnections.sourceId, id),
+          eq(schema.memoryConnections.targetId, id)
+        )
+      );
 
     this.vectorSearch.remove(id);
     this.graph.removeNode(id);
@@ -1335,18 +1348,21 @@ export class NeuralBrain {
       target: Memory;
     }> = [];
 
-    for (const edge of edges) {
-      const [source] = await db
-        .select()
-        .from(schema.memories)
-        .where(and(eq(schema.memories.id, edge.sourceId), isNull(schema.memories.archivedAt)))
-        .limit(1);
+    // Load every referenced memory in ONE query instead of two per edge. The
+    // previous 1+2N pattern kept getting slower as the contradicts set grew,
+    // and most of those rows were then discarded as archived/out-of-namespace.
+    const referencedIds = [...new Set(edges.flatMap((e) => [e.sourceId, e.targetId]))];
+    const activeMemories = referencedIds.length
+      ? await db
+          .select()
+          .from(schema.memories)
+          .where(and(inArray(schema.memories.id, referencedIds), isNull(schema.memories.archivedAt)))
+      : [];
+    const byId = new Map(activeMemories.map((m) => [m.id, m]));
 
-      const [target] = await db
-        .select()
-        .from(schema.memories)
-        .where(and(eq(schema.memories.id, edge.targetId), isNull(schema.memories.archivedAt)))
-        .limit(1);
+    for (const edge of edges) {
+      const source = byId.get(edge.sourceId);
+      const target = byId.get(edge.targetId);
 
       // Only include if both memories are still active
       if (!source || !target) continue;

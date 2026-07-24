@@ -119,6 +119,10 @@ export class DecayEngine {
         break;
       }
 
+      // Rows archived in this batch drop out of the next query's result set,
+      // so the offset must not advance past them.
+      let archivedInBatch = 0;
+
       for (const memory of batch) {
         result.scannedCount++;
 
@@ -134,6 +138,7 @@ export class DecayEngine {
           // Archive this memory
           if (!dryRun) {
             await forgetFn(memory.id);
+            archivedInBatch++;
           }
           result.archivedCount++;
           result.archivedIds.push(memory.id);
@@ -175,7 +180,11 @@ export class DecayEngine {
       if (batch.length < this.policy.batchSize) {
         hasMore = false;
       } else {
-        offset += this.policy.batchSize;
+        // Advance by the rows that REMAIN in the result set. Archiving inside a
+        // batch removes those rows from `WHERE archivedAt IS NULL`, so adding
+        // the full batchSize skipped exactly as many unscanned memories as were
+        // archived — they were silently never evaluated in this pass.
+        offset += this.policy.batchSize - archivedInBatch;
       }
     }
 
