@@ -9,15 +9,40 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
-### Added
+---
 
-- **`@engram-ai-memory/adapter-ollama`** — OpenAI-compatible API interception: proxy now also intercepts `/v1/chat/completions` in addition to `/api/chat` and `/api/generate`, enabling memory injection for any client using the OpenAI-compatible Ollama endpoint
-- **`@engram-ai-memory/adapter-ollama`** — Tool-call retry: when a model responds with plain text instead of a tool call (detected via `finish_reason`), the proxy automatically retries once with an explicit instruction message; controlled via `ENGRAM_TOOL_RETRY` env var (default: `true`)
+## [0.3.1] — 2026-07-25
 
-### Fixed
+The published `0.3.0` was frozen on 2026-07-17, before a full codebase audit. This
+release ships the accumulated reliability, correctness and security fixes to npm.
+No API changes — a drop-in upgrade.
 
-- **`@engram-ai-memory/cli`** — `dev` script was `tsx src/cli.ts` which exits with code 1 (CLI with no arguments), causing `turbo run dev` to abort the entire workspace; changed to `tsc --watch` consistent with other packages
-- **`@engram-ai-memory/server`** — Dashboard static path resolved relative to `__dirname` instead of `process.cwd()`, fixing serving when the server is started from a non-root working directory
+### Fixed — data integrity (silent-but-serious)
+
+- **`@engram-ai-memory/core`** — `search()` discarded the similarity it ranked by, so every consumer saw `0%` scores. Similarity is now returned on each hit.
+- **`@engram-ai-memory/core`** — FP16 embedding codec dropped the implicit mantissa bit, corrupting the small components of every persisted vector. Subnormals are now packed correctly.
+- **`@engram-ai-memory/core`** — Importance decay recompounded on every sweep (memories hit the floor in ~2 days instead of ~45). Decay now checkpoints against `updatedAt`.
+- **`@engram-ai-memory/core`** — `void db.update(...)` never executed (Drizzle builders are lazy PromiseLikes), so access counts stayed 0 and decay archived active memories. All such writes are now awaited with atomic SQL increments.
+- **`@engram-ai-memory/server`** — `POST /api/memory/batch` silently dropped `importance`, `source`, `tags`, `concept` and `namespace`. All per-item fields are now honoured.
+
+### Fixed — atomicity
+
+- **`@engram-ai-memory/core`** — `store()`, `forget()`/`consolidate()` and `resolveContradiction()` are now single transactions; a failure part-way through no longer leaves partial state.
+
+### Added — security
+
+- **`@engram-ai-memory/server`** — Webhook SSRF guard: delivery to loopback/private addresses is rejected unless `ENGRAM_WEBHOOK_ALLOW_PRIVATE=true`.
+- **`@engram-ai-memory/server`** — CORS is now an allowlist (`ENGRAM_ALLOWED_ORIGINS`) instead of reflecting any origin.
+- **`@engram-ai-memory/server`** — Optional bearer/`X-API-Key` auth via `ENGRAM_API_KEY` (timing-safe compare); unset keeps the local-first open default.
+
+### Fixed — other
+
+- **`@engram-ai-memory/mcp`** — `GET /api/graph/:id` now honours its `depth` parameter and returns edges in both directions.
+- **`@engram-ai-memory/server`** — `ENGRAM_DATABASE=postgresql` now fails fast with an explanatory error instead of appearing to connect and breaking on the first write (the PostgreSQL backend is not implemented).
+- **`@engram-ai-memory/cli`** — `engram start` verifies the port actually bound before printing success; `engram status` verifies the pidfile PID is alive and owns the port.
+- **`@engram-ai-memory/adapter-ollama`** — OpenAI-compatible `/v1/chat/completions` interception and one-shot tool-call retry (`ENGRAM_TOOL_RETRY`, default `true`).
+- **`@engram-ai-memory/cli`** — `dev` script changed to `tsc --watch` so `turbo run dev` no longer aborts the workspace.
+- **`@engram-ai-memory/server`** — Dashboard static path resolves against `process.cwd()`, fixing serving from a non-root working directory.
 
 ---
 

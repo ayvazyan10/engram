@@ -1,7 +1,7 @@
 {
   "name": "@engram-ai-memory/vis",
-  "version": "0.3.0",
-  "description": "Visualization helpers — neural graph layout, animation engine, color mapping",
+  "version": "0.3.1",
+  "description": "Visualization helpers \u2014 neural graph layout, animation engine, color mapping",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
