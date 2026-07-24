@@ -391,23 +391,29 @@ export class NeuralBrain {
       updatedAt: now,
     };
 
-    await db.insert(schema.memories).values(record);
+    // ── Auto-concept: derive the topic label BEFORE the insert, so the row is
+    // written once instead of insert-then-update.
+    if (!record.concept) {
+      try {
+        record.concept = extractConcept(input.content);
+      } catch {
+        // Concept extraction is best-effort
+      }
+    }
 
-    // Update in-memory index
-    this.vectorSearch.upsert({ id: record.id!, vector: embedding, type, namespace: record.namespace });
-    this.graph.addNode({ id: record.id!, type, concept: record.concept ?? undefined });
-
-    // ── Auto-link: find similar memories and create graph edges ──
-    // This builds the neural network organically — every new memory
-    // connects to its most similar neighbors.
+    // ── Auto-link: pick the most similar neighbours to connect to.
+    // This builds the neural network organically — every new memory connects to
+    // its closest neighbours. The new memory is not in the index yet, so it
+    // cannot match itself.
+    let edges: NewMemoryConnection[] = [];
     try {
       // Namespace-scoped: the shared in-memory index holds every tenant's
       // vectors, so an unscoped search created cross-namespace graph edges.
       const similar = this.vectorSearch.search(embedding, 4, 0.5, undefined, record.namespace ?? undefined);
-      // Exclude self
-      const neighbors = similar.filter((s) => s.id !== record.id);
-      if (neighbors.length > 0) {
-        const edges: NewMemoryConnection[] = neighbors.slice(0, 3).map((n) => ({
+      edges = similar
+        .filter((s) => s.id !== record.id)
+        .slice(0, 3)
+        .map((n) => ({
           id: uuidv4(),
           sourceId: record.id!,
           targetId: n.id,
@@ -417,38 +423,38 @@ export class NeuralBrain {
           metadata: '{}',
           createdAt: now,
         }));
-
-        await db.insert(schema.memoryConnections).values(edges);
-
-        for (const edge of edges) {
-          this.graph.addEdge({
-            sourceId: edge.sourceId,
-            targetId: edge.targetId,
-            relationship: edge.relationship as RelationshipType,
-            strength: edge.strength ?? 1.0,
-            bidirectional: true,
-          });
-        }
-      }
     } catch {
       // Auto-link is best-effort — don't fail the store
+      edges = [];
     }
 
-    // ── Auto-concept: extract a short topic label if none provided ──
-    if (!record.concept) {
-      try {
-        const label = extractConcept(input.content);
-        if (label) {
-          record.concept = label;
-          await db
-            .update(schema.memories)
-            .set({ concept: label, updatedAt: now })
-            .where(eq(schema.memories.id, record.id!));
-          this.graph.addNode({ id: record.id!, type, concept: label });
-        }
-      } catch {
-        // Concept extraction is best-effort
+    // Atomic: the memory row and its auto-link edges land together or not at
+    // all. They used to be separate awaited statements, so a crash between them
+    // left a memory with no edges, and an edge insert that hit the targetId
+    // foreign key threw only after the row was already committed.
+    //
+    // The callback MUST stay synchronous — better-sqlite3 transactions do not
+    // await, so every async step (embedding) happens above.
+    db.transaction((tx) => {
+      tx.insert(schema.memories).values(record).run();
+      if (edges.length > 0) {
+        tx.insert(schema.memoryConnections).values(edges).run();
       }
+    });
+
+    // In-memory state is updated only after the durable write succeeded —
+    // previously the index and graph were advanced before the edges were
+    // written, so a failure left them ahead of the database.
+    this.vectorSearch.upsert({ id: record.id!, vector: embedding, type, namespace: record.namespace });
+    this.graph.addNode({ id: record.id!, type, concept: record.concept ?? undefined });
+    for (const edge of edges) {
+      this.graph.addEdge({
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        relationship: edge.relationship as RelationshipType,
+        strength: edge.strength ?? 1.0,
+        bidirectional: true,
+      });
     }
 
     // ── Contradiction detection ──
@@ -632,26 +638,44 @@ export class NeuralBrain {
   /**
    * Archive (soft-delete) a memory by ID.
    */
+  /**
+   * Archive memories and prune their edges in ONE transaction.
+   *
+   * Soft-deleting a memory and deleting its connections are two writes; done
+   * separately, a failure between them leaves archived rows whose edges are
+   * still reloaded into the graph at startup. Batching also turns an N-memory
+   * archive (consolidation) into two statements instead of 2N.
+   *
+   * Synchronous by necessity — better-sqlite3 transactions do not await.
+   * In-memory state and events are the caller's responsibility, so they only
+   * run after this returns.
+   */
+  private archiveAtomic(ids: string[]): void {
+    if (ids.length === 0) return;
+    const db = getDb();
+    const archivedAt = new Date().toISOString();
+
+    db.transaction((tx) => {
+      tx.update(schema.memories)
+        .set({ archivedAt })
+        .where(inArray(schema.memories.id, ids))
+        .run();
+
+      tx.delete(schema.memoryConnections)
+        .where(
+          or(
+            inArray(schema.memoryConnections.sourceId, ids),
+            inArray(schema.memoryConnections.targetId, ids)
+          )
+        )
+        .run();
+    });
+  }
+
   async forget(id: string): Promise<void> {
     this.assertInitialized();
-    const db = getDb();
-    await db
-      .update(schema.memories)
-      .set({ archivedAt: new Date().toISOString() })
-      .where(eq(schema.memories.id, id));
 
-    // Prune the memory's edges. They were previously left behind forever, so
-    // memory_connections grew monotonically and initialize() reloaded dangling
-    // edges pointing at nodes that no longer exist — inflating edge counts and
-    // wasting per-edge lookups during graph-expanded recall.
-    await db
-      .delete(schema.memoryConnections)
-      .where(
-        or(
-          eq(schema.memoryConnections.sourceId, id),
-          eq(schema.memoryConnections.targetId, id)
-        )
-      );
+    this.archiveAtomic([id]);
 
     this.vectorSearch.remove(id);
     this.graph.removeNode(id);
@@ -805,8 +829,23 @@ export class NeuralBrain {
         metadata: { episodeCount: cluster.length, episodeIds: cluster.map((m) => m.id) },
       });
 
+      // Archive the whole cluster in ONE transaction. Calling forget() per
+      // episode meant a failure mid-loop left the cluster half-archived: a
+      // summary plus some still-live episodes AND some already gone.
+      //
+      // Note the remaining boundary: the summary is created by store() above
+      // (which must be async to embed), so a crash between the two leaves the
+      // summary with its episodes still live — duplicated information, but
+      // nothing lost. Full atomicity would mean bypassing store() and losing
+      // its auto-link and contradiction handling.
+      const clusterIds = cluster.map((m) => m.id);
+      this.archiveAtomic(clusterIds);
+
       for (const ep of cluster) {
-        await this.forget(ep.id);
+        this.vectorSearch.remove(ep.id);
+        this.graph.removeNode(ep.id);
+        this.webhookManager.fire('forgotten', { id: ep.id });
+        void this.pluginRegistry.runHook('onForget', { memoryId: ep.id });
       }
 
       results.push(semantic);
@@ -1464,7 +1503,6 @@ export class NeuralBrain {
         const sourceTime = new Date(source.createdAt).getTime();
         const targetTime = new Date(target.createdAt).getTime();
         const [newer, older] = sourceTime >= targetTime ? [source, target] : [target, source];
-        await this.forget(older.id);
         archivedId = older.id;
         keptId = newer.id;
         break;
@@ -1474,7 +1512,6 @@ export class NeuralBrain {
         const sourceTime = new Date(source.createdAt).getTime();
         const targetTime = new Date(target.createdAt).getTime();
         const [newer, older] = sourceTime >= targetTime ? [source, target] : [target, source];
-        await this.forget(newer.id);
         archivedId = newer.id;
         keptId = older.id;
         break;
@@ -1484,11 +1521,9 @@ export class NeuralBrain {
         const sImp = source.importance ?? 0.5;
         const tImp = target.importance ?? 0.5;
         if (sImp >= tImp) {
-          await this.forget(target.id);
           archivedId = target.id;
           keptId = source.id;
         } else {
-          await this.forget(source.id);
           archivedId = source.id;
           keptId = target.id;
         }
@@ -1505,27 +1540,52 @@ export class NeuralBrain {
         return { resolved: false };
     }
 
-    // Remove the contradicts edge after resolution (unless keep_both)
+    // Everything the resolution writes — archiving the loser, pruning its edges,
+    // and dropping the contradicts edge in both directions — happens in ONE
+    // transaction. Previously forget() archived the loser and then two separate
+    // deletes removed the edge, so a failure in between left a resolved
+    // contradiction that still reported itself as unresolved.
     if (strategy !== 'keep_both') {
-      await db
-        .delete(schema.memoryConnections)
-        .where(
-          and(
-            eq(schema.memoryConnections.sourceId, sourceId),
-            eq(schema.memoryConnections.targetId, targetId),
-            eq(schema.memoryConnections.relationship, 'contradicts')
-          )
-        );
-      // Also check reverse direction
-      await db
-        .delete(schema.memoryConnections)
-        .where(
-          and(
-            eq(schema.memoryConnections.sourceId, targetId),
-            eq(schema.memoryConnections.targetId, sourceId),
-            eq(schema.memoryConnections.relationship, 'contradicts')
-          )
-        );
+      db.transaction((tx) => {
+        if (archivedId) {
+          tx.update(schema.memories)
+            .set({ archivedAt: new Date().toISOString() })
+            .where(eq(schema.memories.id, archivedId))
+            .run();
+
+          tx.delete(schema.memoryConnections)
+            .where(
+              or(
+                eq(schema.memoryConnections.sourceId, archivedId),
+                eq(schema.memoryConnections.targetId, archivedId)
+              )
+            )
+            .run();
+        }
+
+        // Drop the contradicts edge in both directions. Archiving already prunes
+        // any edge touching the loser, but this also covers the case where no
+        // memory was archived.
+        for (const [a, b] of [[sourceId, targetId], [targetId, sourceId]] as const) {
+          tx.delete(schema.memoryConnections)
+            .where(
+              and(
+                eq(schema.memoryConnections.sourceId, a),
+                eq(schema.memoryConnections.targetId, b),
+                eq(schema.memoryConnections.relationship, 'contradicts')
+              )
+            )
+            .run();
+        }
+      });
+
+      // In-memory state and events only after the durable write succeeded.
+      if (archivedId) {
+        this.vectorSearch.remove(archivedId);
+        this.graph.removeNode(archivedId);
+        this.webhookManager.fire('forgotten', { id: archivedId });
+        void this.pluginRegistry.runHook('onForget', { memoryId: archivedId });
+      }
     }
 
     return { resolved: true, archivedId, keptId };
