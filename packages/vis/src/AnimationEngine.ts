@@ -18,9 +18,19 @@ export class AnimationEngine {
   private decayRate: number;
   private listeners: ActivationCallback[] = [];
   private frameTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Timers scheduled by triggerWave, tracked so stop() can cancel them. */
+  private waveTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** True from the moment a tick is scheduled/running until the loop ends. */
+  private running = false;
   private readonly TICK_MS = 16; // ~60fps
 
   constructor(decayRate: number = 0.05) {
+    // A non-positive rate never reaches <= 0, so activations never drain: the
+    // loop would reschedule forever (burning CPU) and a negative rate grows
+    // activation toward Infinity.
+    if (!Number.isFinite(decayRate) || decayRate <= 0) {
+      throw new Error(`AnimationEngine decayRate must be a positive number (got ${decayRate})`);
+    }
     this.decayRate = decayRate;
   }
 
@@ -39,10 +49,15 @@ export class AnimationEngine {
    */
   triggerWave(path: string[], baseActivation: number = 1.0, delayMs: number = 50): void {
     path.forEach((id, index) => {
-      setTimeout(() => {
+      // Handles are tracked: previously a pending wave timer could fire after
+      // stop(), restart the decay loop and keep invoking listeners long after
+      // the consumer (e.g. an unmounted React component) had torn down.
+      const timer = setTimeout(() => {
+        this.waveTimers.delete(timer);
         const decayedActivation = baseActivation * Math.pow(0.7, index);
         this.trigger(id, decayedActivation);
       }, index * delayMs);
+      this.waveTimers.add(timer);
     });
   }
 
@@ -59,18 +74,26 @@ export class AnimationEngine {
     return this.activations.get(neuronId) ?? 0;
   }
 
-  /** Stop the animation loop. */
+  /** Stop the animation loop and cancel any pending wave timers. */
   stop(): void {
     if (this.frameTimer) {
       clearTimeout(this.frameTimer);
       this.frameTimer = null;
     }
+    for (const timer of this.waveTimers) clearTimeout(timer);
+    this.waveTimers.clear();
+    this.running = false;
   }
 
   private ensureRunning(): void {
-    if (!this.frameTimer) {
-      this.tick();
-    }
+    // Guard on `running`, not on frameTimer. tick() only assigns frameTimer at
+    // its END — after invoking listeners — so a listener calling trigger()
+    // (the documented "activation propagates to neighbours" behaviour) re-entered
+    // tick() recursively and each unwind spawned another setTimeout chain, all
+    // but the last orphaned and uncancellable by stop().
+    if (this.running) return;
+    this.running = true;
+    this.tick();
   }
 
   private tick(): void {
@@ -78,7 +101,9 @@ export class AnimationEngine {
     const now = Date.now();
 
     for (const [id, activation] of this.activations) {
-      const decayed = activation - this.decayRate;
+      // Clamp so a caller-supplied activation can never drive emitted values
+      // out of the documented 0..1 range.
+      const decayed = Math.min(1, activation) - this.decayRate;
       if (decayed <= 0) {
         this.activations.delete(id);
         events.push({ neuronId: id, activation: 0, timestamp: now });
@@ -94,10 +119,15 @@ export class AnimationEngine {
       }
     }
 
+    // Always clear the previous handle before assigning a new one so exactly
+    // one timer can ever be live.
+    if (this.frameTimer) clearTimeout(this.frameTimer);
+
     if (this.activations.size > 0) {
       this.frameTimer = setTimeout(() => this.tick(), this.TICK_MS);
     } else {
       this.frameTimer = null;
+      this.running = false;
     }
   }
 }

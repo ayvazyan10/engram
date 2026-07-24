@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { brain } from '../index.js';
 
 export const graphRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/graph/:id — get connections for a memory node
@@ -20,6 +21,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
       handler: async (req, reply) => {
         const db = getDb();
         const { id } = req.params;
+        const depth = req.query.depth ?? 2;
 
         // Get the root node
         const [rootMemory] = await db
@@ -33,34 +35,60 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
           return { error: 'Memory not found' };
         }
 
-        // Get direct connections
-        const connections = await db
-          .select()
-          .from(schema.memoryConnections)
-          .where(eq(schema.memoryConnections.sourceId, id));
+        // BFS to the requested depth. The previous implementation validated
+        // `depth` but never read it (always depth 1) and matched only edges
+        // where the node was the SOURCE — bidirectional edges are persisted as a
+        // single row, so every inbound connection (including auto-links) was
+        // invisible.
+        const visited = new Set<string>([id]);
+        const collected = new Map<string, typeof schema.memoryConnections.$inferSelect>();
+        let frontier: string[] = [id];
 
-        // Get connected node details
-        const connectedIds = connections.map((c) => c.targetId);
-        const connectedNodes = [];
-
-        for (const nodeId of connectedIds) {
-          const [node] = await db
+        for (let level = 0; level < depth && frontier.length > 0; level++) {
+          const edges = await db
             .select()
-            .from(schema.memories)
-            .where(eq(schema.memories.id, nodeId))
-            .limit(1);
-          if (node) connectedNodes.push(node);
+            .from(schema.memoryConnections)
+            .where(
+              or(
+                inArray(schema.memoryConnections.sourceId, frontier),
+                inArray(schema.memoryConnections.targetId, frontier)
+              )
+            );
+
+          const next: string[] = [];
+          for (const edge of edges) {
+            collected.set(edge.id, edge);
+            for (const endpoint of [edge.sourceId, edge.targetId]) {
+              if (!visited.has(endpoint)) {
+                visited.add(endpoint);
+                next.push(endpoint);
+              }
+            }
+          }
+          frontier = next;
         }
+
+        // One query for all neighbours instead of one per edge.
+        const neighborIds = [...visited].filter((v) => v !== id);
+        const neighbors = neighborIds.length
+          ? await db
+              .select()
+              .from(schema.memories)
+              .where(and(inArray(schema.memories.id, neighborIds), isNull(schema.memories.archivedAt)))
+          : [];
 
         return {
           node: rootMemory,
-          connections: connections.map((c) => ({
+          connections: [...collected.values()].map((c) => ({
             id: c.id,
+            // sourceId is part of the documented response shape and the web
+            // client's type; it was previously omitted.
+            sourceId: c.sourceId,
             targetId: c.targetId,
             relationship: c.relationship,
             strength: c.strength,
           })),
-          neighbors: connectedNodes,
+          neighbors,
         };
       },
     }
@@ -110,6 +138,18 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
       };
 
       await db.insert(schema.memoryConnections).values(connection);
+
+      // Mirror into the in-memory graph. Recall traverses that graph, and it is
+      // only loaded once at startup — a DB-only insert was invisible to recall
+      // for the entire process lifetime even though GET /graph/:id showed it.
+      brain.getGraph().addEdge({
+        sourceId: connection.sourceId,
+        targetId: connection.targetId,
+        relationship: connection.relationship,
+        strength: connection.strength,
+        bidirectional: connection.bidirectional,
+      });
+
       reply.code(201);
       return connection;
     },

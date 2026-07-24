@@ -814,6 +814,15 @@ export class NeuralBrain {
   }
 
   /**
+   * Get the in-memory knowledge graph. Callers that insert a connection row
+   * directly must add the edge here too — recall traverses this graph, which is
+   * only loaded from the DB at startup.
+   */
+  getGraph(): KnowledgeGraph {
+    return this.graph;
+  }
+
+  /**
    * Build reflection tasks for the AI connected to Engram to reason over.
    * Engram selects and summarizes the memories and returns prompts; the AI
    * produces the insights and writes them back via {@link storeReflection}.
