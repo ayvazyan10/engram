@@ -16,7 +16,7 @@ export default function NeuronMesh({ neuron, theme }: Props) {
   const glowRef  = useRef<THREE.Mesh>(null);
   const ringRef  = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
-  const { selectedNeuronId, activeNeuronIds, contradictionPairs, selectNeuron } = useNeuralStore();
+  const { selectedNeuronId, activeNeuronIds, contradictionIds, selectNeuron } = useNeuralStore();
   const { highlightedIds, searchQuery } = useMemoryStore();
 
   const isSelected = selectedNeuronId === neuron.id;
@@ -24,9 +24,7 @@ export default function NeuronMesh({ neuron, theme }: Props) {
   const isSearchActive = searchQuery.length > 0 && highlightedIds.size > 0;
   const isHighlighted  = highlightedIds.has(neuron.id);
   const isDimmed       = isSearchActive && !isHighlighted && !isSelected;
-  const hasContradiction = contradictionPairs.some(
-    (p) => p.sourceId === neuron.id || p.targetId === neuron.id
-  );
+  const hasContradiction = contradictionIds.has(neuron.id);
 
   const colorInt = theme.colors[neuron.type as keyof typeof theme.colors] ?? 0x94a3b8;
   const colorHex = '#' + colorInt.toString(16).padStart(6, '0');

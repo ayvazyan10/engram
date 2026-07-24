@@ -3,13 +3,22 @@ import { brain, realtime } from '../index.js';
 
 export const contradictionRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/contradictions — list all unresolved contradictions
-  app.get('/contradictions', {
+  app.get<{ Querystring: { limit?: number } }>('/contradictions', {
     schema: {
       tags: ['contradictions'],
-      summary: 'List all unresolved contradictions',
+      summary: 'List unresolved contradictions',
+      querystring: {
+        type: 'object',
+        properties: {
+          // Bounded: an established brain can hold thousands of contradicts
+          // edges, and returning all of them made the dashboard flag nearly
+          // every neuron.
+          limit: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
+        },
+      },
     },
-    handler: async () => {
-      const contradictions = await brain.getContradictions();
+    handler: async (req) => {
+      const contradictions = await brain.getContradictions(undefined, req.query.limit ?? 200);
       return {
         count: contradictions.length,
         contradictions: contradictions.map((c) => ({

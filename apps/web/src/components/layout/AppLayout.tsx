@@ -72,16 +72,21 @@ export default function AppLayout() {
   useEffect(() => {
     if (records.length === 0 || viewMode !== '3d') return;
     const top = [...records].sort((a, b) => b.importance - a.importance).slice(0, 30);
-    Promise.all(top.map((m) => api.getGraph(m.id).catch(() => null))).then((graphs) => {
-      const all: Parameters<typeof setConnections>[0] = [];
+    Promise.all(top.map((m) => api.getGraph(m.id, 1).catch(() => null))).then((graphs) => {
+      // The route returns edges in both directions, so the same edge arrives
+      // once per endpoint — dedupe by id and drop self-loops.
+      const byId = new Map<string, Parameters<typeof setConnections>[0][number]>();
       graphs.forEach((g, i) => {
         if (!g) return;
         const src = top[i]!.id;
         g.connections?.forEach((c) => {
-          all.push({ id: c.id, sourceId: c.sourceId || src, targetId: c.targetId, relationship: c.relationship, strength: c.strength });
+          const sourceId = c.sourceId || src;
+          if (!c.targetId || sourceId === c.targetId) return;
+          if (byId.has(c.id)) return;
+          byId.set(c.id, { id: c.id, sourceId, targetId: c.targetId, relationship: c.relationship, strength: c.strength });
         });
       });
-      setConnections(all);
+      setConnections([...byId.values()]);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [records.length > 0, viewMode]);

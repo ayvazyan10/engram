@@ -52,8 +52,10 @@ export const api = {
       body: JSON.stringify({ query, topK, types }),
     }),
 
-  getGraph: (id: string) =>
-    request<{ node: unknown; connections: Array<{ id: string; sourceId: string; targetId: string; relationship: string; strength: number }>; neighbors: unknown[] }>(`/graph/${id}`),
+  // depth is explicit: the server defaults to 2, and the 3D view only draws
+  // direct connections — a 2-hop neighbourhood per node produced ~12x the edges.
+  getGraph: (id: string, depth = 1) =>
+    request<{ node: unknown; connections: Array<{ id: string; sourceId: string; targetId: string; relationship: string; strength: number }>; neighbors: unknown[] }>(`/graph/${id}?depth=${depth}`),
 
   // Tags
   addTag: (memoryId: string, tag: string) =>

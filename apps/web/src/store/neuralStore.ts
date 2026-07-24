@@ -40,6 +40,12 @@ interface NeuralState {
   activeNeuronIds: Set<string>;
   isConnected: boolean;
   contradictionPairs: ContradictionPair[];
+  /**
+   * Ids involved in any contradiction. Derived from contradictionPairs so the
+   * renderer can test membership in O(1) — NeuronMesh used to scan every pair
+   * for every neuron on every render (531 x 1511 comparisons in a real brain).
+   */
+  contradictionIds: Set<string>;
 
   setNeurons: (neurons: NeuronNode[]) => void;
   /** Set target positions for smooth transitions (doesn't change current x/y/z) */
@@ -66,6 +72,7 @@ export const useNeuralStore = create<NeuralState>((set) => ({
   activeNeuronIds: new Set(),
   isConnected: false,
   contradictionPairs: [],
+  contradictionIds: new Set(),
 
   setNeurons: (neurons) => set({ neurons }),
 
@@ -112,7 +119,11 @@ export const useNeuralStore = create<NeuralState>((set) => ({
     }),
 
   setConnections: (connections) => set({ connections }),
-  setContradictionPairs: (pairs) => set({ contradictionPairs: pairs }),
+  setContradictionPairs: (pairs) =>
+    set({
+      contradictionPairs: pairs,
+      contradictionIds: new Set(pairs.flatMap((p) => [p.sourceId, p.targetId])),
+    }),
   selectNeuron: (id) => set({ selectedNeuronId: id }),
 
   activateNeuron: (id) =>

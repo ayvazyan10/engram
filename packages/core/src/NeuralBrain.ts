@@ -1415,7 +1415,7 @@ export class NeuralBrain {
   /**
    * Get all unresolved contradictions (memories linked by 'contradicts' edges).
    */
-  async getContradictions(namespace?: string): Promise<Array<{
+  async getContradictions(namespace?: string, limit?: number): Promise<Array<{
     edge: { id: string; sourceId: string; targetId: string; strength: number; metadata: string };
     source: Memory;
     target: Memory;
@@ -1456,6 +1456,8 @@ export class NeuralBrain {
       // Namespace filtering
       const ns = namespace ?? this.config.namespace;
       if (ns && source.namespace !== ns && target.namespace !== ns) continue;
+
+      if (limit !== undefined && results.length >= limit) break;
 
       results.push({
         edge: {
