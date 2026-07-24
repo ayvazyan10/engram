@@ -1341,6 +1341,24 @@ export class NeuralBrain {
       onProgress?.(progress);
     }
 
+    // Persist the refreshed vectors now. Until shutdown writes them, the cached
+    // index on disk still holds the pre-re-embed vectors, and deserialize() only
+    // validates dimension — so a restart (or another process saving its own
+    // index over this file) would silently resurrect them.
+    //
+    // Checking the path first (as shutdown and rebuildIndex do) keeps the catch
+    // narrow: it covers a failed write, not a store that simply runs without
+    // persistence.
+    if (progress.processed > 0 && this.resolveIndexPath()) {
+      try {
+        this.saveIndex();
+      } catch {
+        // Best-effort — a full disk or a read-only path must not fail a
+        // re-embed that already succeeded. SQLite and the in-memory index hold
+        // the correct vectors; shutdown will retry the write.
+      }
+    }
+
     progress.durationMs = Date.now() - start;
     return progress;
   }

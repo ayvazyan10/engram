@@ -19,7 +19,8 @@ import { eq } from 'drizzle-orm';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
-import { getEmbeddingModelId } from '../../embedding/Embedder.js';
+import { getEmbeddingModelId, unpackFP16 } from '../../embedding/Embedder.js';
+import { VectorSearch } from '../../retrieval/VectorSearch.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -290,6 +291,127 @@ describe('Embedding — re-embed pipeline', () => {
     });
 
     expect(progressCalls.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── Re-Embed Index Persistence ──────────────────────────────────────────────
+
+describe('Embedding — re-embed persists the index', () => {
+  let brain: NeuralBrain;
+  let dbPath: string;
+  let indexPath: string;
+
+  beforeEach(async () => {
+    dbPath = createTestDb();
+    indexPath = dbPath + '.index';
+    brain = new NeuralBrain({ dbPath, indexPath, defaultSource: 'test' });
+    await brain.initialize();
+  });
+
+  afterEach(() => {
+    brain.shutdown();
+    closeDb();
+    cleanup(dbPath);
+    try { fs.unlinkSync(indexPath); } catch {}
+  });
+
+  it('writes refreshed vectors to disk without waiting for shutdown', async () => {
+    const { memory } = await brain.store({ content: 'Kubernetes operators reconcile cluster state' });
+
+    // Freeze the current vectors on disk, then change the stored content so the
+    // recomputed embedding is genuinely different from the one just persisted.
+    brain.saveIndex();
+    const before = fs.readFileSync(indexPath);
+
+    const db = getDb();
+    await db
+      .update(schema.memories)
+      .set({ content: 'Sourdough starter needs daily feeding', embeddingModel: 'old-model/v1' })
+      .where(eq(schema.memories.id, memory.id));
+
+    const result = await brain.reEmbed(true, 10);
+    expect(result.processed).toBe(1);
+
+    expect(fs.readFileSync(indexPath).equals(before)).toBe(false);
+
+    // A process restarting from this file must see what SQLite now holds.
+    const [row] = await db.select().from(schema.memories).where(eq(schema.memories.id, memory.id));
+    const stored = unpackFP16(Buffer.from(row!.embedding as ArrayBuffer));
+
+    const reloaded = new VectorSearch(stored.length);
+    reloaded.loadFromDisk(indexPath);
+    const hits = reloaded.search(stored, 1, 0.0);
+
+    expect(hits[0]!.id).toBe(memory.id);
+    expect(hits[0]!.similarity).toBeGreaterThan(0.99);
+  });
+
+  it('leaves the index alone when nothing needed re-embedding', async () => {
+    await brain.store({ content: 'Already current memory' });
+    brain.saveIndex();
+    const before = fs.readFileSync(indexPath);
+
+    const result = await brain.reEmbed(true, 10);
+    expect(result.total).toBe(0);
+
+    expect(fs.readFileSync(indexPath).equals(before)).toBe(true);
+  });
+
+  it('a restarted brain reads the refreshed vectors, not the cached ones', async () => {
+    const { memory } = await brain.store({ content: 'Postgres vacuum reclaims dead tuples' });
+    brain.saveIndex();
+
+    const db = getDb();
+    await db
+      .update(schema.memories)
+      .set({ content: 'Alpine hiking trails close in winter', embeddingModel: 'old-model/v1' })
+      .where(eq(schema.memories.id, memory.id));
+
+    await brain.reEmbed(true, 10);
+
+    // Drop the process without a graceful shutdown — that is the case the fix is
+    // for. Calling shutdown() here would persist the index itself and mask it.
+    closeDb();
+
+    // A second brain over the same files takes the cached-index path on init.
+    const restarted = new NeuralBrain({ dbPath, indexPath, defaultSource: 'test' });
+    await restarted.initialize();
+    expect(restarted.getIndexStatus().loadedFrom).toBe('disk');
+
+    const hits = await restarted.search('winter hiking in the mountains', { topK: 1 });
+
+    expect(hits[0]!.id).toBe(memory.id);
+    restarted.shutdown();
+
+    // afterEach shuts down `brain` again — make that a no-op, not a double free.
+    brain = restarted;
+  });
+
+  it('survives a re-embed when the index cannot be written', async () => {
+    await brain.store({ content: 'Memory stored before the path breaks' });
+
+    const db = getDb();
+    await db.update(schema.memories).set({ embeddingModel: 'old-model/v1' });
+
+    // Point persistence at a path that cannot be created: an existing *file*
+    // stands where the directory would have to be.
+    const blocker = dbPath + '.blocked';
+    fs.writeFileSync(blocker, 'not a directory');
+    const broken = new NeuralBrain({
+      dbPath,
+      indexPath: path.join(blocker, 'nested', 'index.bin'),
+      defaultSource: 'test',
+    });
+    await broken.initialize();
+
+    const result = await broken.reEmbed(true, 10);
+
+    expect(result.processed).toBe(1);
+    expect(result.failed).toBe(0);
+
+    broken.shutdown();
+    try { fs.unlinkSync(blocker); } catch {}
+    brain = broken;
   });
 });
 

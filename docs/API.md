@@ -681,6 +681,8 @@ Re-generate embeddings for all memories. Useful after switching embedding models
 
 Progress is reported via the `embedding:progress` WebSocket event.
 
+Once the run finishes, the refreshed vectors are written to the persisted index file, so a restart cannot fall back to the pre-re-embed vectors. When several processes share one `ENGRAM_DB_PATH` they also share the default `<db>.index` path — give each its own `ENGRAM_INDEX_PATH` so they do not overwrite each other's index.
+
 ---
 
 ### `POST /api/embeddings/backfill`

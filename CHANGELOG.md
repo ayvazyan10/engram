@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Fixed
+
+- **`@engram-ai-memory/core`** — `reEmbed()` updated SQLite and the in-memory index but never wrote the vector index to disk, leaving that to `shutdown()`. Since `deserialize()` validates only the dimension, a restart — or another process persisting its own index over the same file — silently resurrected the pre-re-embed vectors. Refreshed vectors are now saved as soon as the run finishes (best-effort: an unconfigured path or an unwritable disk no longer fails the re-embed). Note that processes sharing one `ENGRAM_DB_PATH` still default to a single `<db>.index` file; give each its own `ENGRAM_INDEX_PATH` when running more than one.
+
 ---
 
 ## [0.3.2] — 2026-07-25
