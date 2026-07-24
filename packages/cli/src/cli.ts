@@ -459,10 +459,15 @@ program
 
       const settings = readJson(CLAUDE_SETTINGS);
       for (const h of CLAUDE_HOOKS) {
-        const installed = fs.existsSync(path.join(HOOKS_DIR, h.file));
-        const registered = (settings.hooks?.[h.event] || []).some(
-          (e: { hooks?: Array<{ command?: string }> }) => (e.hooks || []).some((x) => x.command?.endsWith(h.file)));
-        if (installed && registered) ok(`Claude Code hook: ${h.event} (${h.file})`);
+        // Find the registered command for this event (by script basename, so a
+        // custom install location still counts), then confirm the file exists.
+        let registeredPath: string | undefined;
+        for (const e of (settings.hooks?.[h.event] || [])) {
+          for (const x of (e.hooks || [])) {
+            if (typeof x.command === 'string' && path.basename(x.command) === h.file) registeredPath = x.command;
+          }
+        }
+        if (registeredPath && fs.existsSync(registeredPath)) ok(`Claude Code hook: ${h.event} (${h.file})`);
         else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
       }
     }
