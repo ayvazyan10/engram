@@ -88,7 +88,7 @@ The AI responds with awareness of everything it has ever learned. After the exch
 
 ```
 Claude Code    ──MCP──────────→ ┐
-Claude Desktop ──extension────→ │  Engram  →  SQLite / PostgreSQL
+Claude Desktop ──extension────→ │  Engram  →  SQLite
 Ollama         ──proxy────────→ │  REST :4901
 OpenClaw       ──REST─────────→ │  WebSocket :4901/neural
 Any app        ──REST─────────→ │
@@ -348,6 +348,8 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
+| `ENGRAM_DATABASE` | `sqlite` | Storage backend. **`postgresql` is not implemented yet** — Engram ships no PostgreSQL migrations, so selecting it fails fast with an explanatory error instead of breaking on the first write. |
+| `ENGRAM_PG_SCHEMA_READY` | `false` | Escape hatch: set `true` only if you provisioned a compatible PostgreSQL schema yourself. Unsupported. |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
 | `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
@@ -425,6 +427,7 @@ Key areas where help is especially welcome:
 - **New adapters** — LM Studio, llama.cpp, Anthropic API, OpenAI API
 - **Mobile / browser** — lightweight browser-side memory client
 - **Multi-modal embeddings** — images, audio alongside text
+- **PostgreSQL backend** — the adapter exists but ships no schema/migrations (the Drizzle schema is SQLite-only), so it currently refuses to start; see `ENGRAM_DATABASE` below
 - **pgvector native search** — use PostgreSQL's vector index instead of in-memory HNSW
 
 ---

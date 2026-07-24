@@ -292,6 +292,30 @@ function createPostgresConnection(url: string): DatabaseConnection {
     );
   }
 
+  // The PostgreSQL backend has no schema of its own: the Drizzle schema is
+  // sqliteTable-only and drizzle.config targets dialect 'sqlite', so no PG
+  // migrations are generated and the base tables are never created. Previously
+  // this function returned a healthy-looking connection that failed on the very
+  // first store with `relation "memories" does not exist` — refuse loudly
+  // instead of handing back something known-broken.
+  if (process.env['ENGRAM_PG_SCHEMA_READY'] !== 'true') {
+    throw new Error(
+      [
+        'PostgreSQL backend is not implemented yet.',
+        '',
+        'Engram ships no PostgreSQL migrations — the Drizzle schema is SQLite-only',
+        '(sqliteTable) and drizzle.config.ts targets dialect "sqlite", so the',
+        'memories / memory_connections / sessions / context_assemblies tables are',
+        'never created. Connecting would appear to succeed and then fail on the',
+        'first store with: relation "memories" does not exist.',
+        '',
+        'Use the default SQLite backend (unset ENGRAM_DATABASE), or — if you have',
+        'provisioned a compatible PostgreSQL schema yourself — set',
+        'ENGRAM_PG_SCHEMA_READY=true to proceed at your own risk.',
+      ].join('\n')
+    );
+  }
+
   const pool = new pg.Pool({ connectionString: url });
   const db = drizzlePg.drizzle(pool, { schema });
 
@@ -322,38 +346,40 @@ function createPostgresConnection(url: string): DatabaseConnection {
 }
 
 function runPostgresMigrations(pool: any): void {
-  // Ensure tables exist (PostgreSQL uses different syntax)
-  pool.query(`
-    -- Add namespace column if missing
-    DO $$ BEGIN
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS namespace TEXT;
-    EXCEPTION WHEN undefined_table THEN NULL; END $$;
+  // Each statement runs on its own. Previously these were a single
+  // multi-statement query, so the trailing CREATE INDEX failing on a fresh
+  // database aborted the implicit transaction and rolled back everything before
+  // it — invisibly, because the whole thing was wrapped in `.catch(() => {})`.
+  const statements = [
+    `DO $$ BEGIN
+       ALTER TABLE memories ADD COLUMN IF NOT EXISTS namespace TEXT;
+     EXCEPTION WHEN undefined_table THEN NULL; END $$`,
+    `DO $$ BEGIN
+       ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_model TEXT;
+     EXCEPTION WHEN undefined_table THEN NULL; END $$`,
+    `CREATE TABLE IF NOT EXISTS webhooks (
+       id TEXT PRIMARY KEY,
+       url TEXT NOT NULL,
+       secret TEXT,
+       events TEXT NOT NULL DEFAULT '[]',
+       active BOOLEAN NOT NULL DEFAULT true,
+       description TEXT,
+       metadata TEXT NOT NULL DEFAULT '{}',
+       created_at TEXT NOT NULL DEFAULT (NOW()::TEXT),
+       last_triggered_at TEXT,
+       fail_count INTEGER NOT NULL DEFAULT 0
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active)`,
+    `CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)`,
+  ];
 
-    -- Add embedding_model column if missing
-    DO $$ BEGIN
-      ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_model TEXT;
-    EXCEPTION WHEN undefined_table THEN NULL; END $$;
-
-    -- Create webhooks table if missing
-    CREATE TABLE IF NOT EXISTS webhooks (
-      id TEXT PRIMARY KEY,
-      url TEXT NOT NULL,
-      secret TEXT,
-      events TEXT NOT NULL DEFAULT '[]',
-      active BOOLEAN NOT NULL DEFAULT true,
-      description TEXT,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (NOW()::TEXT),
-      last_triggered_at TEXT,
-      fail_count INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active);
-
-    -- Create namespace index if missing
-    CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace);
-  `).catch(() => {
-    // Tables may not exist yet on first run — drizzle migrations handle initial schema
-  });
+  for (const sql of statements) {
+    pool.query(sql).catch((err: unknown) => {
+      // Surface the failure instead of discarding it.
+      const label = sql.trim().split('\n')[0]?.slice(0, 60);
+      console.error(`[engram] PostgreSQL migration failed (${label}...):`, err);
+    });
+  }
 
   // Try to enable pgvector
   pool.query('CREATE EXTENSION IF NOT EXISTS vector').catch(() => {

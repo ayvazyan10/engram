@@ -1,7 +1,10 @@
 version: '3.9'
 
 services:
-  # PostgreSQL with pgvector extension for production-like dev
+  # PostgreSQL with pgvector — NOT currently usable as an Engram backend.
+  # Engram ships no PostgreSQL migrations (the Drizzle schema is SQLite-only),
+  # so ENGRAM_DATABASE=postgresql fails fast by design. This service is kept
+  # only for local experimentation; the api service below uses SQLite.
   postgres:
     image: pgvector/pgvector:pg16
     ports:
