@@ -9,6 +9,10 @@ export const indexRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Get vector index status — how it was loaded, entry count, persistence info',
     },
     handler: async () => {
+      // Reconcile first: without it this reported whatever this process loaded
+      // at startup, so two engram processes over one database answered with
+      // different entry counts for the same file.
+      await brain.syncIndexFromStore();
       return brain.getIndexStatus();
     },
   });

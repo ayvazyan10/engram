@@ -720,16 +720,23 @@ server.tool(
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async () => {
     await ensureInitialized();
+    // Reconcile first, so this reports the index as it stands rather than as it
+    // was loaded — several engram processes share one database.
+    await brain.syncIndexFromStore();
     const status = brain.getIndexStatus();
+    const origin = status.loadedFrom === 'disk'
+      ? `Index loaded from disk cache (${status.incrementalCount} added incrementally, ${status.initDurationMs}ms)`
+      : `Index built from database (${status.initDurationMs}ms)`;
+    const synced = status.externalSyncCount > 0
+      ? `; ${status.externalAdded} added and ${status.externalRemoved} dropped across ${status.externalSyncCount} sync(s) with other processes`
+      : '';
     return {
       content: [
         {
           type: 'text',
           text: JSON.stringify({
             ...status,
-            message: status.loadedFrom === 'disk'
-              ? `Index loaded from disk cache (${status.entryCount} entries, ${status.incrementalCount} added incrementally, ${status.initDurationMs}ms)`
-              : `Index built from database (${status.entryCount} entries, ${status.initDurationMs}ms)`,
+            message: `${status.entryCount} entries. ${origin}${synced}`,
           }),
         },
       ],

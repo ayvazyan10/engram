@@ -704,20 +704,38 @@ Generate embeddings only for memories that are missing them.
 
 ### `GET /api/index/status`
 
-Check the status of the HNSW vector index.
+Check the status of the vector index.
+
+Reconciles with memories committed by other processes before answering, so the
+entry count reflects the index as it stands rather than as it was loaded at
+startup.
 
 **Response `200`**
 ```json
 {
-  "type": "hnsw",
-  "size": 101,
-  "dimensions": 384,
-  "efConstruction": 200,
-  "M": 16,
-  "lastRebuilt": "2026-03-24T03:00:00.000Z",
-  "savedToDisk": true
+  "loadedFrom": "disk",
+  "entryCount": 568,
+  "dimension": 384,
+  "indexPath": "/data/engram.db.index",
+  "indexFileExists": true,
+  "incrementalCount": 0,
+  "initDurationMs": 62,
+  "externalSyncCount": 1,
+  "externalAdded": 27,
+  "externalRemoved": 0,
+  "externalSkipped": 0
 }
 ```
+
+| Field | Meaning |
+|---|---|
+| `loadedFrom` | `disk` (cache hit), `database` (full rebuild) or `not_loaded` |
+| `entryCount` | Vectors in the index right now |
+| `incrementalCount` | Memories added at startup on top of the disk cache |
+| `initDurationMs` | How long initialization took |
+| `externalSyncCount` | Reconciles that pulled in another process's work |
+| `externalAdded` / `externalRemoved` | Entries added / dropped by those reconciles |
+| `externalSkipped` | Memories left unindexed because their vector came from a different embedding model — non-zero means a re-embed is due |
 
 ---
 

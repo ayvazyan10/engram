@@ -34,6 +34,18 @@ export interface DatabaseConnection {
   hasPgVector: boolean;
   /** Force WAL checkpoint so reads see external writes (SQLite only, no-op on PG) */
   walCheckpoint: () => void;
+  /**
+   * A counter that changes whenever ANOTHER connection commits, and never for
+   * this connection's own writes (SQLite `PRAGMA data_version`).
+   *
+   * That asymmetry is exactly what callers holding derived in-memory state need:
+   * their own writes already updated it, so only a change here means somebody
+   * else's data has arrived and the derived state is stale.
+   *
+   * Returns null when the backend cannot report it (PostgreSQL), meaning
+   * "unknown" — callers must not read that as "nothing changed".
+   */
+  dataVersion: () => number | null;
 }
 
 // Singleton
@@ -129,6 +141,10 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
     hasPgVector: false,
     walCheckpoint: () => {
       sqlite.pragma('wal_checkpoint(PASSIVE)');
+    },
+    dataVersion: () => {
+      const value = sqlite.pragma('data_version', { simple: true });
+      return typeof value === 'number' ? value : null;
     },
   };
 }
@@ -340,6 +356,10 @@ function createPostgresConnection(url: string): DatabaseConnection {
     },
     get hasPgVector() { return hasPgVector; },
     walCheckpoint: () => {},
+    // No cheap equivalent of PRAGMA data_version here. Reporting "unknown"
+    // rather than a fabricated constant keeps callers from concluding that
+    // nothing has changed.
+    dataVersion: () => null,
   };
 
   return connection;

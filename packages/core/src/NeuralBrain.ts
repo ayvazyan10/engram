@@ -14,7 +14,7 @@
 import fs from 'fs';
 import { and, desc, eq, inArray, isNull, like, lt, or } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { closeDb, getDb, schema, walCheckpoint } from './db/index.js';
+import { closeDb, getDataVersion, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   EMBEDDING_DIMENSION, embed, embedBatch, packFP16, unpackFP16,
@@ -146,7 +146,13 @@ export interface ReEmbedProgress {
 export interface IndexStatus {
   /** How the index was loaded on last init */
   loadedFrom: 'disk' | 'database' | 'not_loaded';
-  /** Number of entries in the vector index */
+  /**
+   * Number of entries in the vector index right now.
+   *
+   * Live, not a snapshot from init: two processes over one database reported
+   * different counts for the same file because each kept answering with what it
+   * had loaded at startup.
+   */
   entryCount: number;
   /** Embedding dimension */
   dimension: number;
@@ -154,10 +160,22 @@ export interface IndexStatus {
   indexPath: string | null;
   /** Whether a persisted index file exists on disk */
   indexFileExists: boolean;
-  /** How many memories were added incrementally (0 if full rebuild) */
+  /** How many memories were added incrementally at init (0 if full rebuild) */
   incrementalCount: number;
   /** Init duration in milliseconds */
   initDurationMs: number;
+  /** How many reconciles pulled in work committed by another process */
+  externalSyncCount: number;
+  /** Entries added by those reconciles since init */
+  externalAdded: number;
+  /** Entries dropped by those reconciles since init */
+  externalRemoved: number;
+  /**
+   * Memories those reconciles could not index because their vector came from a
+   * different embedding model. Non-zero means `re_embed` is due — the memories
+   * exist and are readable, but no search will surface them.
+   */
+  externalSkipped: number;
 }
 
 export interface TagInfo {
@@ -219,7 +237,23 @@ export class NeuralBrain {
     indexFileExists: false,
     incrementalCount: 0,
     initDurationMs: 0,
+    externalSyncCount: 0,
+    externalAdded: 0,
+    externalRemoved: 0,
+    externalSkipped: 0,
   };
+
+  /**
+   * Database data-version observed at the last reconcile. See
+   * syncIndexFromStore — this is how a write by another process is noticed.
+   */
+  private lastDataVersion: number | null = null;
+
+  /**
+   * In-flight reconcile, shared by concurrent readers so a burst of requests
+   * triggers one pass rather than one per request.
+   */
+  private pendingSync: Promise<number> | null = null;
 
   constructor(config: BrainConfig = {}) {
     this.config = config;
@@ -341,6 +375,10 @@ export class NeuralBrain {
     this.indexStatus.incrementalCount = incrementalCount;
     this.indexStatus.initDurationMs = Date.now() - initStart;
 
+    // Baseline for cross-process reconciles: the index now matches what the
+    // database held at this moment, so only commits after it need catching up.
+    this.lastDataVersion = getDataVersion();
+
     this.initialized = true;
 
     // Fire plugin onStartup hooks
@@ -349,6 +387,153 @@ export class NeuralBrain {
       loadedFrom: this.indexStatus.loadedFrom,
       initDurationMs: this.indexStatus.initDurationMs,
     });
+  }
+
+  /**
+   * Reconcile the in-memory vector index with memories committed by OTHER
+   * processes, and report how many entries changed.
+   *
+   * Engram routinely runs several processes — REST server, MCP server, CLI —
+   * against one SQLite file, each holding its own index built at startup. A
+   * memory stored through one of them landed in SQLite immediately but stayed
+   * unfindable everywhere else until that process restarted: `stats()` counted
+   * it (that reads the database) while `search()` could not see it (that reads
+   * the index).
+   *
+   * Detection is `PRAGMA data_version`, which changes only for commits by other
+   * connections — so this brain's own writes, already indexed by store(), cost
+   * nothing here. When it has not moved, the check is a pragma read and no
+   * query runs at all.
+   *
+   * Idempotent and safe to call on any read path.
+   */
+  async syncIndexFromStore(): Promise<number> {
+    if (!this.initialized) return 0;
+
+    // Join an in-flight pass before looking at the version. Checked the other
+    // way round, a second reader would see the version the running reconcile
+    // has already claimed, conclude there was nothing to do, and search a
+    // half-reconciled index.
+    if (this.pendingSync) return this.pendingSync;
+
+    const version = getDataVersion();
+    // null means the backend cannot report it (PostgreSQL). Reconciling on
+    // every read would cost a full id scan per query, so we stay with the
+    // startup index — the same behaviour as before this method existed.
+    if (version === null || version === this.lastDataVersion) return 0;
+
+    this.pendingSync = this.reconcileIndex(version).finally(() => {
+      this.pendingSync = null;
+    });
+    return this.pendingSync;
+  }
+
+  /** The reconcile itself — see syncIndexFromStore for why and when. */
+  private async reconcileIndex(version: number): Promise<number> {
+    const db = getDb();
+
+    // Claim the version before reading. A commit that lands mid-reconcile then
+    // leaves a version we have not recorded, so the next read tries again —
+    // whereas claiming it afterwards would mark that commit as already handled.
+    this.lastDataVersion = version;
+
+    const liveRows = await db
+      .select({ id: schema.memories.id })
+      .from(schema.memories)
+      .where(isNull(schema.memories.archivedAt));
+
+    const live = new Set(liveRows.map((r) => r.id));
+    const indexed = this.vectorSearch.getIds();
+
+    let removed = 0;
+    for (const id of indexed) {
+      if (!live.has(id)) {
+        this.vectorSearch.remove(id);
+        this.graph.removeNode(id);
+        removed++;
+      }
+    }
+
+    const missing = [...live].filter((id) => !indexed.has(id));
+    let added = 0;
+    let skipped = 0;
+
+    // Chunked: SQLite caps variables per statement, and a process that has been
+    // idle for a while can come back to thousands of new memories.
+    const CHUNK = 400;
+    for (let i = 0; i < missing.length; i += CHUNK) {
+      const rows = await db
+        .select()
+        .from(schema.memories)
+        .where(inArray(schema.memories.id, missing.slice(i, i + CHUNK)));
+
+      for (const memory of rows) {
+        if (memory.embedding) {
+          try {
+            this.vectorSearch.upsert({
+              id: memory.id,
+              vector: unpackFP16(Buffer.from(memory.embedding as ArrayBuffer)),
+              type: memory.type as MemoryType,
+              namespace: memory.namespace ?? undefined,
+            });
+            added++;
+          } catch {
+            // A vector from another embedding model: upsert rejects the
+            // dimension. Skipping keeps one incompatible row from throwing out
+            // of every search — the count below is what makes that visible
+            // rather than silent, and re_embed is the way to clear it.
+            skipped++;
+          }
+        }
+        this.graph.addNode({
+          id: memory.id,
+          type: memory.type as MemoryType,
+          concept: memory.concept ?? undefined,
+        });
+      }
+    }
+
+    // Edges touching the newly arrived nodes, so graph expansion during recall
+    // sees them rather than treating them as isolated. Only edges with a new
+    // endpoint are fetched: addEdge appends without deduplicating, so replaying
+    // edges between two already-known nodes would double them. Edges created
+    // externally between two nodes this process already had are therefore
+    // missed until restart — a narrower gap than the one being closed here, and
+    // one that costs a full adjacency rebuild to close.
+    if (missing.length > 0) {
+      for (let i = 0; i < missing.length; i += CHUNK) {
+        const slice = missing.slice(i, i + CHUNK);
+        const edges = await db
+          .select()
+          .from(schema.memoryConnections)
+          .where(
+            or(
+              inArray(schema.memoryConnections.sourceId, slice),
+              inArray(schema.memoryConnections.targetId, slice)
+            )
+          );
+
+        for (const conn of edges) {
+          this.graph.addEdge({
+            sourceId: conn.sourceId,
+            targetId: conn.targetId,
+            relationship: conn.relationship as RelationshipType,
+            strength: conn.strength,
+            bidirectional: Boolean(conn.bidirectional),
+          });
+        }
+      }
+    }
+
+    const changed = added + removed;
+    if (changed > 0 || skipped > 0) {
+      this.indexStatus.externalSyncCount++;
+      this.indexStatus.externalAdded += added;
+      this.indexStatus.externalRemoved += removed;
+      this.indexStatus.externalSkipped += skipped;
+    }
+
+    return changed;
   }
 
   private defaultImportance(type: string, source: string | null): number {
@@ -569,6 +754,7 @@ export class NeuralBrain {
    */
   async recall(query: string, options?: RecallOptions): Promise<RecallResult> {
     this.assertInitialized();
+    await this.syncIndexFromStore();
     const result = await this.assembler.recall(query, options);
 
     void this.pluginRegistry.runHook('onRecall', {
@@ -590,6 +776,7 @@ export class NeuralBrain {
     options?: RecallOptions
   ): AsyncGenerator<RecallChunk | RecallStreamComplete> {
     this.assertInitialized();
+    await this.syncIndexFromStore();
     yield* this.assembler.recallStream(query, options);
   }
 
@@ -598,6 +785,7 @@ export class NeuralBrain {
    */
   async search(query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
     this.assertInitialized();
+    await this.syncIndexFromStore();
 
     const queryVec = await embed(query);
     const results = this.vectorSearch.search(
@@ -717,6 +905,9 @@ export class NeuralBrain {
   async stats(): Promise<MemoryStats> {
     this.assertInitialized();
     walCheckpoint();
+    // Otherwise total (read from the database) and indexSize (read from memory)
+    // disagree whenever another process has written.
+    await this.syncIndexFromStore();
     const db = getDb();
 
     const statsConditions = [isNull(schema.memories.archivedAt)];
@@ -1752,8 +1943,20 @@ export class NeuralBrain {
   }
 
   /** Get the current index status. */
+  /**
+   * Current index status.
+   *
+   * `entryCount` and `dimension` are read from the live index rather than
+   * replayed from init, so this never reports a count the index stopped having.
+   * The reported count is still only as fresh as the last reconcile — await
+   * syncIndexFromStore() first for a caller that needs it exact.
+   */
   getIndexStatus(): IndexStatus {
-    return { ...this.indexStatus };
+    return {
+      ...this.indexStatus,
+      entryCount: this.vectorSearch.size,
+      dimension: this.vectorSearch.dimension,
+    };
   }
 
   /** Resolve the index file path from config or env. */

@@ -409,9 +409,12 @@ The vector index can be persisted to disk for fast startup. Instead of re-scanni
 - **Startup:** If the index file exists, the index is deserialized from disk. Any memories in the database that are not in the cached index are added incrementally.
 - **Shutdown:** The index is serialized and written to the index file automatically.
 - **Incremental sync:** Only new memories (by ID) are embedded and added after loading from cache.
+- **Cross-process sync:** Every read path (`search`, `recall`, `stats`, `GET /api/index/status`, the `index_status` MCP tool) first reconciles the in-memory index with memories committed by *other* processes, adding what is missing and dropping what was archived. Detection uses SQLite's `PRAGMA data_version`, which moves only for another connection's commits — so a process's own writes cost nothing, and when nothing external has changed the check is a single pragma read with no query at all. Without this, a memory stored through the REST server stayed invisible to `search` in the MCP server until that process restarted, even though `stats` already counted it.
 - **Invalidation:** A cached index is refused — and rebuilt from the database instead — when its format version, dimension, embedding model or checksum does not match, or when its entry count disagrees with the payload length. Nothing needs to be deleted by hand after switching embedding models, and a truncated or corrupted file cannot be loaded as if it were intact.
 
 > Give every process its own `ENGRAM_INDEX_PATH` when more than one runs against the same database. Sharing the default `<db>.index` means they overwrite each other's index, and during a rolling deploy processes on different format versions will each reject and rewrite what the other wrote. Nothing is lost — the database stays authoritative — but a large index gets rebuilt repeatedly for as long as the mix lasts.
+
+> **Known limits of cross-process sync.** It relies on `PRAGMA data_version`, which SQLite reports per *connection*: two `NeuralBrain` instances sharing one connection inside a single process will not see each other's writes this way (engram itself creates one brain per process, so this does not arise in normal deployments). On PostgreSQL there is no equivalent, so the reconcile is skipped and the index stays as loaded at startup. Graph edges are synced only where one endpoint is a newly arrived memory — an edge created externally between two memories this process already held is picked up on the next restart.
 
 ### Binary format
 

@@ -60,5 +60,18 @@ export function walCheckpoint(): void {
   }
 }
 
+/**
+ * Counter that changes when another connection commits — see
+ * DatabaseConnection.dataVersion. Returns null when unavailable (PostgreSQL, or
+ * no connection yet), which means "unknown", not "unchanged".
+ */
+export function getDataVersion(): number | null {
+  try {
+    return getDatabase().dataVersion();
+  } catch {
+    return null;
+  }
+}
+
 export { schema, getDatabase, closeDatabase, getDialect };
 export type { DatabaseDialect, AdapterConfig, DatabaseConnection };
