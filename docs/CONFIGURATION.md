@@ -409,10 +409,17 @@ The vector index can be persisted to disk for fast startup. Instead of re-scanni
 - **Startup:** If the index file exists, the index is deserialized from disk. Any memories in the database that are not in the cached index are added incrementally.
 - **Shutdown:** The index is serialized and written to the index file automatically.
 - **Incremental sync:** Only new memories (by ID) are embedded and added after loading from cache.
+- **Invalidation:** A cached index is refused — and rebuilt from the database instead — when its format version, dimension, embedding model or checksum does not match, or when its entry count disagrees with the payload length. Nothing needs to be deleted by hand after switching embedding models, and a truncated or corrupted file cannot be loaded as if it were intact.
+
+> Give every process its own `ENGRAM_INDEX_PATH` when more than one runs against the same database. Sharing the default `<db>.index` means they overwrite each other's index, and during a rolling deploy processes on different format versions will each reject and rewrite what the other wrote. Nothing is lost — the database stays authoritative — but a large index gets rebuilt repeatedly for as long as the mix lasts.
 
 ### Binary format
 
-The index file uses a custom binary format with magic bytes `ENGR` and a version header, followed by packed entry data (ID + FP32 vectors + metadata).
+Magic bytes `ENGR`, then a header of `version`, `dimension`, `entry count`, the `embedding model` id, and a CRC-32 over the entry payload, followed by packed entry data (ID + type + namespace + FP32 vectors).
+
+The model id and checksum exist so an index can be validated rather than trusted: two models can produce vectors of the same dimension, so dimension alone cannot tell whether a cached index is comparable to what the running model emits.
+
+Saves are atomic — the file is written to a temp sibling and renamed over the target — so an interrupted save leaves the previous index readable. The payload is not fsynced, so a power loss can revert to the previous snapshot; that is acceptable because the index is a cache rebuildable from the database.
 
 ### Checking index status
 

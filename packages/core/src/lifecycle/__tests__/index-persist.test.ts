@@ -124,6 +124,94 @@ describe('VectorSearch — persistence', () => {
   });
 });
 
+// ─── Header Validation: Model + Checksum ─────────────────────────────────────
+
+describe('VectorSearch — header validation', () => {
+  const vecOf = (a: number, b: number) => new Float32Array([a, b, 0, 0]);
+
+  function indexWith(modelId: string | null): VectorSearch {
+    const vs = new VectorSearch(4, modelId);
+    vs.upsert({ id: 'm1', vector: vecOf(1, 0), type: 'semantic' });
+    vs.upsert({ id: 'm2', vector: vecOf(0, 1), type: 'episodic' });
+    return vs;
+  }
+
+  it('round-trips the embedding model through the header', () => {
+    const buf = indexWith('Xenova/all-MiniLM-L6-v2').serialize();
+
+    const reader = new VectorSearch(4, 'Xenova/all-MiniLM-L6-v2');
+    const meta = reader.deserialize(buf);
+
+    expect(meta.embeddingModel).toBe('Xenova/all-MiniLM-L6-v2');
+    expect(meta.entryCount).toBe(2);
+  });
+
+  it('rejects an index written by a different embedding model', () => {
+    const buf = indexWith('old-model/v1').serialize();
+
+    const reader = new VectorSearch(4, 'Xenova/all-MiniLM-L6-v2');
+    expect(() => reader.deserialize(buf)).toThrow(/model mismatch/i);
+  });
+
+  it('skips the model check when the reader declares no model', () => {
+    const buf = indexWith('some-model/v9').serialize();
+
+    const reader = new VectorSearch(4);
+    expect(() => reader.deserialize(buf)).not.toThrow();
+  });
+
+  it('rejects a payload corrupted after the header', () => {
+    const buf = indexWith('m').serialize();
+
+    // Flip a byte inside a vector — dimension and count still line up, so only a
+    // checksum can catch this.
+    const corrupt = Buffer.from(buf);
+    corrupt[corrupt.length - 3] ^= 0xff;
+
+    const reader = new VectorSearch(4, 'm');
+    expect(() => reader.deserialize(corrupt)).toThrow(/checksum/i);
+  });
+
+  it('rejects a header whose entry count understates the payload', () => {
+    const vs = new VectorSearch(4, 'm');
+    vs.upsert({ id: 'm1', vector: vecOf(1, 0), type: 'semantic' });
+    vs.upsert({ id: 'm2', vector: vecOf(0, 1), type: 'episodic' });
+    vs.upsert({ id: 'm3', vector: vecOf(1, 1), type: 'procedural' });
+
+    // `count` lives in the header, outside the CRC's reach, and nothing else
+    // cross-checks it: parsing fewer entries than the payload holds still leaves
+    // the checksum valid, so only a length check catches this.
+    const truncated = Buffer.from(vs.serialize());
+    truncated.writeUInt32LE(1, 12);
+
+    const reader = new VectorSearch(4, 'm');
+    expect(() => reader.deserialize(truncated)).toThrow(/length mismatch/i);
+  });
+
+  it('leaves the reader untouched when validation fails', () => {
+    const reader = new VectorSearch(4, 'm');
+    reader.upsert({ id: 'existing', vector: vecOf(1, 0), type: 'semantic' });
+
+    const foreign = indexWith('other-model/v2').serialize();
+    expect(() => reader.deserialize(foreign)).toThrow();
+
+    // A refused load must not have dropped what the index already held.
+    expect(reader.size).toBe(1);
+    expect(reader.getIds().has('existing')).toBe(true);
+  });
+
+  it('rejects an index written in the previous format version', () => {
+    const buf = indexWith('m').serialize();
+
+    // Downgrade the version field to v1 — the pre-header-validation format.
+    const older = Buffer.from(buf);
+    older.writeUInt32LE(1, 4);
+
+    const reader = new VectorSearch(4, 'm');
+    expect(() => reader.deserialize(older)).toThrow(/unsupported index version/i);
+  });
+});
+
 // ─── Asynchronous, Atomic Persistence ────────────────────────────────────────
 
 describe('VectorSearch — async persistence', () => {
@@ -439,6 +527,39 @@ describe('NeuralBrain — index persistence', () => {
     expect(status.loadedFrom).toBe('database');
     expect(status.entryCount).toBeGreaterThanOrEqual(1);
     expect(fs.existsSync(indexPath)).toBe(true);
+
+    brain.shutdown();
+  });
+
+  it('discards a cached index whose embedding model no longer matches', async () => {
+    let brain = new NeuralBrain({ dbPath, defaultSource: 'test', indexPath });
+    await brain.initialize();
+    await brain.store({ content: 'Memory embedded by the current model' });
+    brain.shutdown();
+    closeDb();
+
+    // Rewrite the header's model field to something else, leaving the vectors —
+    // and the checksum over them — untouched.
+    const cached = fs.readFileSync(indexPath);
+    const modelLen = cached.readUInt32LE(16);
+    const forged = Buffer.concat([
+      cached.subarray(0, 20),
+      Buffer.from('impostor-model/v0'.padEnd(modelLen, ' ').slice(0, modelLen), 'utf8'),
+      cached.subarray(20 + modelLen),
+    ]);
+    fs.writeFileSync(indexPath, forged);
+
+    brain = new NeuralBrain({ dbPath, defaultSource: 'test', indexPath });
+    await brain.initialize();
+
+    // The stale cache must be dropped and the index rebuilt from SQLite.
+    const status = brain.getIndexStatus();
+    expect(status.loadedFrom).toBe('database');
+    expect(status.entryCount).toBe(1);
+
+    // And recall must still work off the rebuilt index.
+    const hits = await brain.search('memory embedded by the current model');
+    expect(hits.length).toBeGreaterThanOrEqual(1);
 
     brain.shutdown();
   });

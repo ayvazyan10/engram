@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Changed
+
+- **`@engram-ai-memory/core`** — The persisted index header now carries the embedding model id and a CRC-32 over the entry payload, and `deserialize()` refuses an index whose model or checksum does not match, or whose entry count disagrees with the payload length — `count` sits outside the CRC, so a lowered count would otherwise parse a prefix of the entries with a valid checksum (format version 2). A refused load leaves the in-memory index untouched. Previously only the dimension was checked, so an index built by a different model — two models can share a dimension — loaded silently and every query scored against vectors it could not be compared to; a truncated file could likewise load as if intact. `IndexMetadata` gained an `embeddingModel` field, `VectorSearch` takes an optional model id as its second constructor argument and exposes `setModelId()`, and `NeuralBrain` passes the active model through. Version 1 files are rejected rather than migrated: the index is a cache, so the first startup after upgrading rebuilds it from the database. No action is needed on upgrade, and switching embedding models no longer requires deleting the index by hand.
+
 ### Added
 
 - **`@engram-ai-memory/core`** — `VectorSearch.saveToDiskAsync()` and `NeuralBrain.saveIndexAsync()` persist the vector index without blocking the event loop. `reEmbed()`, `rebuildIndex()` and `POST /api/index/save` now use them — previously each ran a synchronous, full-index `writeFileSync` inside a live request handler. The synchronous `saveToDisk()`/`saveIndex()` remain for callers that cannot await, such as `shutdown()`.

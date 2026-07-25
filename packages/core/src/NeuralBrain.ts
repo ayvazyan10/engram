@@ -224,8 +224,10 @@ export class NeuralBrain {
   constructor(config: BrainConfig = {}) {
     this.config = config;
     // Use the ACTIVE model's dimension, not the frozen module constant, so a
-    // configured model switch cannot leave the index sized for the default.
-    this.vectorSearch = new VectorSearch(getEmbeddingDimension());
+    // configured model switch cannot leave the index sized for the default. The
+    // model id travels into the saved index so a cache from another model is
+    // refused on load instead of scoring against incomparable vectors.
+    this.vectorSearch = new VectorSearch(getEmbeddingDimension(), getEmbeddingModelId());
     this.graph = new KnowledgeGraph();
     this.assembler = new ContextAssembler(this.vectorSearch, this.graph, config.namespace);
     this.decayEngine = new DecayEngine(mergePolicy(config.decayPolicy ?? {}));
@@ -1271,6 +1273,13 @@ export class NeuralBrain {
     // than silently corrupting similarity.
     if (currentDim !== this.vectorSearch.dimension) {
       this.vectorSearch.setDimension(currentDim);
+    }
+
+    // Record the model the vectors about to be written belong to, so the saved
+    // index is rejected later if the active model changes again. Two models can
+    // share a dimension, which the resize above would not catch.
+    if (currentModel !== this.vectorSearch.embeddingModel) {
+      this.vectorSearch.setModelId(currentModel);
     }
 
     // Select memories to re-embed

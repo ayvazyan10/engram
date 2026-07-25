@@ -18,13 +18,48 @@ import path from 'path';
 
 /** Magic bytes + version for the persisted index format */
 const INDEX_MAGIC = 0x454e4752; // 'ENGR'
-const INDEX_VERSION = 1;
+/**
+ * v2 records the embedding model and a CRC-32 over the entry payload. v1 files
+ * are refused rather than migrated — the index is a cache, so the caller falls
+ * back to rebuilding it from the database.
+ */
+const INDEX_VERSION = 2;
+
+let crcTable: Int32Array | null = null;
+
+/**
+ * CRC-32 (IEEE 802.3) over a buffer.
+ *
+ * Hand-rolled rather than `zlib.crc32`, which only exists from Node 22.2 while
+ * this package supports 22.0 — and rather than a hash from `crypto`, which costs
+ * far more per byte than integrity checking a rebuildable cache warrants.
+ */
+function crc32(buf: Buffer): number {
+  if (!crcTable) {
+    crcTable = new Int32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let bit = 0; bit < 8; bit++) {
+        c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      }
+      crcTable[i] = c;
+    }
+  }
+
+  let crc = -1;
+  for (let i = 0; i < buf.length; i++) {
+    crc = (crc >>> 8) ^ crcTable[(crc ^ buf[i]!) & 0xff]!;
+  }
+  return (crc ^ -1) >>> 0;
+}
 
 export interface IndexMetadata {
   /** Number of entries in the index */
   entryCount: number;
   /** Embedding dimension */
   dimension: number;
+  /** Embedding model the vectors were produced by, or null if unrecorded */
+  embeddingModel: string | null;
   /** Timestamp when the index was saved */
   savedAt: string;
   /** Set of memory IDs in the index (for incremental sync) */
@@ -56,6 +91,17 @@ function tempSibling(filePath: string): string {
 export class VectorSearch {
   private entries: VectorEntry[] = [];
   private dim: number;
+  /**
+   * Model the indexed vectors came from, written into the header so a cached
+   * index produced by a different model is refused instead of silently scoring
+   * against incomparable vectors.
+   *
+   * Note the asymmetry: writers always tag the file, but a reader constructed
+   * without a model id (the default) accepts any model, having no basis to judge.
+   * A reader that cares must pass one — `new VectorSearch(dim)` used to inspect a
+   * saved index gets no model protection.
+   */
+  private modelId: string | null;
   /** Tail of the async save queue — see saveToDiskAsync. */
   private pendingSave: Promise<void> = Promise.resolve();
   /**
@@ -66,13 +112,29 @@ export class VectorSearch {
    */
   private saveGeneration = 0;
 
-  constructor(dim: number = 384) {
+  constructor(dim: number = 384, modelId: string | null = null) {
     this.dim = dim;
+    this.modelId = modelId;
   }
 
   /** The dimension this index currently holds vectors for. */
   get dimension(): number {
     return this.dim;
+  }
+
+  /** The embedding model recorded in saved indexes, or null if untracked. */
+  get embeddingModel(): string | null {
+    return this.modelId;
+  }
+
+  /**
+   * Point the index at a different embedding model, dropping every vector — the
+   * existing ones are not comparable to anything the new model produces.
+   */
+  setModelId(modelId: string | null): void {
+    if (modelId === this.modelId) return;
+    this.modelId = modelId;
+    this.entries = [];
   }
 
   /**
@@ -175,16 +237,24 @@ export class VectorSearch {
    * Serialize the index to a Buffer for disk persistence.
    *
    * Format:
-   *   [4B magic][4B version][4B dim][4B count]
+   *   [4B magic][4B version][4B dim][4B count][4B model_len][model_bytes][4B crc32]
    *   For each entry:
    *     [4B id_len][id_bytes][1B type_code][1B has_namespace][ns_len?][ns_bytes?]
    *     [dim * 4B float32 vector]
+   *
+   * The CRC covers the entry payload only — everything after the header. Header
+   * fields are self-validating: a wrong magic, version or dimension is rejected
+   * outright, and a garbled model string can only cause a mismatch, never a
+   * silent misread.
    */
   serialize(): Buffer {
     const TYPE_MAP: Record<string, number> = { episodic: 0, semantic: 1, procedural: 2 };
 
-    // Calculate total buffer size
-    let totalSize = 16; // header: magic(4) + version(4) + dim(4) + count(4)
+    const modelBuf = Buffer.from(this.modelId ?? '', 'utf8');
+
+    // header: magic(4) + version(4) + dim(4) + count(4) + model_len(4) + model + crc(4)
+    const headerSize = 20 + modelBuf.length + 4;
+    let totalSize = headerSize;
     for (const entry of this.entries) {
       const idBytes = Buffer.byteLength(entry.id, 'utf8');
       const nsBytes = entry.namespace ? Buffer.byteLength(entry.namespace, 'utf8') : 0;
@@ -199,6 +269,10 @@ export class VectorSearch {
     buf.writeUInt32LE(INDEX_VERSION, offset); offset += 4;
     buf.writeUInt32LE(this.dim, offset); offset += 4;
     buf.writeUInt32LE(this.entries.length, offset); offset += 4;
+    buf.writeUInt32LE(modelBuf.length, offset); offset += 4;
+    modelBuf.copy(buf, offset); offset += modelBuf.length;
+    // Filled in once the payload it covers has been written.
+    const crcOffset = offset; offset += 4;
 
     // Entries
     for (const entry of this.entries) {
@@ -223,13 +297,20 @@ export class VectorSearch {
       }
     }
 
+    buf.writeUInt32LE(crc32(buf.subarray(headerSize)), crcOffset);
+
     return buf;
   }
 
   /**
    * Deserialize a Buffer back into the index, replacing all entries.
    * Returns metadata about the loaded index.
-   * Throws if the buffer is corrupt or version mismatch.
+   *
+   * Throws if the buffer is corrupt, written by another format version, holds a
+   * different dimension, or was produced by a different embedding model. Callers
+   * treat any of these as "cache unusable" and rebuild from their source of
+   * truth — that is the whole point of validating here rather than scoring
+   * queries against vectors that cannot be compared.
    */
   deserialize(buf: Buffer): IndexMetadata {
     let offset = 0;
@@ -247,6 +328,25 @@ export class VectorSearch {
     if (dim !== this.dim) throw new Error(`Dimension mismatch: index has ${dim}, expected ${this.dim}`);
 
     const count = buf.readUInt32LE(offset); offset += 4;
+
+    const modelLen = buf.readUInt32LE(offset); offset += 4;
+    const savedModel = modelLen > 0 ? buf.toString('utf8', offset, offset + modelLen) : null;
+    offset += modelLen;
+
+    const expectedCrc = buf.readUInt32LE(offset); offset += 4;
+
+    // Only enforce the model when this instance tracks one — a caller that keeps
+    // no model has no basis to reject the file.
+    if (this.modelId !== null && savedModel !== this.modelId) {
+      throw new Error(
+        `Embedding model mismatch: index was built with ${savedModel ?? 'an unrecorded model'}, expected ${this.modelId}`
+      );
+    }
+
+    const actualCrc = crc32(buf.subarray(offset));
+    if (actualCrc !== expectedCrc) {
+      throw new Error(`Index checksum mismatch: payload is corrupt (expected ${expectedCrc}, got ${actualCrc})`);
+    }
 
     const entries: VectorEntry[] = [];
     const ids = new Set<string>();
@@ -274,11 +374,25 @@ export class VectorSearch {
       ids.add(id);
     }
 
+    // `count` sits in the header, outside the CRC, and nothing else cross-checks
+    // it. A count lower than the payload really holds would otherwise parse a
+    // prefix of the entries with a perfectly valid checksum — a silent partial
+    // load of exactly the kind this validation exists to prevent. (Too high a
+    // count instead overruns the buffer, which throws on its own.)
+    if (offset !== buf.length) {
+      throw new Error(
+        `Index length mismatch: consumed ${offset} of ${buf.length} bytes — the entry count or payload is corrupt`
+      );
+    }
+
+    // Only now, past every check, replace what this index holds: a refused load
+    // must leave the caller's existing vectors alone.
     this.entries = entries;
 
     return {
       entryCount: count,
       dimension: dim,
+      embeddingModel: savedModel,
       savedAt: new Date().toISOString(),
       ids,
     };
