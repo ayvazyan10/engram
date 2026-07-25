@@ -12,8 +12,9 @@
  * 8. Search works correctly after loading from disk
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
@@ -120,6 +121,201 @@ describe('VectorSearch — persistence', () => {
     const buf = vs4.serialize();
 
     expect(() => vs384.deserialize(buf)).toThrow('Dimension mismatch');
+  });
+});
+
+// ─── Asynchronous, Atomic Persistence ────────────────────────────────────────
+
+describe('VectorSearch — async persistence', () => {
+  // Scratch files go to a per-test temp dir, removed unconditionally afterwards —
+  // a failing assertion must not leave binary debris in the source tree.
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-idx-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('saveToDiskAsync writes an index loadFromDisk can read', async () => {
+    const filePath = path.join(tmpDir, 'index.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'a', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+    vs.upsert({ id: 'b', vector: new Float32Array([0, 1, 0, 0]), type: 'episodic', namespace: 'test' });
+
+    await vs.saveToDiskAsync(filePath);
+
+    const vs2 = new VectorSearch(4);
+    const meta = vs2.loadFromDisk(filePath);
+    expect(meta!.entryCount).toBe(2);
+    expect(vs2.size).toBe(2);
+  });
+
+  it('creates the parent directory when missing', async () => {
+    const filePath = path.join(tmpDir, 'deep', 'nested', 'index.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'a', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    await vs.saveToDiskAsync(filePath);
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it('rejects — and leaves the previous index intact — when the write fails', async () => {
+    const filePath = path.join(tmpDir, 'index.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'good', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+    await vs.saveToDiskAsync(filePath);
+    const good = fs.readFileSync(filePath);
+
+    // Make the directory read-only so creating the temp file fails.
+    fs.chmodSync(tmpDir, 0o500);
+    vs.upsert({ id: 'later', vector: new Float32Array([0, 1, 0, 0]), type: 'semantic' });
+    await expect(vs.saveToDiskAsync(filePath)).rejects.toThrow();
+    fs.chmodSync(tmpDir, 0o700);
+
+    // The readable index from before must survive a failed replacement.
+    expect(fs.readFileSync(filePath).equals(good)).toBe(true);
+  });
+
+  it('never leaves a temp file behind on success', async () => {
+    const filePath = path.join(tmpDir, 'index.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'a', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    await vs.saveToDiskAsync(filePath);
+
+    expect(fs.readdirSync(tmpDir)).toEqual(['index.bin']);
+  });
+
+  it('overlapping saves both land, last call wins, nothing is silently dropped', async () => {
+    const filePath = path.join(tmpDir, 'concurrent.bin');
+    const vs = new VectorSearch(4);
+
+    vs.upsert({ id: 'first', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+    const firstSave = vs.saveToDiskAsync(filePath);
+
+    // Second caller enters while the first write is still in flight — the shape
+    // of reEmbed() racing an explicit POST /api/index/save.
+    vs.upsert({ id: 'second', vector: new Float32Array([0, 1, 0, 0]), type: 'semantic' });
+    const secondSave = vs.saveToDiskAsync(filePath);
+
+    await expect(Promise.all([firstSave, secondSave])).resolves.toBeDefined();
+
+    // Saves are serialized, so the file holds the later caller's snapshot whole —
+    // not a blend, and not the earlier one overwriting it.
+    const probe = new VectorSearch(4);
+    const meta = probe.loadFromDisk(filePath);
+    expect(meta!.entryCount).toBe(2);
+    expect(meta!.ids.has('second')).toBe(true);
+
+    const leftovers = fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tmp'));
+    expect(leftovers).toEqual([]);
+  });
+
+  it('an in-flight async save cannot clobber a later synchronous one', async () => {
+    const filePath = path.join(tmpDir, 'shutdown.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'stale', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    // Hold the async write open so the sync save lands in the middle of it —
+    // a re-embed still running when SIGTERM triggers shutdown().
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const realWriteFile = fs.promises.writeFile;
+    const spy = vi
+      .spyOn(fs.promises, 'writeFile')
+      .mockImplementation(async (...args: Parameters<typeof fs.promises.writeFile>) => {
+        await held;
+        return realWriteFile(...args);
+      });
+
+    const asyncSave = vs.saveToDiskAsync(filePath);
+
+    // shutdown()'s synchronous save writes the newer state.
+    vs.upsert({ id: 'fresh', vector: new Float32Array([0, 1, 0, 0]), type: 'semantic' });
+    spy.mockRestore();
+    vs.saveToDisk(filePath);
+
+    release();
+    await asyncSave;
+
+    // The older in-flight snapshot must not be published over the newer one.
+    const meta = new VectorSearch(4).loadFromDisk(filePath);
+    expect(meta!.ids.has('fresh')).toBe(true);
+    expect(meta!.entryCount).toBe(2);
+    expect(fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('a failed save does not poison the next one', async () => {
+    const filePath = path.join(tmpDir, 'recover.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'a', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    // A directory in place of the target makes rename fail.
+    fs.mkdirSync(filePath);
+    await expect(vs.saveToDiskAsync(filePath)).rejects.toThrow();
+    fs.rmdirSync(filePath);
+
+    await expect(vs.saveToDiskAsync(filePath)).resolves.toBeUndefined();
+    expect(new VectorSearch(4).loadFromDisk(filePath)!.entryCount).toBe(1);
+  });
+
+  it('keeps draining the queue when every queued save fails', async () => {
+    const filePath = path.join(tmpDir, 'chained.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'a', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    // Read-only directory: both fail at the temp write, so neither is merely
+    // superseded — each reports its own failure.
+    fs.chmodSync(tmpDir, 0o500);
+    const first = vs.saveToDiskAsync(filePath);
+    const second = vs.saveToDiskAsync(filePath);
+
+    await expect(first).rejects.toThrow();
+    await expect(second).rejects.toThrow();
+
+    // The queue keeps advancing once the obstruction is gone.
+    fs.chmodSync(tmpDir, 0o700);
+    await expect(vs.saveToDiskAsync(filePath)).resolves.toBeUndefined();
+    expect(new VectorSearch(4).loadFromDisk(filePath)!.entryCount).toBe(1);
+  });
+
+  it('a superseded save resolves without publishing its stale snapshot', async () => {
+    const filePath = path.join(tmpDir, 'superseded.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'only', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    const stale = vs.saveToDiskAsync(filePath);
+    vs.remove('only');
+    vs.upsert({ id: 'replacement', vector: new Float32Array([0, 1, 0, 0]), type: 'episodic' });
+    const fresh = vs.saveToDiskAsync(filePath);
+
+    await expect(stale).resolves.toBeUndefined();
+    await expect(fresh).resolves.toBeUndefined();
+
+    const meta = new VectorSearch(4).loadFromDisk(filePath);
+    expect(meta!.ids.has('replacement')).toBe(true);
+    expect(meta!.ids.has('only')).toBe(false);
+  });
+
+  it('serializes a snapshot taken before the await', async () => {
+    const filePath = path.join(tmpDir, 'snapshot.bin');
+    const vs = new VectorSearch(4);
+    vs.upsert({ id: 'first', vector: new Float32Array([1, 0, 0, 0]), type: 'semantic' });
+
+    const writing = vs.saveToDiskAsync(filePath);
+    // Mutating while the write is in flight must not corrupt the file.
+    vs.upsert({ id: 'second', vector: new Float32Array([0, 1, 0, 0]), type: 'semantic' });
+    await writing;
+
+    const vs2 = new VectorSearch(4);
+    const meta = vs2.loadFromDisk(filePath);
+    expect(meta!.entryCount).toBe(1);
+    expect(meta!.ids.has('first')).toBe(true);
+
+    cleanup(filePath);
   });
 });
 
@@ -243,6 +439,33 @@ describe('NeuralBrain — index persistence', () => {
     expect(status.loadedFrom).toBe('database');
     expect(status.entryCount).toBeGreaterThanOrEqual(1);
     expect(fs.existsSync(indexPath)).toBe(true);
+
+    brain.shutdown();
+  });
+
+  it('saveIndexAsync persists a readable index', async () => {
+    const brain = new NeuralBrain({ dbPath, defaultSource: 'test', indexPath });
+    await brain.initialize();
+    await brain.store({ content: 'Memory saved through the async path' });
+
+    await brain.saveIndexAsync();
+
+    expect(brain.getIndexStatus().indexFileExists).toBe(true);
+    const probe = new VectorSearch(brain.getIndexStatus().dimension);
+    expect(probe.loadFromDisk(indexPath)!.entryCount).toBeGreaterThanOrEqual(1);
+
+    brain.shutdown();
+  });
+
+  it('saveIndexAsync rejects when no index path is configured', async () => {
+    const brain = new NeuralBrain({ dbPath, defaultSource: 'test', indexPath: '' });
+    await brain.initialize();
+
+    // An empty indexPath falls back to `${dbPath}.index`, so drop dbPath too by
+    // pointing the resolver at nothing it can use.
+    (brain as unknown as { config: { dbPath?: string; indexPath?: string } }).config = {};
+
+    await expect(brain.saveIndexAsync()).rejects.toThrow('No index path configured');
 
     brain.shutdown();
   });

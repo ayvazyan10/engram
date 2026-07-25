@@ -1351,7 +1351,7 @@ export class NeuralBrain {
     // persistence.
     if (progress.processed > 0 && this.resolveIndexPath()) {
       try {
-        this.saveIndex();
+        await this.saveIndexAsync();
       } catch {
         // Best-effort — a full disk or a read-only path must not fail a
         // re-embed that already succeeded. SQLite and the in-memory index hold
@@ -1679,12 +1679,26 @@ export class NeuralBrain {
     this.initialized = false;
   }
 
-  /** Force save the vector index to disk now. */
+  /**
+   * Force save the vector index to disk now, blocking until the write completes.
+   *
+   * Prefer saveIndexAsync from request handlers and other async paths — the write
+   * is proportional to the entire index, not to what changed.
+   */
   saveIndex(): void {
     this.assertInitialized();
     const indexPath = this.resolveIndexPath();
     if (!indexPath) throw new Error('No index path configured. Set indexPath in BrainConfig or ENGRAM_INDEX_PATH env var.');
     this.vectorSearch.saveToDisk(indexPath);
+    this.indexStatus.indexFileExists = true;
+  }
+
+  /** Force save the vector index to disk without blocking the event loop. */
+  async saveIndexAsync(): Promise<void> {
+    this.assertInitialized();
+    const indexPath = this.resolveIndexPath();
+    if (!indexPath) throw new Error('No index path configured. Set indexPath in BrainConfig or ENGRAM_INDEX_PATH env var.');
+    await this.vectorSearch.saveToDiskAsync(indexPath);
     this.indexStatus.indexFileExists = true;
   }
 
@@ -1721,7 +1735,7 @@ export class NeuralBrain {
     // Auto-save if path configured
     const indexPath = this.resolveIndexPath();
     if (indexPath) {
-      this.vectorSearch.saveToDisk(indexPath);
+      await this.vectorSearch.saveToDiskAsync(indexPath);
       this.indexStatus.indexFileExists = true;
     }
 

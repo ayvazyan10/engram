@@ -740,6 +740,8 @@ Rebuild the vector index from scratch using all current embeddings.
 
 Persist the current in-memory index to disk.
 
+The write is asynchronous and atomic — it goes to a temporary file that is renamed over the target, so an interrupted save leaves the previous index readable rather than truncated.
+
 **Response `200`**
 ```json
 {

@@ -9,6 +9,16 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Added
+
+- **`@engram-ai-memory/core`** — `VectorSearch.saveToDiskAsync()` and `NeuralBrain.saveIndexAsync()` persist the vector index without blocking the event loop. `reEmbed()`, `rebuildIndex()` and `POST /api/index/save` now use them — previously each ran a synchronous, full-index `writeFileSync` inside a live request handler. The synchronous `saveToDisk()`/`saveIndex()` remain for callers that cannot await, such as `shutdown()`.
+
+  Every save — synchronous or not — now writes to a temp sibling and renames it over the target, so an interrupted save leaves the previous index readable instead of a truncated one. Entries are serialized before the first await, so each caller persists a snapshot from the moment of its own call.
+
+  Because the synchronous write used to serialize concurrent callers just by blocking the event loop, async saves needed that ordering back explicitly: they are queued per instance, and a write whose snapshot has been superseded by a newer save steps aside instead of renaming over it. Without both, two overlapping saves — a re-embed racing an explicit index save, or a re-embed still in flight when `shutdown()` runs during a restart — could silently discard the fresher snapshot while every caller still saw success.
+
+  Note that the index is not fsynced: the rename is atomic against a process crash, but a power loss can still revert to the previous snapshot. That is acceptable because the index is a cache rebuildable from SQLite, and a missing or corrupt one already falls back to a full rebuild.
+
 ### Fixed
 
 - **`@engram-ai-memory/core`** — `reEmbed()` updated SQLite and the in-memory index but never wrote the vector index to disk, leaving that to `shutdown()`. Since `deserialize()` validates only the dimension, a restart — or another process persisting its own index over the same file — silently resurrected the pre-re-embed vectors. Refreshed vectors are now saved as soon as the run finishes (best-effort: an unconfigured path or an unwritable disk no longer fails the re-embed). Note that processes sharing one `ENGRAM_DB_PATH` still default to a single `<db>.index` file; give each its own `ENGRAM_INDEX_PATH` when running more than one.

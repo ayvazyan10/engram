@@ -12,6 +12,7 @@
  * incrementally add only new memories instead of re-scanning the entire DB.
  */
 
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -43,9 +44,27 @@ export interface SearchResult {
   type: 'episodic' | 'semantic' | 'procedural';
 }
 
+/**
+ * Temp path for an atomic write: a sibling of the target, so the rename that
+ * replaces it stays within one filesystem. The random suffix keeps concurrent
+ * writers — in this process or another — off each other's temp file.
+ */
+function tempSibling(filePath: string): string {
+  return `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+}
+
 export class VectorSearch {
   private entries: VectorEntry[] = [];
   private dim: number;
+  /** Tail of the async save queue — see saveToDiskAsync. */
+  private pendingSave: Promise<void> = Promise.resolve();
+  /**
+   * Bumped by every save. An async write compares its own value before renaming
+   * and steps aside if a newer save has since claimed the target — the queue
+   * orders async writes against each other, but only this guards them against a
+   * synchronous save (shutdown) that ran while one was in flight.
+   */
+  private saveGeneration = 0;
 
   constructor(dim: number = 384) {
     this.dim = dim;
@@ -267,14 +286,90 @@ export class VectorSearch {
 
   /**
    * Save the index to a file on disk.
+   *
+   * Blocks the event loop for the length of the write, which is proportional to
+   * the whole index rather than to whatever changed. Prefer saveToDiskAsync from
+   * anywhere that serves live traffic; this variant exists for synchronous
+   * callers such as shutdown().
    */
   saveToDisk(filePath: string): void {
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
     const buf = this.serialize();
-    fs.writeFileSync(filePath, buf);
+    // Claim the target so an async write already in flight — carrying an older
+    // snapshot — stands down instead of renaming over this one afterwards.
+    this.saveGeneration++;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+    // Temp file + rename, matching writeIndexFile — shutdown is the likeliest
+    // moment to be killed outright, so it is the last place that should be able
+    // to leave a half-written index behind.
+    const tmpPath = tempSibling(filePath);
+    try {
+      fs.writeFileSync(tmpPath, buf);
+      fs.renameSync(tmpPath, filePath);
+    } catch (err: unknown) {
+      try { fs.unlinkSync(tmpPath); } catch { /* nothing to clean up */ }
+      throw err;
+    }
+  }
+
+  /**
+   * Save the index to a file on disk without blocking the event loop.
+   *
+   * Entries are serialized before the first await, so the file holds a snapshot
+   * from the moment of the call — concurrent upserts land in the next save rather
+   * than corrupting this one.
+   *
+   * Writes are queued per instance. The synchronous variant serialized callers
+   * implicitly by blocking the event loop; without a queue two overlapping saves
+   * would race on the target and one caller's snapshot would vanish with both
+   * promises still resolving. Queued, each caller's snapshot is written whole and
+   * the last one in wins.
+   */
+  async saveToDiskAsync(filePath: string): Promise<void> {
+    const buf = this.serialize();
+    const generation = ++this.saveGeneration;
+
+    // A rejected save must not poison the ones queued behind it.
+    const write = this.pendingSave
+      .catch(() => {})
+      .then(() => this.writeIndexFile(filePath, buf, generation));
+
+    this.pendingSave = write.catch(() => {});
+    return write;
+  }
+
+  /**
+   * Write a serialized index to disk atomically.
+   *
+   * The bytes go to a temp file in the target's own directory — keeping the
+   * rename on one filesystem, and therefore atomic — then replace the target. A
+   * crash mid-write leaves the previous index readable instead of a truncated
+   * one. Visibility is atomic against a process crash; the data is not fsynced,
+   * so a power loss can still revert to the previous snapshot. That is fine
+   * here: the index is a cache rebuildable from SQLite, and a corrupt or missing
+   * one already falls back to a full rebuild.
+   */
+  private async writeIndexFile(filePath: string, buf: Buffer, generation: number): Promise<void> {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+
+    const tmpPath = tempSibling(filePath);
+    try {
+      await fs.promises.writeFile(tmpPath, buf);
+
+      // A newer save claimed the target while this one was writing — publishing
+      // an older snapshot over it would regress the file. Resolving rather than
+      // throwing is correct: the caller's guarantee is that disk is no staler
+      // than its call, and a newer save already satisfies that.
+      if (generation !== this.saveGeneration) {
+        await fs.promises.unlink(tmpPath).catch(() => {});
+        return;
+      }
+
+      await fs.promises.rename(tmpPath, filePath);
+    } catch (err: unknown) {
+      await fs.promises.unlink(tmpPath).catch(() => {});
+      throw err;
+    }
   }
 
   /**

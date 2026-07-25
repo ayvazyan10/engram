@@ -36,7 +36,7 @@ export const indexRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req, reply) => {
       try {
-        brain.saveIndex();
+        await brain.saveIndexAsync();
         const status = brain.getIndexStatus();
         return {
           ...status,
