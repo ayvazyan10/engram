@@ -197,12 +197,22 @@ function setupClaudeCode(config: EngramConfig, engramServer: Record<string, unkn
 
 // ─── Program ─────────────────────────────────────────────────────────────────
 
+/** Read from package.json so `engram --version` can't drift from the release. */
+function packageVersion(): string {
+  try {
+    const pkg = fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    return (JSON.parse(pkg).version as string) || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 const program = new Command();
 
 program
   .name('engram')
   .description('Engram CLI — Universal AI Brain')
-  .version('0.3.0');
+  .version(packageVersion());
 
 // ─── setup ───────────────────────────────────────────────────────────────────
 
