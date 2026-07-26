@@ -132,6 +132,7 @@ engram setup --source cursor # Set ENGRAM_SOURCE for client identification
 engram init                 # Generate AI memory instructions (CLAUDE.md, .cursorrules, etc.)
 engram init --client cursor # Generate instructions for a specific client
 engram update               # Pull latest changes, rebuild, restart server
+engram update --force       # Update even with local repo changes (stashed, or kept on a backup branch)
 engram start                # Start the server (background)
 engram stop                 # Stop the server
 engram doctor               # Health checks (verifies ~/.mcp.json config)

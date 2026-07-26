@@ -25,6 +25,8 @@ engram doctor
 
 ```bash
 engram setup               # First-time setup wizard
+engram update              # Pull latest, rebuild, restart
+engram update --force      # Same, but set local repo changes aside first
 engram start               # Start server (background)
 engram start --foreground  # Start in foreground
 engram stop                # Stop the server

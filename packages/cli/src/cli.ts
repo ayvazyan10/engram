@@ -19,6 +19,8 @@ import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
   readJson, installHookScript, registerHook,
 } from './claudeSetup.js';
+import { syncRepo } from './gitUpdate.js';
+import type { RepoSyncResult } from './gitUpdate.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
 
@@ -114,6 +116,43 @@ const fail = (msg: string) => console.log(`${R}  ✗${X} ${msg}`);
 const step = (msg: string) => console.log(`${C}  →${X} ${msg}`);
 const warn = (msg: string) => console.log(`${Y}  !${X} ${msg}`);
 
+// ─── Repository sync ─────────────────────────────────────────────────────────
+
+/** Explain a failed sync and how to get past it. */
+function reportSyncFailure(result: RepoSyncResult, repoPath: string): void {
+  switch (result.status) {
+    case 'fetch-failed':
+      fail('Could not reach the remote repository. Check your connection.');
+      break;
+    case 'no-upstream':
+      fail(`No upstream branch is configured for ${repoPath}.`);
+      console.log(`  Fix: ${D}cd ${repoPath} && git branch --set-upstream-to=origin/master${X}`);
+      return;
+    case 'blocked': {
+      const named = result.blocked.length > 0 ? `: ${result.blocked.join(', ')}` : '';
+      if (result.failure === 'untracked-collision') {
+        fail(`Update blocked — untracked files clash with new files from upstream${named}`);
+      } else if (result.failure === 'local-changes') {
+        fail(`Update blocked — local edits to files the update replaces${named}`);
+      } else if (result.failure === 'diverged') {
+        fail('Update blocked — this checkout has commits that are not upstream.');
+      } else {
+        fail('Update failed.');
+      }
+      break;
+    }
+    default:
+      return;
+  }
+
+  if ('detail' in result && result.detail) {
+    for (const line of result.detail.split('\n')) console.log(`  ${D}${line}${X}`);
+  }
+  if (result.status === 'blocked') {
+    console.log(`  Fix: ${C}engram update --force${X} ${D}(stashes local changes, keeps commits on a backup branch)${X}`);
+  }
+}
+
 // ─── Claude Code auto-memory ───────────────────────────────────────────────────
 
 const HOOKS_DIR = path.join(ENGRAM_HOME, 'hooks');
@@ -194,11 +233,12 @@ program
       step(`Cloning Engram into ${config.repoPath}...`);
       if (fs.existsSync(path.join(config.repoPath, '.git'))) {
         step('Repository exists — pulling latest...');
-        try {
-          execSync('git pull --ff-only', { cwd: config.repoPath, stdio: 'pipe',  });
-          ok('Repository updated');
-        } catch {
-          warn('Pull failed — continuing with existing version');
+        const sync = syncRepo(config.repoPath, { log: { step, warn } });
+        if (sync.status === 'updated') ok('Repository updated');
+        else if (sync.status === 'up-to-date') ok('Repository already up to date');
+        else {
+          reportSyncFailure(sync, config.repoPath);
+          warn('Continuing setup with the existing version');
         }
       } else {
         try {
@@ -610,6 +650,7 @@ program
   .command('update')
   .description('Update Engram to the latest version — pull, rebuild, and restart')
   .option('--no-restart', 'Skip server restart after update')
+  .option('-f, --force', 'Set local changes aside (stash / backup branch) and update anyway')
   .action(async (opts) => {
     console.log(`\n${B}  ⬡  Engram Update${X}\n`);
 
@@ -622,35 +663,21 @@ program
       process.exit(1);
     }
 
-    step('Checking for updates...');
-    try {
-      execSync('git fetch --quiet', { cwd: repoPath, stdio: 'pipe' });
-    } catch {
-      fail('Could not reach remote repository. Check your connection.');
-      process.exit(1);
-    }
+    const sync = syncRepo(repoPath, { force: opts.force === true, log: { step, warn } });
 
-    const local = execSync('git rev-parse HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
-    const remote = execSync('git rev-parse @{u}', { cwd: repoPath, encoding: 'utf8' }).trim();
-
-    if (local === remote) {
+    if (sync.status === 'up-to-date') {
       ok('Already up to date.');
       console.log();
       return;
     }
 
-    const behind = execSync('git rev-list --count HEAD..@{u}', { cwd: repoPath, encoding: 'utf8' }).trim();
-    step(`${behind} new commit(s) available`);
-
-    step('Pulling latest changes...');
-    try {
-      execSync('git pull --ff-only', { cwd: repoPath, stdio: 'pipe' });
-      ok('Repository updated');
-    } catch {
-      fail('Pull failed — you may have local modifications.');
-      console.log(`  Try: ${D}cd ${repoPath} && git stash && engram update${X}`);
+    if (sync.status !== 'updated') {
+      reportSyncFailure(sync, repoPath);
+      console.log();
       process.exit(1);
     }
+
+    ok('Repository updated');
 
     const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
 
