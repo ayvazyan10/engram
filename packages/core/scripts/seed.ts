@@ -70,7 +70,7 @@ async function seed() {
 
   await brain.store({
     type: 'episodic',
-    content: 'User clarified that Engram should be a universal AI brain that integrates with Claude Code, Ollama, OpenClaw, and other AI systems via MCP and REST API.',
+    content: 'User clarified that Engram should be a universal AI brain that integrates with Claude Code, Ollama, and other AI systems via MCP and REST API.',
     source: 'claude-code',
     tags: ['requirements', 'vision'],
     importance: 0.9,

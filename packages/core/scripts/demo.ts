@@ -81,7 +81,7 @@ async function run() {
   // ── SEMANTIC — Software architecture ──
   const neuralCore = await store({
     type: 'semantic', concept: 'Engram',
-    content: 'Universal AI brain — persistent memory layer giving any AI model human-like memory. Integrates via MCP (Claude Code), REST API (Ollama, OpenClaw), with 3D visualization dashboard.',
+    content: 'Universal AI brain — persistent memory layer giving any AI model human-like memory. Integrates via MCP (Claude Code), REST API and Ollama, with 3D visualization dashboard.',
     importance: 1.0, tags: ['project', 'ai', 'memory', 'brain'],
   });
 
@@ -186,7 +186,7 @@ async function run() {
   // ── EPISODIC — Project history ──
   const visionDecision = await store({
     type: 'episodic',
-    content: 'User confirmed the vision: Engram must be a universal AI brain, open source, integrating with Claude Code (MCP), Ollama, OpenClaw, and any future AI systems. Not just a visualization tool.',
+    content: 'User confirmed the vision: Engram must be a universal AI brain, open source, integrating with Claude Code (MCP), Ollama, and future AI systems through standard APIs. Not just a visualization tool.',
     source: 'claude-code', importance: 0.95,
     tags: ['vision', 'decision', 'requirements'],
   });
@@ -235,7 +235,7 @@ async function run() {
 
   const phase9Complete = await store({
     type: 'episodic',
-    content: 'Phase 9 complete: full monorepo builds (7/7 packages). Engram now has core brain, MCP server, REST API, Ollama proxy, OpenClaw adapter, and React dashboard. All TypeScript errors resolved.',
+    content: 'Phase 9 complete: the monorepo builds successfully. Engram now has a core brain, MCP server, REST API, Ollama proxy, and React dashboard. All TypeScript errors resolved.',
     source: 'claude-code', importance: 0.92,
     tags: ['milestone', 'build', 'complete'],
   });

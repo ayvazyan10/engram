@@ -33,7 +33,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
-    handler: async (req) => {
+    handler: async (req, reply) => {
+      if (brain.getNamespaceMode() === 'isolated' && req.body.crossNamespace) {
+        return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
+      }
       const start = Date.now();
       const memories = await brain.search(req.body.query, {
         topK: req.body.topK ?? 10,
@@ -80,7 +83,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
-    handler: async (req) => {
+    handler: async (req, reply) => {
+      if (brain.getNamespaceMode() === 'isolated' && req.body.crossNamespace) {
+        return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
+      }
       const result = await brain.recall(req.body.query, {
         maxTokens: req.body.maxTokens ?? 2000,
         types: req.body.types,
@@ -120,6 +126,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req, reply) => {
       const { query, maxTokens, types, sources, crossNamespace } = req.query;
+
+      if (brain.getNamespaceMode() === 'isolated' && crossNamespace) {
+        return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
+      }
 
       // Set SSE headers
       reply.raw.writeHead(200, {

@@ -10,11 +10,11 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Clients / Consumers                       │
 │                                                                  │
-│  Claude Code       Ollama Client      OpenClaw       Custom App │
-│  (MCP client)      (any chat UI)      (agent)        (REST)     │
-└────────┬──────────────────┬──────────────┬──────────────┬───────┘
-         │ stdio MCP        │ HTTP :11435  │ HTTP REST    │ HTTP REST
-         ▼                  ▼              ▼              ▼
+│  Claude Code       Ollama Client                    Custom App │
+│  (MCP client)      (any chat UI)                    (REST)     │
+└────────┬──────────────────┬─────────────────────────────┬───────┘
+         │ stdio MCP        │ HTTP :11435                 │ HTTP REST
+         ▼                  ▼                             ▼
 ┌──────────────┐  ┌──────────────────┐  ┌───────────────────────┐
 │  MCP Server  │  │  Ollama Proxy    │  │   REST API :4901      │
 │  @engram-ai-memory/mcp     │  │  @engram-ai-memory/adapter-    │  │   @engram-ai-memory/server          │
@@ -84,8 +84,7 @@ neuralCore/
 │   └── web/                @engram-ai-memory/web       — 3D dashboard
 │
 ├── adapters/
-│   ├── ollama/             @engram-ai-memory/adapter-ollama
-│   └── openclaw/           @engram-ai-memory/adapter-openclaw
+│   └── ollama/             @engram-ai-memory/adapter-ollama
 │
 └── tooling/
     ├── tsconfig/           shared TypeScript configs
@@ -210,7 +209,7 @@ last_accessed_at DATETIME
 -- Episodic only
 event_at        DATETIME
 session_id      TEXT
-source          TEXT  — 'claude-code' | 'ollama' | 'openclaw' | ...
+source          TEXT  — 'claude-code' | 'ollama' | custom client id
 
 -- Semantic only
 concept         TEXT  — concept label
@@ -250,6 +249,7 @@ Groups episodic memories from a single interaction.
 id          TEXT PRIMARY KEY
 source      TEXT
 context     TEXT JSON
+namespace   TEXT
 started_at  DATETIME
 ended_at    DATETIME
 ```
@@ -265,6 +265,7 @@ query_embedding   BLOB
 assembled_context TEXT JSON
 source            TEXT
 session_id        TEXT
+namespace         TEXT
 latency_ms        INT
 created_at        DATETIME
 ```
@@ -320,7 +321,7 @@ Adapters are thin wrappers that call Engram's REST API. They follow a consistent
 2. **Inject context**: prepend to system prompt
 3. **After AI responds**: call `/api/memory` to store the exchange as an episodic memory
 
-This pattern works for any AI system. The Ollama adapter is a transparent HTTP proxy; the OpenClaw adapter is an importable library.
+This pattern works for any AI system. The Ollama adapter is a transparent HTTP proxy; other clients can use the REST API directly.
 
 ---
 

@@ -223,6 +223,7 @@ export class ContextAssembler {
       ),
       source: source ?? null,
       sessionId: sessionId ?? null,
+      namespace: this.namespace ?? null,
       latencyMs,
     };
 
@@ -410,6 +411,7 @@ export class ContextAssembler {
       ),
       source: source ?? null,
       sessionId: sessionId ?? null,
+      namespace: this.namespace ?? null,
       latencyMs,
     });
 

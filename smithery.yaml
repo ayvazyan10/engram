@@ -22,9 +22,17 @@ startCommand:
         type: string
         title: Namespace
         description: >
-          Optional namespace to isolate memories per project or context.
-          Leave empty to use the global namespace.
+          Namespace value used only when Namespace Mode is filter or isolated.
+          Isolated mode requires this value.
         default: ""
+      namespaceMode:
+        type: string
+        title: Namespace Mode
+        description: >
+          Namespace behavior: none (default), filter, or isolated.
+          Isolated mode requires a namespace value.
+        enum: [none, filter, isolated]
+        default: none
       embeddingModel:
         type: string
         title: Embedding Model
@@ -38,6 +46,7 @@ startCommand:
       args: ["-y", "@engram-ai-memory/mcp@latest"],
       env: {
         ...(config.dbPath       ? { ENGRAM_DB_PATH:         config.dbPath }       : {}),
+        ENGRAM_NAMESPACE_MODE: config.namespaceMode || "none",
         ...(config.namespace    ? { ENGRAM_NAMESPACE:        config.namespace }    : {}),
         ...(config.embeddingModel ? { ENGRAM_EMBEDDING_MODEL: config.embeddingModel } : {}),
       }

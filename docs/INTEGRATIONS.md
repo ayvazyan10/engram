@@ -4,7 +4,7 @@ Engram exposes multiple integration surfaces:
 
 1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 21 tools)
 2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
-3. **REST API** — for everything else (Ollama, OpenClaw, custom apps, 40+ endpoints)
+3. **REST API** — for everything else (Ollama, custom apps, 40+ endpoints)
 4. **CLI** — terminal workflows and scripting
 5. **Webhooks** — push notifications to external systems on memory events
 6. **Plugin System** — extend Engram with lifecycle hooks
@@ -34,7 +34,8 @@ On first launch the extension installs `@engram-ai-memory/mcp` to `~/.engram/mcp
 | Option | Description | Default |
 |---|---|---|
 | `db_path` | SQLite database path | `~/.engram/engram.db` |
-| `namespace` | Memory namespace for isolation | *(global)* |
+| `namespace_mode` | `none`, `filter`, or `isolated` | `none` |
+| `namespace` | Namespace used by filter/isolated mode | *(empty)* |
 
 **How the bootstrap launcher works:**
 
@@ -501,117 +502,6 @@ base_url = "http://localhost:11435/v1"
 ### Graceful degradation
 
 If Engram is unavailable (not running, slow, or erroring), the proxy falls through silently — requests pass through to Ollama as-is. The timeout is 3 seconds to ensure Ollama response time is not significantly impacted.
-
----
-
-## OpenClaw
-
-OpenClaw integration comes in two forms:
-
-1. **Plugin** (`adapters/openclaw-plugin/`) — drop-in memory plugin that registers 6 tools (`memory_recall`, `memory_store`, `engram_search`, `memory_forget`, `memory_list`, `memory_stats`) with auto-recall and auto-store hooks
-2. **Adapter** (`adapters/openclaw/`) — `EngramClient` TypeScript class and `withMemory()` convenience wrapper for custom agent code
-
-### Plugin (recommended)
-
-Copy `adapters/openclaw-plugin/` to `~/.openclaw/plugins/engram/` and configure in `openclaw.json`. See the [engram.am OpenClaw docs](https://engram.am/docs/openclaw) for full setup instructions.
-
-### Adapter (TypeScript client)
-
-The adapter provides a `EngramClient` class and a `withMemory()` convenience wrapper for enriching agent actions with Engram context.
-
-### Setup
-
-**1. Build the adapter**
-
-```bash
-pnpm turbo run build --filter=@engram-ai-memory/adapter-openclaw
-```
-
-**2. Configure Engram URL in OpenClaw settings**
-
-```json
-// ~/.openclaw/openclaw.json
-{
-  "neuralCore": {
-    "url": "http://localhost:4901"
-  }
-}
-```
-
-**3. Import and use in your OpenClaw agent**
-
-```typescript
-import { EngramClient, withMemory } from '@engram-ai-memory/adapter-openclaw';
-
-// Option A — client class
-const neural = new EngramClient({ url: 'http://localhost:4901' });
-const context = await neural.recall(userMessage);
-// prepend `context` to your system prompt
-
-// Option B — withMemory wrapper (handles recall + store automatically)
-const result = await withMemory(userMessage, async (context) => {
-  const systemPrompt = context ? `${context}\n\n---\n` : '';
-  return await yourAgent.run(systemPrompt + userMessage);
-});
-```
-
-### `EngramClient` API
-
-```typescript
-class EngramClient {
-  constructor(config: { url?: string; source?: string; timeoutMs?: number })
-
-  // Assemble context for a query
-  recall(query: string, maxTokens?: number): Promise<RecallResult>
-
-  // Store a memory
-  store(content: string, type?: 'episodic' | 'semantic' | 'procedural', options?: {
-    importance?: number;
-    tags?: string[];
-    sessionId?: string;
-  }): Promise<StoreResult>
-
-  // Semantic search across memories
-  search(query: string, options?: {
-    topK?: number;
-    threshold?: number;
-    types?: string[];
-  }): Promise<unknown[]>
-
-  // List all memories with pagination and filtering
-  list(options?: {
-    type?: string;
-    source?: string;
-    limit?: number;    // default 50, max 200
-    offset?: number;
-  }): Promise<ListResult>
-
-  // Delete (archive) a memory by ID
-  forget(id: string): Promise<void>
-
-  // Get a single memory by ID
-  getById(id: string): Promise<MemoryEntry>
-
-  // Memory statistics
-  stats(): Promise<MemoryStats>
-
-  // Health check — returns true if Engram is reachable
-  ping(): Promise<boolean>
-}
-```
-
-### `withMemory()` convenience wrapper
-
-```typescript
-async function withMemory(
-  query: string,
-  options?: { url?: string; source?: string; maxTokens?: number }
-): Promise<string>
-```
-
-- Calls `/api/recall` and returns the formatted context string
-- Returns empty string (not an error) if Engram is unavailable — graceful degradation
-- Inject the returned string at the top of your system prompt
 
 ---
 

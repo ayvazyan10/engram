@@ -36,7 +36,7 @@ export const memories = sqliteTable(
     // Episodic fields
     eventAt: text('event_at'),
     sessionId: text('session_id'),
-    source: text('source'), // 'claude-code' | 'ollama' | 'openclaw' | ...
+    source: text('source'), // 'claude-code' | 'ollama' | custom client id
 
     // Semantic fields
     concept: text('concept'), // main concept label
@@ -115,6 +115,7 @@ export const sessions = sqliteTable(
     id: text('id').primaryKey(),
     source: text('source').notNull(), // which system created this session
     context: text('context'), // session context/metadata (JSON)
+    namespace: text('namespace'),
     startedAt: text('started_at')
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
@@ -123,6 +124,7 @@ export const sessions = sqliteTable(
   (t) => ({
     sourceIdx: index('idx_sessions_source').on(t.source),
     startedIdx: index('idx_sessions_started').on(t.startedAt),
+    namespaceIdx: index('idx_sessions_namespace').on(t.namespace),
   })
 );
 
@@ -138,6 +140,7 @@ export const contextAssemblies = sqliteTable(
     assembledContext: text('assembled_context').notNull(), // JSON: [{memoryId, score, type}]
     source: text('source'),
     sessionId: text('session_id'),
+    namespace: text('namespace'),
     latencyMs: integer('latency_ms'),
     createdAt: text('created_at')
       .default(sql`CURRENT_TIMESTAMP`)
@@ -146,6 +149,7 @@ export const contextAssemblies = sqliteTable(
   (t) => ({
     sourceIdx: index('idx_assemblies_source').on(t.source),
     sessionIdx: index('idx_assemblies_session').on(t.sessionId),
+    namespaceIdx: index('idx_assemblies_namespace').on(t.namespace),
     createdIdx: index('idx_assemblies_created').on(t.createdAt),
   })
 );

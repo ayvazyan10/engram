@@ -9,6 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Removed
+
+- OpenClaw support has been removed: both the TypeScript adapter and standalone plugin are no longer part of the workspace or documentation.
+
+### Added
+
+- Namespace behavior is now explicit through `namespaceMode`: `none` (the default), `filter`, or `isolated`. `none` ignores namespace inputs; `filter` preserves optional scoping and overrides; `isolated` requires one fixed namespace and rejects overrides and cross-namespace queries.
+
 ### Changed
 
 - **`@engram-ai-memory/core`** — The persisted index header now carries the embedding model id and a CRC-32 over the entry payload, and `deserialize()` refuses an index whose model or checksum does not match, or whose entry count disagrees with the payload length — `count` sits outside the CRC, so a lowered count would otherwise parse a prefix of the entries with a valid checksum (format version 2). A refused load leaves the in-memory index untouched. Previously only the dimension was checked, so an index built by a different model — two models can share a dimension — loaded silently and every query scored against vectors it could not be compared to; a truncated file could likewise load as if intact. `IndexMetadata` gained an `embeddingModel` field, `VectorSearch` takes an optional model id as its second constructor argument and exposes `setModelId()`, and `NeuralBrain` passes the active model through. Version 1 files are rejected rather than migrated: the index is a cache, so the first startup after upgrading rebuilds it from the database. No action is needed on upgrade, and switching embedding models no longer requires deleting the index by hand.

@@ -1,7 +1,7 @@
 /**
  * NeuralBrain — unified API for storing and recalling memories.
  *
- * This is the primary class that integration adapters (MCP, REST, Ollama, OpenClaw)
+ * This is the primary class that integration adapters (MCP, REST, Ollama)
  * should instantiate and use.
  *
  * Usage:
@@ -12,6 +12,7 @@
  */
 
 import fs from 'fs';
+import { createHash } from 'crypto';
 import { and, desc, eq, inArray, isNull, like, lt, or } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { closeDb, getDataVersion, getDb, schema, walCheckpoint } from './db/index.js';
@@ -63,6 +64,8 @@ function extractConcept(content: string): string | null {
   return words.length >= 3 ? words : null;
 }
 
+export type NamespaceMode = 'none' | 'filter' | 'isolated';
+
 export interface BrainConfig {
   /** Path to SQLite database file. Defaults to ./engram.db */
   dbPath?: string;
@@ -70,7 +73,14 @@ export interface BrainConfig {
   defaultSource?: string;
   /** Memory decay and garbage collection policy */
   decayPolicy?: Partial<DecayPolicyConfig>;
-  /** Optional namespace for memory isolation. When set, all operations are scoped to this namespace. */
+  /**
+   * Namespace behavior. Defaults to `none`.
+   * - none: ignore namespace values and use one shared memory pool
+   * - filter: optional namespace filtering with per-request overrides
+   * - isolated: require one fixed namespace and reject overrides/cross-namespace access
+   */
+  namespaceMode?: NamespaceMode;
+  /** Namespace used by `filter` and `isolated` modes. */
   namespace?: string;
   /** Contradiction detection configuration */
   contradictionConfig?: Partial<ContradictionConfig>;
@@ -211,10 +221,14 @@ export interface MemoryStats {
   graphEdges: number;
   /** Active namespace, or null for shared pool */
   namespace: string | null;
+  /** Active namespace behavior. */
+  namespaceMode: NamespaceMode;
 }
 
 export class NeuralBrain {
   private config: BrainConfig;
+  private readonly namespaceMode: NamespaceMode;
+  private readonly activeNamespace?: string;
   private vectorSearch: VectorSearch;
   private graph: KnowledgeGraph;
   private assembler: ContextAssembler;
@@ -256,14 +270,26 @@ export class NeuralBrain {
   private pendingSync: Promise<number> | null = null;
 
   constructor(config: BrainConfig = {}) {
-    this.config = config;
+    // Backwards compatibility: before namespaceMode existed, providing a
+    // namespace enabled filtering. Keep that behavior for existing callers,
+    // while an entirely unconfigured brain still defaults to `none`.
+    const namespaceMode = config.namespaceMode ?? (config.namespace?.trim() ? 'filter' : 'none');
+    if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
+      throw new Error('namespaceMode must be one of: none, filter, isolated');
+    }
+    this.namespaceMode = namespaceMode;
+    if (this.namespaceMode === 'isolated' && !config.namespace?.trim()) {
+      throw new Error('namespace is required when namespaceMode is "isolated"');
+    }
+    this.activeNamespace = this.namespaceMode === 'none' ? undefined : config.namespace?.trim() || undefined;
+    this.config = { ...config, namespaceMode: this.namespaceMode, namespace: this.activeNamespace };
     // Use the ACTIVE model's dimension, not the frozen module constant, so a
     // configured model switch cannot leave the index sized for the default. The
     // model id travels into the saved index so a cache from another model is
     // refused on load instead of scoring against incomparable vectors.
     this.vectorSearch = new VectorSearch(getEmbeddingDimension(), getEmbeddingModelId());
     this.graph = new KnowledgeGraph();
-    this.assembler = new ContextAssembler(this.vectorSearch, this.graph, config.namespace);
+    this.assembler = new ContextAssembler(this.vectorSearch, this.graph, this.activeNamespace);
     this.decayEngine = new DecayEngine(mergePolicy(config.decayPolicy ?? {}));
     this.contradictionDetector = new ContradictionDetector(config.contradictionConfig ?? {});
     this.webhookManager = new WebhookManager();
@@ -272,9 +298,32 @@ export class NeuralBrain {
     // Pass the namespace down: these classes are public (brain.episodic etc.)
     // and previously wrote to the shared null-namespace pool while their getters
     // read across every tenant.
-    this.episodic = new EpisodicMemory(config.namespace);
-    this.semantic = new SemanticMemory(config.namespace);
-    this.procedural = new ProceduralMemory(config.namespace);
+    this.episodic = new EpisodicMemory(this.activeNamespace, this.namespaceMode);
+    this.semantic = new SemanticMemory(this.activeNamespace, this.namespaceMode);
+    this.procedural = new ProceduralMemory(this.activeNamespace, this.namespaceMode);
+  }
+
+  private resolveStoreNamespace(requested?: string): string | null {
+    if (this.namespaceMode === 'none') return null;
+    if (this.namespaceMode === 'isolated') {
+      if (requested && requested !== this.activeNamespace) {
+        throw new Error('namespace override is not allowed in isolated mode');
+      }
+      return this.activeNamespace!;
+    }
+    return requested ?? this.activeNamespace ?? null;
+  }
+
+  private resolveCrossNamespace(requested?: boolean): boolean {
+    if (requested && this.namespaceMode === 'isolated') {
+      throw new Error('cross-namespace access is not allowed in isolated mode');
+    }
+    return this.namespaceMode === 'filter' && requested === true;
+  }
+
+  /** Whether a database row is visible to this brain instance. */
+  canAccessNamespace(namespace: string | null | undefined): boolean {
+    return this.namespaceMode !== 'isolated' || namespace === this.activeNamespace;
   }
 
   /**
@@ -313,11 +362,16 @@ export class NeuralBrain {
       }
     }
 
-    // Load all non-archived memories
+    // Isolated instances keep only their own tenant in memory. Filter mode keeps
+    // the full index because its explicit crossNamespace option needs it.
+    const initConditions = [isNull(schema.memories.archivedAt)];
+    if (this.namespaceMode === 'isolated') {
+      initConditions.push(eq(schema.memories.namespace, this.activeNamespace!));
+    }
     const allMemories = await db
       .select()
       .from(schema.memories)
-      .where(isNull(schema.memories.archivedAt));
+      .where(and(...initConditions));
 
     let incrementalCount = 0;
 
@@ -356,7 +410,12 @@ export class NeuralBrain {
     }
 
     // Load all edges into graph
-    const allConnections = await db.select().from(schema.memoryConnections);
+    const activeIds = new Set(allMemories.map((memory) => memory.id));
+    const loadedConnections = await db.select().from(schema.memoryConnections);
+    const allConnections = this.namespaceMode === 'isolated'
+      ? loadedConnections.filter((connection) =>
+          activeIds.has(connection.sourceId) && activeIds.has(connection.targetId))
+      : loadedConnections;
     for (const conn of allConnections) {
       this.graph.addEdge({
         sourceId: conn.sourceId,
@@ -437,10 +496,14 @@ export class NeuralBrain {
     // whereas claiming it afterwards would mark that commit as already handled.
     this.lastDataVersion = version;
 
+    const liveConditions = [isNull(schema.memories.archivedAt)];
+    if (this.namespaceMode === 'isolated') {
+      liveConditions.push(eq(schema.memories.namespace, this.activeNamespace!));
+    }
     const liveRows = await db
       .select({ id: schema.memories.id })
       .from(schema.memories)
-      .where(isNull(schema.memories.archivedAt));
+      .where(and(...liveConditions));
 
     const live = new Set(liveRows.map((r) => r.id));
     const indexed = this.vectorSearch.getIds();
@@ -571,7 +634,7 @@ export class NeuralBrain {
       source,
       sessionId: input.sessionId ?? null,
       eventAt: (input.eventAt ?? new Date()).toISOString(),
-      namespace: input.namespace ?? this.config.namespace ?? null,
+      namespace: this.resolveStoreNamespace(input.namespace),
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
@@ -755,7 +818,10 @@ export class NeuralBrain {
   async recall(query: string, options?: RecallOptions): Promise<RecallResult> {
     this.assertInitialized();
     await this.syncIndexFromStore();
-    const result = await this.assembler.recall(query, options);
+    const result = await this.assembler.recall(query, {
+      ...options,
+      crossNamespace: this.resolveCrossNamespace(options?.crossNamespace),
+    });
 
     void this.pluginRegistry.runHook('onRecall', {
       query,
@@ -777,7 +843,10 @@ export class NeuralBrain {
   ): AsyncGenerator<RecallChunk | RecallStreamComplete> {
     this.assertInitialized();
     await this.syncIndexFromStore();
-    yield* this.assembler.recallStream(query, options);
+    yield* this.assembler.recallStream(query, {
+      ...options,
+      crossNamespace: this.resolveCrossNamespace(options?.crossNamespace),
+    });
   }
 
   /**
@@ -788,13 +857,14 @@ export class NeuralBrain {
     await this.syncIndexFromStore();
 
     const queryVec = await embed(query);
+    const crossNamespace = this.resolveCrossNamespace(options.crossNamespace);
     const results = this.vectorSearch.search(
       queryVec,
       options.topK ?? 10,
       options.threshold ?? 0.3,
       options.types,
-      this.config.namespace,
-      options.crossNamespace
+      this.activeNamespace,
+      crossNamespace
     );
 
     const db = getDb();
@@ -816,7 +886,7 @@ export class NeuralBrain {
       if (!m) continue;
       if (options.sources && m.source && !options.sources.includes(m.source)) continue;
       // Namespace filtering (defense in depth — vector search already filters)
-      if (this.config.namespace && !options.crossNamespace && m.namespace !== this.config.namespace) continue;
+      if (this.activeNamespace && !crossNamespace && m.namespace !== this.activeNamespace) continue;
       // The similarity was computed and then thrown away, so every consumer that
       // wanted to show a relevance score rendered 0.
       hits.push({ ...m, score: result.similarity });
@@ -865,6 +935,17 @@ export class NeuralBrain {
   async forget(id: string): Promise<void> {
     this.assertInitialized();
 
+    if (this.namespaceMode === 'isolated') {
+      const db = getDb();
+      const [memory] = await db.select({ namespace: schema.memories.namespace })
+        .from(schema.memories)
+        .where(eq(schema.memories.id, id))
+        .limit(1);
+      if (!memory || !this.canAccessNamespace(memory.namespace)) {
+        throw new Error(`Memory not found: ${id}`);
+      }
+    }
+
     this.archiveAtomic([id]);
 
     this.vectorSearch.remove(id);
@@ -883,6 +964,7 @@ export class NeuralBrain {
       id: uuidv4(),
       source,
       context: context ? JSON.stringify(context) : null,
+      namespace: this.activeNamespace ?? null,
     };
     await db.insert(schema.sessions).values(session);
     return session.id;
@@ -896,7 +978,9 @@ export class NeuralBrain {
     await db
       .update(schema.sessions)
       .set({ endedAt: new Date().toISOString() })
-      .where(eq(schema.sessions.id, sessionId));
+      .where(this.activeNamespace
+        ? and(eq(schema.sessions.id, sessionId), eq(schema.sessions.namespace, this.activeNamespace))
+        : eq(schema.sessions.id, sessionId));
   }
 
   /**
@@ -911,8 +995,8 @@ export class NeuralBrain {
     const db = getDb();
 
     const statsConditions = [isNull(schema.memories.archivedAt)];
-    if (this.config.namespace) {
-      statsConditions.push(eq(schema.memories.namespace, this.config.namespace));
+    if (this.activeNamespace) {
+      statsConditions.push(eq(schema.memories.namespace, this.activeNamespace));
     }
 
     const all = await db
@@ -937,7 +1021,8 @@ export class NeuralBrain {
       indexSize: this.vectorSearch.size,
       graphNodes: this.graph.nodeCount,
       graphEdges: this.graph.edgeCount,
-      namespace: this.config.namespace ?? null,
+      namespace: this.activeNamespace ?? null,
+      namespaceMode: this.namespaceMode,
     };
   }
 
@@ -961,8 +1046,8 @@ export class NeuralBrain {
 
     // Get all episodic memories (scoped by namespace if configured)
     const consolidateConditions = [eq(schema.memories.type, 'episodic'), isNull(schema.memories.archivedAt)];
-    if (this.config.namespace) {
-      consolidateConditions.push(eq(schema.memories.namespace, this.config.namespace));
+    if (this.activeNamespace) {
+      consolidateConditions.push(eq(schema.memories.namespace, this.activeNamespace));
     }
     if (olderThanIso) {
       consolidateConditions.push(lt(schema.memories.createdAt, olderThanIso));
@@ -985,7 +1070,7 @@ export class NeuralBrain {
       const vec = unpackFP16(Buffer.from(ep.embedding as ArrayBuffer));
       // Scope to the namespace, otherwise foreign-namespace episodes consume
       // the top-10 slots and are then discarded, silently shrinking clusters.
-      const similar = this.vectorSearch.search(vec, 10, threshold, ['episodic'], this.config.namespace);
+      const similar = this.vectorSearch.search(vec, 10, threshold, ['episodic'], this.activeNamespace);
       const cluster = similar
         .filter((s) => !used.has(s.id) && s.id !== ep.id)
         .map((s) => episodes.find((e) => e.id === s.id)!)
@@ -1096,8 +1181,8 @@ export class NeuralBrain {
     const db = getDb();
 
     const conditions = [isNull(schema.memories.archivedAt)];
-    if (this.config.namespace) {
-      conditions.push(eq(schema.memories.namespace, this.config.namespace));
+    if (this.activeNamespace) {
+      conditions.push(eq(schema.memories.namespace, this.activeNamespace));
     }
 
     const memories = await db
@@ -1178,8 +1263,8 @@ export class NeuralBrain {
       eq(schema.memories.source, 'reflection'),
       isNull(schema.memories.archivedAt),
     ];
-    if (this.config.namespace) {
-      conditions.push(eq(schema.memories.namespace, this.config.namespace));
+    if (this.activeNamespace) {
+      conditions.push(eq(schema.memories.namespace, this.activeNamespace));
     }
     if (type) {
       conditions.push(like(schema.memories.tags, `%"reflection:${type}"%`));
@@ -1205,7 +1290,7 @@ export class NeuralBrain {
     const result = await this.decayEngine.sweep(
       (id) => this.forget(id),
       dryRun,
-      this.config.namespace
+      this.activeNamespace
     );
 
     // Auto-consolidation
@@ -1215,7 +1300,7 @@ export class NeuralBrain {
           const consolidated = await this.consolidate(minClusterSize, threshold, olderThanIso);
           return consolidated.map((m) => ({ id: m.id }));
         },
-        this.config.namespace
+        this.activeNamespace
       );
       result.consolidatedCount = newIds.length;
       result.newSemanticIds = newIds;
@@ -1250,7 +1335,12 @@ export class NeuralBrain {
 
   /** Get the active namespace, or undefined for shared pool. */
   getNamespace(): string | undefined {
-    return this.config.namespace;
+    return this.activeNamespace;
+  }
+
+  /** Get the configured namespace behavior. */
+  getNamespaceMode(): NamespaceMode {
+    return this.namespaceMode;
   }
 
   /** Get the current decay policy configuration. */
@@ -1274,8 +1364,8 @@ export class NeuralBrain {
     const db = getDb();
 
     const conditions = [isNull(schema.memories.archivedAt)];
-    if (this.config.namespace) {
-      conditions.push(eq(schema.memories.namespace, this.config.namespace));
+    if (this.activeNamespace) {
+      conditions.push(eq(schema.memories.namespace, this.activeNamespace));
     }
 
     const all = await db
@@ -1304,8 +1394,8 @@ export class NeuralBrain {
     const db = getDb();
 
     const conditions = [isNull(schema.memories.archivedAt)];
-    if (this.config.namespace) {
-      conditions.push(eq(schema.memories.namespace, this.config.namespace));
+    if (this.activeNamespace) {
+      conditions.push(eq(schema.memories.namespace, this.activeNamespace));
     }
 
     const all = await db
@@ -1335,7 +1425,7 @@ export class NeuralBrain {
       .where(eq(schema.memories.id, memoryId))
       .limit(1);
 
-    if (!memory) throw new Error(`Memory ${memoryId} not found`);
+    if (!memory || !this.canAccessNamespace(memory.namespace)) throw new Error(`Memory ${memoryId} not found`);
 
     const tags: string[] = JSON.parse(memory.tags);
     if (tags.includes(tag)) return tags; // already has it
@@ -1362,7 +1452,7 @@ export class NeuralBrain {
       .where(eq(schema.memories.id, memoryId))
       .limit(1);
 
-    if (!memory) throw new Error(`Memory ${memoryId} not found`);
+    if (!memory || !this.canAccessNamespace(memory.namespace)) throw new Error(`Memory ${memoryId} not found`);
 
     const tags: string[] = JSON.parse(memory.tags);
     const filtered = tags.filter((t) => t !== tag);
@@ -1408,10 +1498,12 @@ export class NeuralBrain {
     const db = getDb();
     const currentModel = getEmbeddingModelId();
 
+    const embeddingConditions = [isNull(schema.memories.archivedAt)];
+    if (this.activeNamespace) embeddingConditions.push(eq(schema.memories.namespace, this.activeNamespace));
     const all = await db
       .select()
       .from(schema.memories)
-      .where(isNull(schema.memories.archivedAt));
+      .where(and(...embeddingConditions));
 
     let totalEmbedded = 0;
     let currentModelCount = 0;
@@ -1474,10 +1566,12 @@ export class NeuralBrain {
     }
 
     // Select memories to re-embed
+    const reEmbedConditions = [isNull(schema.memories.archivedAt)];
+    if (this.activeNamespace) reEmbedConditions.push(eq(schema.memories.namespace, this.activeNamespace));
     const all = await db
       .select()
       .from(schema.memories)
-      .where(isNull(schema.memories.archivedAt));
+      .where(and(...reEmbedConditions));
 
     const toReEmbed = onlyStale
       ? all.filter((m) => m.embedding && m.embeddingModel !== currentModel)
@@ -1579,6 +1673,7 @@ export class NeuralBrain {
         and(
           isNull(schema.memories.archivedAt),
           isNull(schema.memories.embeddingModel),
+          ...(this.activeNamespace ? [eq(schema.memories.namespace, this.activeNamespace)] : []),
         )
       );
 
@@ -1590,6 +1685,7 @@ export class NeuralBrain {
         and(
           isNull(schema.memories.archivedAt),
           isNull(schema.memories.embeddingModel),
+          ...(this.activeNamespace ? [eq(schema.memories.namespace, this.activeNamespace)] : []),
         )
       );
 
@@ -1617,7 +1713,7 @@ export class NeuralBrain {
       .where(eq(schema.memories.id, memoryId))
       .limit(1);
 
-    if (!memory) throw new Error(`Memory ${memoryId} not found`);
+    if (!memory || !this.canAccessNamespace(memory.namespace)) throw new Error(`Memory ${memoryId} not found`);
     if (!memory.embedding) throw new Error(`Memory ${memoryId} has no embedding`);
 
     const vec = unpackFP16(Buffer.from(memory.embedding as ArrayBuffer));
@@ -1672,8 +1768,10 @@ export class NeuralBrain {
       if (!source || !target) continue;
 
       // Namespace filtering
-      const ns = namespace ?? this.config.namespace;
-      if (ns && source.namespace !== ns && target.namespace !== ns) continue;
+      const ns = this.namespaceMode === 'none' ? undefined : namespace ?? this.activeNamespace;
+      if (this.namespaceMode === 'isolated' &&
+          (!this.canAccessNamespace(source.namespace) || !this.canAccessNamespace(target.namespace))) continue;
+      if (this.namespaceMode === 'filter' && ns && source.namespace !== ns && target.namespace !== ns) continue;
 
       if (limit !== undefined && results.length >= limit) break;
 
@@ -1711,7 +1809,8 @@ export class NeuralBrain {
     const [source] = await db.select().from(schema.memories).where(eq(schema.memories.id, sourceId)).limit(1);
     const [target] = await db.select().from(schema.memories).where(eq(schema.memories.id, targetId)).limit(1);
 
-    if (!source || !target) {
+    if (!source || !target ||
+        !this.canAccessNamespace(source.namespace) || !this.canAccessNamespace(target.namespace)) {
       return { resolved: false };
     }
 
@@ -1910,10 +2009,14 @@ export class NeuralBrain {
 
     this.vectorSearch.clear();
 
+    const rebuildConditions = [isNull(schema.memories.archivedAt)];
+    if (this.namespaceMode === 'isolated') {
+      rebuildConditions.push(eq(schema.memories.namespace, this.activeNamespace!));
+    }
     const allMemories = await db
       .select()
       .from(schema.memories)
-      .where(isNull(schema.memories.archivedAt));
+      .where(and(...rebuildConditions));
 
     for (const memory of allMemories) {
       if (memory.embedding) {
@@ -1961,11 +2064,14 @@ export class NeuralBrain {
 
   /** Resolve the index file path from config or env. */
   private resolveIndexPath(): string | null {
-    return (
+    const basePath = (
       this.config.indexPath ??
       process.env['ENGRAM_INDEX_PATH'] ??
       (this.config.dbPath ? this.config.dbPath + '.index' : null)
     );
+    if (!basePath || this.namespaceMode !== 'isolated') return basePath;
+    const scope = createHash('sha256').update(this.activeNamespace!).digest('hex').slice(0, 12);
+    return `${basePath}.${scope}`;
   }
 
   private assertInitialized(): void {

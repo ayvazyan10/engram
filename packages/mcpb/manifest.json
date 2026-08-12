@@ -22,6 +22,7 @@
       "args": ["${__dirname}/server/index.js"],
       "env": {
         "ENGRAM_DB_PATH": "${user_config.db_path}",
+        "ENGRAM_NAMESPACE_MODE": "${user_config.namespace_mode}",
         "ENGRAM_NAMESPACE": "${user_config.namespace}",
         "ENGRAM_PACKAGE_VERSION": "0.1.3"
       }
@@ -62,9 +63,17 @@
     "namespace": {
       "type": "string",
       "title": "Namespace",
-      "description": "Optional namespace to isolate memories per project or context. Leave empty for the global namespace.",
+      "description": "Namespace value used by filter or isolated mode. Isolated mode requires this value.",
       "required": false,
       "default": ""
+    },
+    "namespace_mode": {
+      "type": "string",
+      "title": "Namespace Mode",
+      "description": "Namespace behavior. None disables namespaces; filter enables optional scoping; isolated enforces the configured namespace.",
+      "required": false,
+      "default": "none",
+      "enum": ["none", "filter", "isolated"]
     }
   },
   "compatibility": {

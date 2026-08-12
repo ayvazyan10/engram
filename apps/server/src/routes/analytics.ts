@@ -136,7 +136,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(schema.memories.id, id))
         .limit(1);
 
-      if (!existing) {
+      if (!existing || !brain.canAccessNamespace(existing.namespace)) {
         reply.code(404);
         return { error: 'Memory not found' };
       }
@@ -210,7 +210,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           .from(schema.memories)
           .where(eq(schema.memories.id, id))
           .limit(1);
-        if (!mem) continue;
+        if (!mem || !brain.canAccessNamespace(mem.namespace)) continue;
 
         const existing: string[] = JSON.parse(mem.tags ?? '[]');
         if (!existing.includes(tag)) {

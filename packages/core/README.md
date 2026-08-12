@@ -62,7 +62,8 @@ brain.shutdown();
 | `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
 | `ENGRAM_DATABASE` | `sqlite` | `sqlite` or `postgresql` |
 | `DATABASE_URL` | — | PostgreSQL connection URL |
-| `ENGRAM_NAMESPACE` | — | Memory namespace isolation |
+| `ENGRAM_NAMESPACE_MODE` | `none` | `none`, `filter`, or `isolated` |
+| `ENGRAM_NAMESPACE` | — | Namespace used by `filter`/`isolated` modes |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
 

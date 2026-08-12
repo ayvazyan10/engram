@@ -37,6 +37,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     handler: async (req, reply) => {
+      if (brain.getNamespaceMode() === 'isolated' && req.body.namespace && req.body.namespace !== brain.getNamespace()) {
+        return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
+      }
       const result = await brain.store(req.body);
       // Broadcast the full record: the dashboard appends this straight into its
       // store, and a {id,type} stub left content undefined and crashed rendering.
@@ -98,6 +101,11 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         },
       },
       handler: async (req, reply) => {
+        if (brain.getNamespaceMode() === 'isolated' && req.body.memories.some((memory) =>
+          memory.namespace && memory.namespace !== brain.getNamespace()
+        )) {
+          return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
+        }
         const start = Date.now();
         const results = await Promise.all(
           // Forward every documented per-item field. Only content and type were
@@ -178,7 +186,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(schema.memories.id, req.params.id))
         .limit(1);
 
-      if (!memory) {
+      if (!memory || !brain.canAccessNamespace(memory.namespace)) {
         reply.code(404);
         return { error: 'Memory not found' };
       }
@@ -200,7 +208,10 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     schema: { tags: ['memory'], summary: 'List sessions' },
     handler: async () => {
       const db = getDb();
-      return db.select().from(schema.sessions).orderBy(desc(schema.sessions.startedAt)).limit(100);
+      const namespace = brain.getNamespace();
+      return db.select().from(schema.sessions)
+        .where(namespace ? eq(schema.sessions.namespace, namespace) : undefined)
+        .orderBy(desc(schema.sessions.startedAt)).limit(100);
     },
   });
 

@@ -30,7 +30,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
           .where(eq(schema.memories.id, id))
           .limit(1);
 
-        if (!rootMemory) {
+        if (!rootMemory || !brain.canAccessNamespace(rootMemory.namespace)) {
           reply.code(404);
           return { error: 'Memory not found' };
         }
@@ -76,10 +76,14 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
               .from(schema.memories)
               .where(and(inArray(schema.memories.id, neighborIds), isNull(schema.memories.archivedAt)))
           : [];
+        const visibleNeighbors = neighbors.filter((memory) => brain.canAccessNamespace(memory.namespace));
+        const visibleIds = new Set([id, ...visibleNeighbors.map((memory) => memory.id)]);
 
         return {
           node: rootMemory,
-          connections: [...collected.values()].map((c) => ({
+          connections: [...collected.values()].filter((c) =>
+            visibleIds.has(c.sourceId) && visibleIds.has(c.targetId)
+          ).map((c) => ({
             id: c.id,
             // sourceId is part of the documented response shape and the web
             // client's type; it was previously omitted.
@@ -88,7 +92,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
             relationship: c.relationship,
             strength: c.strength,
           })),
-          neighbors,
+          neighbors: visibleNeighbors,
         };
       },
     }
@@ -125,6 +129,14 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
     handler: async (req, reply) => {
       const db = getDb();
       const { v4: uuidv4 } = await import('uuid');
+
+      const endpoints = await db.select({ id: schema.memories.id, namespace: schema.memories.namespace })
+        .from(schema.memories)
+        .where(inArray(schema.memories.id, [req.body.sourceId, req.body.targetId]));
+      if (endpoints.length !== 2 || endpoints.some((memory) => !brain.canAccessNamespace(memory.namespace))) {
+        reply.code(404);
+        return { error: 'Memory not found' };
+      }
 
       const connection = {
         id: uuidv4(),

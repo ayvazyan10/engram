@@ -1,6 +1,0 @@
-{
-  "extends": "@engram-ai-memory/tsconfig/node.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src" },
-  "include": ["src"],
-  "exclude": ["node_modules", "dist"]
-}

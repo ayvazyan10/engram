@@ -100,7 +100,7 @@ describe('namespace isolation in the memory classes', () => {
   });
 
   it('stamps the brain namespace on direct semantic writes', async () => {
-    const brain = new NeuralBrain({ dbPath, namespace: 'tenant-a' });
+    const brain = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-a' });
     await brain.initialize();
 
     const stored = await brain.semantic.store({ concept: 'Scoped', content: 'Tenant A fact' });
@@ -110,12 +110,12 @@ describe('namespace isolation in the memory classes', () => {
   });
 
   it('does not return another namespace\'s concepts', async () => {
-    const brainA = new NeuralBrain({ dbPath, namespace: 'tenant-a' });
+    const brainA = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-a' });
     await brainA.initialize();
     await brainA.semantic.store({ concept: 'Secret', content: 'Belongs to tenant A' });
     await closeDb();
 
-    const brainB = new NeuralBrain({ dbPath, namespace: 'tenant-b' });
+    const brainB = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-b' });
     await brainB.initialize();
 
     expect(await brainB.semantic.getByConcept('Secret')).toBeUndefined();
@@ -124,11 +124,11 @@ describe('namespace isolation in the memory classes', () => {
   });
 
   it('scopes episodic getRecent to the namespace', async () => {
-    const brainA = new NeuralBrain({ dbPath, namespace: 'tenant-a' });
+    const brainA = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-a' });
     await brainA.initialize();
     await brainA.episodic.store({ content: 'Tenant A event', source: 'unit-test' });
 
-    const brainB = new NeuralBrain({ dbPath, namespace: 'tenant-b' });
+    const brainB = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-b' });
     await brainB.initialize();
     const recent = await brainB.episodic.getRecent(50);
 
@@ -136,7 +136,7 @@ describe('namespace isolation in the memory classes', () => {
   });
 
   it('scopes procedural triggers to the namespace', async () => {
-    const brainA = new NeuralBrain({ dbPath, namespace: 'tenant-a' });
+    const brainA = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-a' });
     await brainA.initialize();
     await brainA.procedural.store({
       triggerPattern: 'when the build fails',
@@ -144,7 +144,7 @@ describe('namespace isolation in the memory classes', () => {
       content: 'Build triage',
     });
 
-    const brainB = new NeuralBrain({ dbPath, namespace: 'tenant-b' });
+    const brainB = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-b' });
     await brainB.initialize();
 
     expect(await brainB.procedural.getByTrigger('when the build fails')).toEqual([]);

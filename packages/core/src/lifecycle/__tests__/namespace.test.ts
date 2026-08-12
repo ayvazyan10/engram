@@ -2,8 +2,8 @@
  * Tests for Namespace Isolation.
  *
  * Validates:
- * 1. Without namespace — everything works as before (backwards compat)
- * 2. With namespace — store scopes memories, search/stats only return same-namespace
+ * 1. `none` is the default and ignores namespace values
+ * 2. `filter` scopes memories, search, and stats to a namespace
  * 3. crossNamespace flag — allows searching across all namespaces
  * 4. Two brains sharing one DB — each sees only its own namespace
  */
@@ -42,6 +42,13 @@ function cleanup(dbPath: string) {
   try { fs.unlinkSync(dbPath); } catch {}
   try { fs.unlinkSync(dbPath + '-wal'); } catch {}
   try { fs.unlinkSync(dbPath + '-shm'); } catch {}
+  try {
+    const directory = path.dirname(dbPath);
+    const indexPrefix = path.basename(dbPath) + '.index';
+    for (const file of fs.readdirSync(directory)) {
+      if (file.startsWith(indexPrefix)) fs.unlinkSync(path.join(directory, file));
+    }
+  } catch {}
 }
 
 // ─── Backwards Compatibility ────────────────────────────────────────────────
@@ -93,7 +100,7 @@ describe('Namespace — scoped operations', () => {
 
   beforeEach(async () => {
     dbPath = createTestDb();
-    brain = new NeuralBrain({ dbPath, defaultSource: 'test', namespace: 'project-a' });
+    brain = new NeuralBrain({ dbPath, defaultSource: 'test', namespaceMode: 'filter', namespace: 'project-a' });
     await brain.initialize();
   });
 
@@ -140,7 +147,7 @@ describe('Namespace — two brains, one DB', () => {
     dbPath = createTestDb();
 
     // Brain A stores first, then shuts down so brain B can use the same DB singleton
-    brainA = new NeuralBrain({ dbPath, defaultSource: 'test', namespace: 'alpha' });
+    brainA = new NeuralBrain({ dbPath, defaultSource: 'test', namespaceMode: 'filter', namespace: 'alpha' });
     await brainA.initialize();
     await brainA.store({ content: 'Alpha memory about deployment workflows' });
     await brainA.store({ content: 'Alpha memory about CI pipelines' });
@@ -148,7 +155,7 @@ describe('Namespace — two brains, one DB', () => {
     closeDb();
 
     // Brain B uses a different namespace
-    brainB = new NeuralBrain({ dbPath, defaultSource: 'test', namespace: 'beta' });
+    brainB = new NeuralBrain({ dbPath, defaultSource: 'test', namespaceMode: 'filter', namespace: 'beta' });
     await brainB.initialize();
     await brainB.store({ content: 'Beta memory about database schemas' });
   });
@@ -223,7 +230,7 @@ describe('Namespace — auto-migration', () => {
     sqlite.close();
 
     // Initialize brain — should auto-migrate
-    const brain = new NeuralBrain({ dbPath, defaultSource: 'test' });
+    const brain = new NeuralBrain({ dbPath, defaultSource: 'test', namespaceMode: 'filter' });
     await brain.initialize();
 
     // Should be able to store with namespace
@@ -231,6 +238,75 @@ describe('Namespace — auto-migration', () => {
     expect(mem.namespace).toBe('migrated');
 
     brain.shutdown();
+    closeDb();
+    cleanup(dbPath);
+  });
+});
+
+describe('Namespace modes', () => {
+  it('defaults to none and ignores configured and per-store namespaces', async () => {
+    const dbPath = createTestDb();
+    const brain = new NeuralBrain({ dbPath, namespaceMode: 'none', namespace: 'ignored' });
+    await brain.initialize();
+
+    const { memory } = await brain.store({ content: 'Shared memory', namespace: 'also-ignored' });
+    expect(brain.getNamespaceMode()).toBe('none');
+    expect(brain.getNamespace()).toBeUndefined();
+    expect(memory.namespace).toBeNull();
+
+    brain.shutdown();
+    closeDb();
+    cleanup(dbPath);
+  });
+
+  it('keeps legacy namespace-only configuration in filter mode', async () => {
+    const dbPath = createTestDb();
+    const brain = new NeuralBrain({ dbPath, namespace: 'legacy-project' });
+    await brain.initialize();
+
+    const { memory } = await brain.store({ content: 'Legacy scoped memory' });
+    expect(brain.getNamespaceMode()).toBe('filter');
+    expect(brain.getNamespace()).toBe('legacy-project');
+    expect(memory.namespace).toBe('legacy-project');
+
+    brain.shutdown();
+    closeDb();
+    cleanup(dbPath);
+  });
+
+  it('requires a namespace in isolated mode', () => {
+    expect(() => new NeuralBrain({ namespaceMode: 'isolated' })).toThrow(/namespace is required/);
+  });
+
+  it('rejects overrides and cross-namespace access in isolated mode', async () => {
+    const dbPath = createTestDb();
+    const brain = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-a' });
+    await brain.initialize();
+
+    await expect(brain.store({ content: 'Wrong tenant', namespace: 'tenant-b' })).rejects.toThrow(/override/);
+    await expect(brain.search('anything', { crossNamespace: true })).rejects.toThrow(/cross-namespace/);
+
+    brain.shutdown();
+    closeDb();
+    cleanup(dbPath);
+  });
+
+  it('keeps foreign memories out of an isolated in-memory index', async () => {
+    const dbPath = createTestDb();
+    const writer = new NeuralBrain({ dbPath, namespaceMode: 'filter', namespace: 'tenant-b' });
+    await writer.initialize();
+    await writer.store({ content: 'Tenant B secret' });
+    writer.shutdown();
+    closeDb();
+
+    const isolated = new NeuralBrain({ dbPath, namespaceMode: 'isolated', namespace: 'tenant-a' });
+    await isolated.initialize();
+    await isolated.store({ content: 'Tenant A memory' });
+
+    expect(isolated.getIndexStatus().entryCount).toBe(1);
+    expect((await isolated.stats()).total).toBe(1);
+
+    isolated.shutdown();
     closeDb();
     cleanup(dbPath);
   });

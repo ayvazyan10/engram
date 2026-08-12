@@ -13,6 +13,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { NeuralBrain } from '@engram-ai-memory/core';
+import type { NamespaceMode } from '@engram-ai-memory/core';
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
@@ -25,10 +26,17 @@ const VERSION: string = (
 ).version;
 
 const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
+const namespaceMode = (
+  process.env['ENGRAM_NAMESPACE_MODE'] ?? (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
+) as NamespaceMode;
+if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
+  throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
+}
 
 const brain = new NeuralBrain({
   dbPath: process.env['ENGRAM_DB_PATH'],
   defaultSource,
+  namespaceMode,
   namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
 });
 
@@ -93,7 +101,7 @@ server.tool(
       .describe('Importance score 0.0–1.0 (default varies by type)'),
     concept: z.string().optional().describe('For semantic memories: the concept name'),
     sessionId: z.string().optional().describe('Session ID to group related episodic memories'),
-    namespace: z.string().optional().describe('Override namespace for this memory'),
+    namespace: z.string().optional().describe('Override namespace in filter mode; ignored in none mode and restricted in isolated mode'),
   },
   { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   async ({ content, type, source, tags, importance, concept, sessionId, namespace }) => {
@@ -159,7 +167,7 @@ server.tool(
       .array(z.enum(['episodic', 'semantic', 'procedural']))
       .optional()
       .describe('Filter by memory type'),
-    crossNamespace: z.boolean().optional().default(false).describe('If true, search across all namespaces'),
+    crossNamespace: z.boolean().optional().default(false).describe('Search all namespaces in filter mode; rejected in isolated mode'),
   },
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ query, topK, threshold, types, crossNamespace }) => {
@@ -211,7 +219,7 @@ server.tool(
       .array(z.string())
       .optional()
       .describe('Filter by source systems (e.g. ["claude-code", "ollama"])'),
-    crossNamespace: z.boolean().optional().default(false).describe('If true, recall from all namespaces'),
+    crossNamespace: z.boolean().optional().default(false).describe('Recall all namespaces in filter mode; rejected in isolated mode'),
     progressive: z.boolean().optional().default(false).describe('If true, return memories grouped by recall phase (vector, graph) with scores'),
   },
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
