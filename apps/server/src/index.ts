@@ -75,8 +75,11 @@ function secretsMatch(a: string, b: string): boolean {
 }
 const DECAY_INTERVAL = parseInt(process.env['ENGRAM_DECAY_INTERVAL'] ?? '', 10);
 const DECAY_THRESHOLD = parseFloat(process.env['ENGRAM_DECAY_THRESHOLD'] ?? '');
+// `||`, not `??`: an empty ENGRAM_NAMESPACE_MODE — what a host templating an
+// unset optional field passes — would otherwise reach the validation below and
+// abort startup.
 const namespaceMode = (
-  process.env['ENGRAM_NAMESPACE_MODE'] ?? (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
+  process.env['ENGRAM_NAMESPACE_MODE'] || (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
 ) as NamespaceMode;
 if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
   throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');

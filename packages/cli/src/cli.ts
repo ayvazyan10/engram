@@ -32,12 +32,15 @@ const REPO = 'https://github.com/ayvazyan10/engram.git';
 /** Schema version of the `engram export` payload (independent of the package version). */
 const EXPORT_FORMAT_VERSION = '0.1.0';
 
+const NAMESPACE_MODES = ['none', 'filter', 'isolated'] as const;
+type NamespaceModeName = (typeof NAMESPACE_MODES)[number];
+
 interface EngramConfig {
   dbPath: string;
   port: number;
   host: string;
   namespace: string | null;
-  namespaceMode: 'none' | 'filter' | 'isolated';
+  namespaceMode: NamespaceModeName;
   embeddingModel: string;
   indexPath: string;
   repoPath: string;
@@ -58,7 +61,12 @@ function loadConfig(): EngramConfig {
   if (!fs.existsSync(CONFIG_PATH)) return DEFAULT_CONFIG;
   try {
     const stored = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Partial<EngramConfig>;
-    const namespaceMode = stored.namespaceMode ?? (stored.namespace ? 'filter' : 'none');
+    // A hand-edited config can carry an empty or bogus mode; fall back to the
+    // legacy derivation rather than exporting garbage into the child process
+    // env, where it would abort the MCP server on startup.
+    const namespaceMode = NAMESPACE_MODES.includes(stored.namespaceMode as NamespaceModeName)
+      ? (stored.namespaceMode as NamespaceModeName)
+      : stored.namespace ? 'filter' : 'none';
     return { ...DEFAULT_CONFIG, ...stored, namespaceMode };
   } catch {
     return DEFAULT_CONFIG;
@@ -597,7 +605,7 @@ configCmd.command('set <key> <value>').description('Set a config value').action(
     }
     parsed = port;
   } else if (key === 'namespaceMode') {
-    if (!['none', 'filter', 'isolated'].includes(value)) {
+    if (!NAMESPACE_MODES.includes(value as NamespaceModeName)) {
       fail(`Invalid namespaceMode: ${value} (expected none, filter, or isolated)`);
       process.exit(1);
     }

@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
-import { eq, isNull, desc, and } from 'drizzle-orm';
+import { eq, isNull, desc, and, or } from 'drizzle-orm';
 import { brain, realtime } from '../index.js';
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
@@ -209,8 +209,16 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     handler: async () => {
       const db = getDb();
       const namespace = brain.getNamespace();
+      // Sessions predate the namespace column, so every row written before the
+      // upgrade carries NULL. Isolated mode must not show them; filter mode is
+      // soft scoping and hiding a user's own history would look like data loss.
+      const scope = !namespace
+        ? undefined
+        : brain.getNamespaceMode() === 'isolated'
+          ? eq(schema.sessions.namespace, namespace)
+          : or(eq(schema.sessions.namespace, namespace), isNull(schema.sessions.namespace));
       return db.select().from(schema.sessions)
-        .where(namespace ? eq(schema.sessions.namespace, namespace) : undefined)
+        .where(scope)
         .orderBy(desc(schema.sessions.startedAt)).limit(100);
     },
   });

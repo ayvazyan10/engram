@@ -314,6 +314,28 @@ describe('graph', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('404s when an endpoint does not exist', async () => {
+    const a = await storeMemory('Graph node with one real endpoint');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connections',
+      payload: { sourceId: a, targetId: 'no-such-memory', relationship: 'relates_to' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('accepts a self-connection', async () => {
+    // The namespace pre-check compared the fetched row count against a literal
+    // 2, and one id named twice returns a single row — so a self-link 404'd.
+    const a = await storeMemory('Graph node that links back to itself');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/connections',
+      payload: { sourceId: a, targetId: a, relationship: 'relates_to', strength: 1 },
+    });
+    expect(res.statusCode).toBe(201);
+  });
 });
 
 describe('webhooks', () => {

@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual runs never publish. They exercise the whole pipeline — npm
+  # credentials, build, package names, bundle validation — so a broken release
+  # is found before a tag is cut rather than after.
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   publish:
@@ -11,19 +18,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           version: 9.15.4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
+
+      # Fail in seconds on a missing or expired token instead of after the
+      # build, where npm reports it as ENEEDAUTH from inside a publish loop.
+      - name: Verify npm credentials
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN repository secret is unset or empty. Create an npm Automation token and add it with: gh secret set NPM_TOKEN"
+            exit 1
+          fi
+          echo "Authenticated to npm as $(npm whoami)"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -45,6 +65,7 @@ jobs:
           done
 
       - name: Publish packages
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           for dir in packages/core packages/mcp packages/cli packages/vis; do
@@ -61,3 +82,29 @@ jobs:
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # The .mcpb bundle is how Claude Desktop users install Engram, so it is
+      # built and validated on every run and attached to the release below.
+      - name: Build Claude Desktop bundle
+        run: |
+          set -euo pipefail
+          npm install -g @anthropic-ai/mcpb
+          pnpm pack:mcpb
+
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          notes="$(python3 .github/scripts/changelog-section.py "${tag#v}")"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag exists — updating notes and asset"
+            printf '%s' "$notes" | gh release edit "$tag" --notes-file -
+            gh release upload "$tag" packages/mcpb/engram-mcp.mcpb --clobber
+          else
+            printf '%s' "$notes" | gh release create "$tag" \
+              --title "$tag" --notes-file - \
+              packages/mcpb/engram-mcp.mcpb
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
