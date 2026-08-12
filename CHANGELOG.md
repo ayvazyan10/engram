@@ -27,7 +27,9 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 - **`@engram-ai-memory/server`** — The package version had been left at `0.3.2`, and `GET /api/health` and the Swagger document read it straight from `package.json`, so both reported a release two versions behind the running code.
 
-- **Release pipeline** — `Release` now verifies the npm token before building and fails with an actionable message when the `NPM_TOKEN` secret is unset, builds and validates the `.mcpb` Desktop Extension bundle, and creates the GitHub release with the bundle attached and the notes taken from this file. It also accepts a manual run that exercises everything except publishing. `CI` ran its pull-request trigger against a `main` branch that does not exist — it is `master` — so pull requests were only checked incidentally by the push trigger; it now validates the extension manifest too.
+- **Release pipeline** — `Release` now verifies the npm token before building and fails with an actionable message when the `NPM_TOKEN` secret is unset, builds and validates the `.mcpb` Desktop Extension bundle, and creates the GitHub release with the bundle attached and the notes taken from this file. It also accepts a manual run that exercises everything except publishing.
+
+- **Release pipeline** — `CI` did not run on any namespaced branch. Its push filter was `'*'`, which stops at a slash and therefore never matched `fix/…` or `agent/…`, and its pull-request filter named a `main` branch this repository does not have — it is `master`. Together those meant a branch could be developed, opened as a pull request and merged without a single check; PR #4 was. Both filters are corrected, and CI now validates the Desktop Extension manifest, whose schema rejects keys that look reasonable.
 
 ## [0.4.0] — 2026-08-12
 

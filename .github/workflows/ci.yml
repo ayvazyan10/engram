@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: ['*']
+    # '**', not '*': a single star stops at a slash, so every namespaced branch
+    # (fix/…, agent/…) pushed without CI, and the pull_request trigger below
+    # named a branch this repo does not have. Between them, PR #4 merged with
+    # no checks at all.
+    branches: ['**']
   pull_request:
     branches: [master]
 
