@@ -351,11 +351,11 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_PG_SCHEMA_READY` | `false` | Escape hatch: set `true` only if you provisioned a compatible PostgreSQL schema yourself. Unsupported. |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
 | `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
-
-Namespaces are disabled by default. Set `ENGRAM_NAMESPACE_MODE=filter` for optional scoping, or `isolated` together with `ENGRAM_NAMESPACE` for a fixed boundary that rejects overrides and cross-namespace queries. Existing configurations that already contain `ENGRAM_NAMESPACE` continue in `filter` mode automatically.
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
+
+Namespaces are disabled by default. Set `ENGRAM_NAMESPACE_MODE=filter` for optional scoping, or `isolated` together with `ENGRAM_NAMESPACE` for a fixed boundary that rejects overrides and cross-namespace queries. Existing configurations that already contain `ENGRAM_NAMESPACE` continue in `filter` mode automatically.
 
 ---
 

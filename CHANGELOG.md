@@ -9,21 +9,31 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-13
+
+### Fixed
+
+- **`@engram-ai-memory/mcp`**, **`@engram-ai-memory/server`** — An empty `ENGRAM_NAMESPACE_MODE` aborted startup with `ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated`. Both read the variable with `??`, which only falls back on an absent variable, but a host that templates an untouched optional config field — the Claude Desktop extension among them — passes an empty string instead of omitting it. An empty value is now treated as unset, the same as before namespace modes existed.
+
+- **`@engram-ai-memory/cli`** — A hand-edited `~/.engram/config.json` carrying an empty or unrecognised `namespaceMode` was exported verbatim into the MCP server's environment, moving the crash above into a child process. Unrecognised values now fall back to the legacy derivation (`filter` when a namespace is set, otherwise `none`).
+
+- **`@engram-ai-memory/server`** — `POST /api/graph/connections` rejected a self-connection with 404. The namespace pre-check matched the returned row count against a literal 2, and naming the same memory as source and target returns one row. The endpoint ids are now deduplicated before the comparison.
+
+- **`@engram-ai-memory/server`** — `GET /api/sessions` returned nothing for sessions recorded before v0.4.0 once `filter` mode was enabled: those rows predate the `namespace` column and carry `NULL`. `filter` mode is soft scoping, so it now shows them alongside the namespaced ones; `isolated` mode still excludes them.
+
+### Changed
+
+- **`@engram-ai-memory/vis`** — Added a `files` allowlist so the published tarball carries `dist` only, matching the other packages.
+
+- **`@engram-ai-memory/server`** — The package version had been left at `0.3.2`, and `GET /api/health` and the Swagger document read it straight from `package.json`, so both reported a release two versions behind the running code.
+
+- **Release pipeline** — `Release` now verifies the npm token before building and fails with an actionable message when the `NPM_TOKEN` secret is unset, builds and validates the `.mcpb` Desktop Extension bundle, and creates the GitHub release with the bundle attached and the notes taken from this file. It also accepts a manual run that exercises everything except publishing. `CI` ran its pull-request trigger against a `main` branch that does not exist — it is `master` — so pull requests were only checked incidentally by the push trigger; it now validates the extension manifest too.
+
 ## [0.4.0] — 2026-08-12
-
-### Removed
-
-- OpenClaw support has been removed: both the TypeScript adapter and standalone plugin are no longer part of the workspace or documentation.
 
 ### Added
 
 - Namespace behavior is now explicit through `namespaceMode`: `none` (the default), `filter`, or `isolated`. `none` ignores namespace inputs; `filter` preserves optional scoping and overrides; `isolated` requires one fixed namespace and rejects overrides and cross-namespace queries.
-
-### Changed
-
-- **`@engram-ai-memory/core`** — The persisted index header now carries the embedding model id and a CRC-32 over the entry payload, and `deserialize()` refuses an index whose model or checksum does not match, or whose entry count disagrees with the payload length — `count` sits outside the CRC, so a lowered count would otherwise parse a prefix of the entries with a valid checksum (format version 2). A refused load leaves the in-memory index untouched. Previously only the dimension was checked, so an index built by a different model — two models can share a dimension — loaded silently and every query scored against vectors it could not be compared to; a truncated file could likewise load as if intact. `IndexMetadata` gained an `embeddingModel` field, `VectorSearch` takes an optional model id as its second constructor argument and exposes `setModelId()`, and `NeuralBrain` passes the active model through. Version 1 files are rejected rather than migrated: the index is a cache, so the first startup after upgrading rebuilds it from the database. No action is needed on upgrade, and switching embedding models no longer requires deleting the index by hand.
-
-### Added
 
 - **`@engram-ai-memory/core`** — `VectorSearch.saveToDiskAsync()` and `NeuralBrain.saveIndexAsync()` persist the vector index without blocking the event loop. `reEmbed()`, `rebuildIndex()` and `POST /api/index/save` now use them — previously each ran a synchronous, full-index `writeFileSync` inside a live request handler. The synchronous `saveToDisk()`/`saveIndex()` remain for callers that cannot await, such as `shutdown()`.
 
@@ -32,6 +42,16 @@ Versioning: [Semantic Versioning](https://semver.org/)
   Because the synchronous write used to serialize concurrent callers just by blocking the event loop, async saves needed that ordering back explicitly: they are queued per instance, and a write whose snapshot has been superseded by a newer save steps aside instead of renaming over it. Without both, two overlapping saves — a re-embed racing an explicit index save, or a re-embed still in flight when `shutdown()` runs during a restart — could silently discard the fresher snapshot while every caller still saw success.
 
   Note that the index is not fsynced: the rename is atomic against a process crash, but a power loss can still revert to the previous snapshot. That is acceptable because the index is a cache rebuildable from SQLite, and a missing or corrupt one already falls back to a full rebuild.
+
+### Changed
+
+- **BREAKING** — Namespaces are now opt-in, and the default `none` mode ignores namespace inputs entirely. Before this release, a per-call `namespace` was honoured even when the brain had none configured: `store({ content, namespace: 'x' })`, `POST /api/memory` with a `namespace` field, and the MCP `store_memory` tool's `namespace` argument all wrote that value to the row. Under the default they are silently dropped and the memory lands in the shared pool. Callers that relied on per-call namespaces must set `namespaceMode: 'filter'` (`ENGRAM_NAMESPACE_MODE=filter`) to keep the old behavior. A configuration that already sets `namespace`/`ENGRAM_NAMESPACE` without a mode is upgraded to `filter` automatically and is unaffected. Stored rows are never rewritten — only how new writes are stamped changes.
+
+- **`@engram-ai-memory/core`** — The persisted index header now carries the embedding model id and a CRC-32 over the entry payload, and `deserialize()` refuses an index whose model or checksum does not match, or whose entry count disagrees with the payload length — `count` sits outside the CRC, so a lowered count would otherwise parse a prefix of the entries with a valid checksum (format version 2). A refused load leaves the in-memory index untouched. Previously only the dimension was checked, so an index built by a different model — two models can share a dimension — loaded silently and every query scored against vectors it could not be compared to; a truncated file could likewise load as if intact. `IndexMetadata` gained an `embeddingModel` field, `VectorSearch` takes an optional model id as its second constructor argument and exposes `setModelId()`, and `NeuralBrain` passes the active model through. Version 1 files are rejected rather than migrated: the index is a cache, so the first startup after upgrading rebuilds it from the database. No action is needed on upgrade, and switching embedding models no longer requires deleting the index by hand.
+
+### Removed
+
+- OpenClaw support has been removed: both the TypeScript adapter and standalone plugin are no longer part of the workspace or documentation.
 
 ### Fixed
 
@@ -122,5 +142,7 @@ No API changes — a drop-in upgrade.
 
 ---
 
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ayvazyan10/engram/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.4.0
 [0.1.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.1.0

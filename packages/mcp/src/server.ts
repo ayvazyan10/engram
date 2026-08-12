@@ -26,8 +26,12 @@ const VERSION: string = (
 ).version;
 
 const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
+// `||`, not `??`: hosts that template an unset optional config field — the
+// Claude Desktop extension among them — pass an empty string rather than
+// omitting the variable, and `??` let that empty string through to the
+// validation below, so an untouched optional field killed the server.
 const namespaceMode = (
-  process.env['ENGRAM_NAMESPACE_MODE'] ?? (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
+  process.env['ENGRAM_NAMESPACE_MODE'] || (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
 ) as NamespaceMode;
 if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
   throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');

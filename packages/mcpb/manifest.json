@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "engram-mcp",
   "display_name": "Engram AI Memory",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Universal AI memory — store, search, and recall memories with semantic similarity and knowledge graph traversal.",
   "long_description": "Engram gives any AI model persistent, structured memory across sessions.\n\nOn first launch it installs `@engram-ai-memory/mcp` from npm (requires Node.js ≥ 22 and npm). The embedding model (all-MiniLM-L6-v2) downloads automatically on first use (~25 MB).\n\n**21 tools across 8 categories:**\n- **Memory** — `store_memory`, `search_memory`, `recall_context`, `add_knowledge`, `forget`\n- **Stats** — `memory_stats`, `index_status`, `embedding_status`\n- **Lifecycle** — `decay_sweep`, `decay_policy`, `re_embed`\n- **Contradictions** — `check_contradictions`, `resolve_contradiction`\n- **Tags** — `list_tags`, `tag_memory`\n- **Webhooks** — `webhook_subscribe`, `webhook_list`\n- **Plugins** — `plugin_list`\n- **Reflection** — `request_reflection`, `store_reflection`, `get_reflections`\n\n**Recommended workflow:**\n```\nSession start  → recall_context(task description)\nDuring work    → store_memory(decisions, findings)\nEnd of session → store_memory(session summary)\n```\n\nReflection is AI-driven: `request_reflection` returns prompts, the connected AI reasons over them and calls `store_reflection`. Engram runs no LLM — no API keys, no external calls. All embeddings run 100% locally.",
   "author": {
@@ -27,7 +27,7 @@
         "ENGRAM_DB_PATH": "${user_config.db_path}",
         "ENGRAM_NAMESPACE_MODE": "${user_config.namespace_mode}",
         "ENGRAM_NAMESPACE": "${user_config.namespace}",
-        "ENGRAM_PACKAGE_VERSION": "0.4.0"
+        "ENGRAM_PACKAGE_VERSION": "0.4.1"
       }
     }
   },

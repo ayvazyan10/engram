@@ -130,10 +130,16 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
       const db = getDb();
       const { v4: uuidv4 } = await import('uuid');
 
+      // Dedupe first: a self-connection names the same id twice, and matching
+      // the row count against a literal 2 rejected it as a missing memory.
+      const endpointIds = [...new Set([req.body.sourceId, req.body.targetId])];
       const endpoints = await db.select({ id: schema.memories.id, namespace: schema.memories.namespace })
         .from(schema.memories)
-        .where(inArray(schema.memories.id, [req.body.sourceId, req.body.targetId]));
-      if (endpoints.length !== 2 || endpoints.some((memory) => !brain.canAccessNamespace(memory.namespace))) {
+        .where(inArray(schema.memories.id, endpointIds));
+      if (
+        endpoints.length !== endpointIds.length ||
+        endpoints.some((memory) => !brain.canAccessNamespace(memory.namespace))
+      ) {
         reply.code(404);
         return { error: 'Memory not found' };
       }
