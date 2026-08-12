@@ -48,7 +48,15 @@ jobs:
         run: |
           set -euo pipefail
           for dir in packages/core packages/mcp packages/cli packages/vis; do
-            echo "Publishing $dir..."
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "Skipping $name@$version (already published)"
+              continue
+            fi
+
+            echo "Publishing $name@$version from $dir..."
             (cd "$dir" && pnpm publish --access public --no-git-checks)
           done
         env:

@@ -9,6 +9,8 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-12
+
 ### Removed
 
 - OpenClaw support has been removed: both the TypeScript adapter and standalone plugin are no longer part of the workspace or documentation.
@@ -120,4 +122,5 @@ No API changes — a drop-in upgrade.
 
 ---
 
+[0.4.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.4.0
 [0.1.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.1.0

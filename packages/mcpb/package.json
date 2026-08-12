@@ -1,6 +1,6 @@
 {
   "name": "@engram-ai-memory/desktop-extension",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Claude Desktop Extension (.mcpb) for Engram MCP server",
   "private": true,
   "scripts": {

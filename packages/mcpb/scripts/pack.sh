@@ -18,7 +18,7 @@ fi
 
 echo "==> Packing bundle..."
 if command -v mcpb &>/dev/null; then
-  mcpb pack "$MCPB_DIR" --output "$OUT"
+  mcpb pack "$MCPB_DIR" "$OUT"
 else
   # Fallback: build zip manually using Python (mcpb format is a ZIP)
   TMP="$(mktemp -d)"

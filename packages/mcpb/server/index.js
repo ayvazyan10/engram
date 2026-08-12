@@ -14,7 +14,7 @@ const path = require('path');
 const os = require('os');
 
 const PACKAGE = '@engram-ai-memory/mcp';
-const VERSION = process.env['ENGRAM_PACKAGE_VERSION'] || '0.1.3';
+const VERSION = process.env['ENGRAM_PACKAGE_VERSION'] || '0.4.0';
 const INSTALL_DIR = path.join(os.homedir(), '.engram', 'mcp');
 const SERVER_BIN = path.join(INSTALL_DIR, 'node_modules', '.bin', 'engram-mcp');
 const MARKER = path.join(INSTALL_DIR, `.installed-${VERSION}`);
