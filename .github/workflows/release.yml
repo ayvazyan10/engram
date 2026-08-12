@@ -32,16 +32,30 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
-      # Fail in seconds on a missing or expired token instead of after the
-      # build, where npm reports it as ENEEDAUTH from inside a publish loop.
+      # v0.4.0 failed here: the secret was gone, so setup-node wrote an .npmrc
+      # with an empty _authToken and npm only said ENEEDAUTH after a full build,
+      # from inside the publish loop. An absent secret is caught in seconds now.
+      #
+      # The identity probe is reported, never asserted. `npm whoami` answers for
+      # a classic token but a granular access token gets 403 from /-/whoami
+      # while still being able to publish, so a hard check there would reject a
+      # working token. Nothing short of publishing proves write access, so the
+      # step must not imply it did — the first version of this check ran whoami
+      # inside a command substitution, where `set -e` ignores the exit code, and
+      # printed a confident "Authenticated to npm as " with a blank name.
       - name: Verify npm credentials
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "::error::NPM_TOKEN repository secret is unset or empty. Create an npm Automation token and add it with: gh secret set NPM_TOKEN"
+            echo "::error::NPM_TOKEN repository secret is unset or empty. Add one with: gh secret set NPM_TOKEN"
             exit 1
           fi
-          echo "Authenticated to npm as $(npm whoami)"
+
+          if user=$(npm whoami 2>/dev/null); then
+            echo "npm token belongs to ${user}"
+          else
+            echo "npm token is set; /-/whoami refused it, which is expected for a granular access token"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
