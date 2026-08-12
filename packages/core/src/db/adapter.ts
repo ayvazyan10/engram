@@ -209,11 +209,13 @@ function runSqliteMigrations(sqlite: any): void {
         id TEXT PRIMARY KEY NOT NULL,
         source TEXT NOT NULL,
         context TEXT,
+        namespace TEXT,
         started_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
         ended_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source);
       CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions (started_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace);
 
       CREATE TABLE IF NOT EXISTS context_assemblies (
         id TEXT PRIMARY KEY NOT NULL,
@@ -222,12 +224,14 @@ function runSqliteMigrations(sqlite: any): void {
         assembled_context TEXT NOT NULL,
         source TEXT,
         session_id TEXT,
+        namespace TEXT,
         latency_ms INTEGER,
         created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
       );
       CREATE INDEX IF NOT EXISTS idx_assemblies_source ON context_assemblies (source);
       CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies (session_id);
       CREATE INDEX IF NOT EXISTS idx_assemblies_created ON context_assemblies (created_at);
+      CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace);
 
       CREATE TABLE IF NOT EXISTS webhooks (
         id TEXT PRIMARY KEY,
@@ -253,6 +257,22 @@ function runSqliteMigrations(sqlite: any): void {
   if (hasNamespace.cnt === 0) {
     sqlite.exec('ALTER TABLE memories ADD COLUMN namespace text');
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
+  }
+
+  const hasSessionNamespace = sqlite.prepare(
+    "SELECT COUNT(*) as cnt FROM pragma_table_info('sessions') WHERE name='namespace'"
+  ).get() as { cnt: number };
+  if (hasSessionNamespace.cnt === 0) {
+    sqlite.exec('ALTER TABLE sessions ADD COLUMN namespace text');
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace)');
+  }
+
+  const hasAssemblyNamespace = sqlite.prepare(
+    "SELECT COUNT(*) as cnt FROM pragma_table_info('context_assemblies') WHERE name='namespace'"
+  ).get() as { cnt: number };
+  if (hasAssemblyNamespace.cnt === 0) {
+    sqlite.exec('ALTER TABLE context_assemblies ADD COLUMN namespace text');
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace)');
   }
 
   // v0.3.0: embedding_model column

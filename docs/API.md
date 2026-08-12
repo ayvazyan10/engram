@@ -41,12 +41,14 @@ Brain memory statistics.
   "bySource": {
     "claude-code": 40,
     "ollama": 15,
-    "openclaw": 12,
+    "custom-agent": 12,
     "demo": 34
   },
   "indexSize": 101,
   "graphNodes": 101,
-  "graphEdges": 350
+  "graphEdges": 350,
+  "namespace": null,
+  "namespaceMode": "none"
 }
 ```
 
@@ -965,8 +967,8 @@ List all registered plugins.
 {
   "plugins": [
     {
-      "id": "openclaw-memory",
-      "name": "OpenClaw Memory Plugin",
+      "id": "custom-agent-memory",
+      "name": "Custom Agent Memory Plugin",
       "version": "1.0.0",
       "active": true,
       "hooks": ["onStore", "onRecall"]

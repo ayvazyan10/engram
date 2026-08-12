@@ -14,11 +14,22 @@ All Engram components are configured via environment variables. No config files 
 | `ENGRAM_DB_PATH` | `./engram.db` | SQLite database file path (sqlite mode) |
 | `DATABASE_URL` | *(none)* | PostgreSQL connection URL (postgresql mode) |
 | `NODE_ENV` | `development` | `production` enables stricter logging |
-| `ENGRAM_NAMESPACE` | *(none)* | Namespace for memory isolation — all operations are scoped to this namespace when set |
+| `ENGRAM_NAMESPACE_MODE` | `none` | `none` disables namespaces, `filter` enables optional scoping/overrides, `isolated` enforces one fixed namespace |
+| `ENGRAM_NAMESPACE` | *(none)* | Namespace value for `filter` or `isolated`; required by `isolated` |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Decay sweep interval in milliseconds (0 = disabled) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived (0–1) |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Path to persist the vector index for fast startup |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model used for vectorization |
+
+Namespace behavior is opt-in:
+
+- `none` (default): namespace inputs are ignored and new memories are stored in the shared pool.
+- `filter`: the configured namespace scopes normal reads and writes, while per-memory overrides and `crossNamespace` remain available.
+- `isolated`: `ENGRAM_NAMESPACE` is required; overrides and cross-namespace search are rejected.
+
+For backwards compatibility, an existing configuration that has `ENGRAM_NAMESPACE` but no `ENGRAM_NAMESPACE_MODE` is treated as `filter`. When both variables are absent, the mode is `none` and the shared-memory behavior is unchanged.
+
+Isolated mode also stores its vector cache in a namespace-specific file by appending a short namespace hash to `ENGRAM_INDEX_PATH`. This prevents one isolated process from loading another namespace's cached vectors.
 
 ### Example
 
@@ -26,6 +37,7 @@ All Engram components are configured via environment variables. No config files 
 PORT=4901 \
 HOST=0.0.0.0 \
 ENGRAM_DB_PATH=/data/engram.db \
+ENGRAM_NAMESPACE_MODE=isolated \
 ENGRAM_NAMESPACE=prod \
 ENGRAM_DECAY_INTERVAL=1800000 \
 ENGRAM_EMBEDDING_MODEL=Xenova/bge-small-en-v1.5 \

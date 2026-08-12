@@ -44,7 +44,23 @@ export class ProceduralMemory {
    * @param namespace Scopes writes and reads. NeuralBrain passes its own
    *   namespace so `brain.procedural` cannot leak across tenants.
    */
-  constructor(private readonly namespace?: string) {}
+  constructor(
+    private readonly namespace?: string,
+    namespaceMode?: 'none' | 'filter' | 'isolated',
+  ) {
+    this.namespaceMode = namespaceMode ?? (namespace ? 'filter' : 'none');
+    if (this.namespaceMode === 'isolated' && !namespace) throw new Error('namespace is required in isolated mode');
+  }
+
+  private readonly namespaceMode: 'none' | 'filter' | 'isolated';
+
+  private storeNamespace(requested?: string): string | null {
+    if (this.namespaceMode === 'none') return null;
+    if (this.namespaceMode === 'isolated' && requested && requested !== this.namespace) {
+      throw new Error('namespace override is not allowed in isolated mode');
+    }
+    return this.namespaceMode === 'isolated' ? this.namespace! : requested ?? this.namespace ?? null;
+  }
 
   async store(input: StoreProceduralInput): Promise<Memory> {
     const db = getDb();
@@ -65,7 +81,7 @@ export class ProceduralMemory {
       embeddingDim: embedding.length,
       importance: 0.6,
       confidence: input.confidence ?? 1.0,
-      namespace: input.namespace ?? this.namespace ?? null,
+      namespace: this.storeNamespace(input.namespace),
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
@@ -100,7 +116,7 @@ export class ProceduralMemory {
       eq(schema.memories.type, 'procedural'),
       isNull(schema.memories.archivedAt),
     ];
-    if (this.namespace) conditions.push(eq(schema.memories.namespace, this.namespace));
+    if (this.namespaceMode !== 'none' && this.namespace) conditions.push(eq(schema.memories.namespace, this.namespace));
 
     const candidates = await db
       .select()

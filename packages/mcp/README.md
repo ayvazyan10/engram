@@ -69,7 +69,8 @@ End of session → store_memory(session summary)
 | Variable | Default | Description |
 |---|---|---|
 | `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
-| `ENGRAM_NAMESPACE` | — | Memory namespace |
+| `ENGRAM_NAMESPACE_MODE` | `none` | `none`, `filter`, or `isolated` |
+| `ENGRAM_NAMESPACE` | — | Namespace used by `filter`/`isolated` modes |
 | `ENGRAM_SOURCE` | `mcp-client` | AI client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
 

@@ -37,6 +37,7 @@ interface EngramConfig {
   port: number;
   host: string;
   namespace: string | null;
+  namespaceMode: 'none' | 'filter' | 'isolated';
   embeddingModel: string;
   indexPath: string;
   repoPath: string;
@@ -47,6 +48,7 @@ const DEFAULT_CONFIG: EngramConfig = {
   port: 4901,
   host: '127.0.0.1',
   namespace: null,
+  namespaceMode: 'none',
   embeddingModel: 'Xenova/all-MiniLM-L6-v2',
   indexPath: path.join(ENGRAM_HOME, 'engram.db.index'),
   repoPath: path.join(ENGRAM_HOME, 'repo'),
@@ -55,7 +57,9 @@ const DEFAULT_CONFIG: EngramConfig = {
 function loadConfig(): EngramConfig {
   if (!fs.existsSync(CONFIG_PATH)) return DEFAULT_CONFIG;
   try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) };
+    const stored = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Partial<EngramConfig>;
+    const namespaceMode = stored.namespaceMode ?? (stored.namespace ? 'filter' : 'none');
+    return { ...DEFAULT_CONFIG, ...stored, namespaceMode };
   } catch {
     return DEFAULT_CONFIG;
   }
@@ -303,7 +307,9 @@ program
     const engramEnv: Record<string, string> = {
       ENGRAM_DB_PATH: config.dbPath,
       ENGRAM_SOURCE: opts.source,
+      ENGRAM_NAMESPACE_MODE: config.namespaceMode,
     };
+    if (config.namespace) engramEnv['ENGRAM_NAMESPACE'] = config.namespace;
     const engramServer: Record<string, unknown> = opts.npx
       ? { command: 'npx', args: ['-y', '@engram-ai-memory/mcp@latest'], env: engramEnv }
       : { command: 'node', args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')], env: engramEnv };
@@ -378,6 +384,7 @@ program
       ENGRAM_DB_PATH: config.dbPath,
       ENGRAM_INDEX_PATH: config.indexPath,
       ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
+      ENGRAM_NAMESPACE_MODE: config.namespaceMode,
       ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
     };
 
@@ -589,6 +596,12 @@ configCmd.command('set <key> <value>').description('Set a config value').action(
       process.exit(1);
     }
     parsed = port;
+  } else if (key === 'namespaceMode') {
+    if (!['none', 'filter', 'isolated'].includes(value)) {
+      fail(`Invalid namespaceMode: ${value} (expected none, filter, or isolated)`);
+      process.exit(1);
+    }
+    parsed = value;
   } else {
     parsed = value === 'null' ? null : value;
   }
@@ -736,6 +749,7 @@ program
           ENGRAM_DB_PATH: config.dbPath,
           ENGRAM_INDEX_PATH: config.indexPath,
           ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
+          ENGRAM_NAMESPACE_MODE: config.namespaceMode,
           ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
         };
         fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });

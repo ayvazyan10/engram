@@ -5,6 +5,7 @@ CREATE TABLE `context_assemblies` (
 	`assembled_context` text NOT NULL,
 	`source` text,
 	`session_id` text,
+	`namespace` text,
 	`latency_ms` integer,
 	`created_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
@@ -12,6 +13,7 @@ CREATE TABLE `context_assemblies` (
 CREATE INDEX `idx_assemblies_source` ON `context_assemblies` (`source`);--> statement-breakpoint
 CREATE INDEX `idx_assemblies_session` ON `context_assemblies` (`session_id`);--> statement-breakpoint
 CREATE INDEX `idx_assemblies_created` ON `context_assemblies` (`created_at`);--> statement-breakpoint
+CREATE INDEX `idx_assemblies_namespace` ON `context_assemblies` (`namespace`);--> statement-breakpoint
 CREATE TABLE `memories` (
 	`id` text PRIMARY KEY NOT NULL,
 	`type` text NOT NULL,
@@ -63,9 +65,11 @@ CREATE TABLE `sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`source` text NOT NULL,
 	`context` text,
+	`namespace` text,
 	`started_at` text DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	`ended_at` text
 );
 --> statement-breakpoint
 CREATE INDEX `idx_sessions_source` ON `sessions` (`source`);--> statement-breakpoint
-CREATE INDEX `idx_sessions_started` ON `sessions` (`started_at`);
+CREATE INDEX `idx_sessions_started` ON `sessions` (`started_at`);--> statement-breakpoint
+CREATE INDEX `idx_sessions_namespace` ON `sessions` (`namespace`);

@@ -27,7 +27,23 @@ export class EpisodicMemory {
    *   namespace so `brain.episodic` cannot leak across tenants — these getters
    *   previously spanned every namespace.
    */
-  constructor(private readonly namespace?: string) {}
+  constructor(
+    private readonly namespace?: string,
+    namespaceMode?: 'none' | 'filter' | 'isolated',
+  ) {
+    this.namespaceMode = namespaceMode ?? (namespace ? 'filter' : 'none');
+    if (this.namespaceMode === 'isolated' && !namespace) throw new Error('namespace is required in isolated mode');
+  }
+
+  private readonly namespaceMode: 'none' | 'filter' | 'isolated';
+
+  private storeNamespace(requested?: string): string | null {
+    if (this.namespaceMode === 'none') return null;
+    if (this.namespaceMode === 'isolated' && requested && requested !== this.namespace) {
+      throw new Error('namespace override is not allowed in isolated mode');
+    }
+    return this.namespaceMode === 'isolated' ? this.namespace! : requested ?? this.namespace ?? null;
+  }
 
   async store(input: StoreEpisodicInput): Promise<Memory> {
     const db = getDb();
@@ -46,7 +62,7 @@ export class EpisodicMemory {
       source: input.source ?? null,
       sessionId: input.sessionId ?? null,
       eventAt: (input.eventAt ?? new Date()).toISOString(),
-      namespace: input.namespace ?? this.namespace ?? null,
+      namespace: this.storeNamespace(input.namespace),
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
@@ -113,7 +129,7 @@ export class EpisodicMemory {
 
   /** Append the namespace predicate when this instance is scoped. */
   private scoped<T>(conditions: T[]): T[] {
-    return this.namespace
+    return this.namespaceMode !== 'none' && this.namespace
       ? [...conditions, eq(schema.memories.namespace, this.namespace) as T]
       : conditions;
   }

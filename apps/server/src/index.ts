@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { NeuralBrain } from '@engram-ai-memory/core';
+import type { NamespaceMode } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Namespace } from 'socket.io';
 import cors from '@fastify/cors';
@@ -74,11 +75,18 @@ function secretsMatch(a: string, b: string): boolean {
 }
 const DECAY_INTERVAL = parseInt(process.env['ENGRAM_DECAY_INTERVAL'] ?? '', 10);
 const DECAY_THRESHOLD = parseFloat(process.env['ENGRAM_DECAY_THRESHOLD'] ?? '');
+const namespaceMode = (
+  process.env['ENGRAM_NAMESPACE_MODE'] ?? (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
+) as NamespaceMode;
+if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
+  throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
+}
 
 // Shared brain instance (initialized once)
 export const brain = new NeuralBrain({
   dbPath: process.env['ENGRAM_DB_PATH'],
   defaultSource: 'rest-api',
+  namespaceMode,
   namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
   decayPolicy: {
     ...(Number.isFinite(DECAY_INTERVAL) ? { decayIntervalMs: DECAY_INTERVAL } : {}),

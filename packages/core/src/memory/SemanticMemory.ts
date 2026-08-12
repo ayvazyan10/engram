@@ -1,4 +1,4 @@
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory, NewMemoryConnection, RelationshipType } from '../db/schema.js';
@@ -29,7 +29,23 @@ export class SemanticMemory {
    *   namespace so `brain.semantic` cannot leak across tenants — these getters
    *   previously spanned every namespace.
    */
-  constructor(private readonly namespace?: string) {}
+  constructor(
+    private readonly namespace?: string,
+    namespaceMode?: 'none' | 'filter' | 'isolated',
+  ) {
+    this.namespaceMode = namespaceMode ?? (namespace ? 'filter' : 'none');
+    if (this.namespaceMode === 'isolated' && !namespace) throw new Error('namespace is required in isolated mode');
+  }
+
+  private readonly namespaceMode: 'none' | 'filter' | 'isolated';
+
+  private storeNamespace(requested?: string): string | null {
+    if (this.namespaceMode === 'none') return null;
+    if (this.namespaceMode === 'isolated' && requested && requested !== this.namespace) {
+      throw new Error('namespace override is not allowed in isolated mode');
+    }
+    return this.namespaceMode === 'isolated' ? this.namespace! : requested ?? this.namespace ?? null;
+  }
 
   async store(input: StoreSemanticInput): Promise<Memory> {
     const db = getDb();
@@ -48,7 +64,7 @@ export class SemanticMemory {
       embeddingDim: embedding.length,
       importance: input.importance ?? 0.7, // semantic memories are generally more important
       confidence: input.confidence ?? 1.0,
-      namespace: input.namespace ?? this.namespace ?? null,
+      namespace: this.storeNamespace(input.namespace),
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
@@ -65,6 +81,16 @@ export class SemanticMemory {
       metadata: '{}',
       createdAt: now,
     }));
+
+    if (this.namespaceMode === 'isolated' && connections.length > 0) {
+      const targetIds = connections.map((connection) => connection.targetId);
+      const targets = await db.select({ id: schema.memories.id, namespace: schema.memories.namespace })
+        .from(schema.memories)
+        .where(inArray(schema.memories.id, targetIds));
+      if (targets.length !== new Set(targetIds).size || targets.some((target) => target.namespace !== this.namespace)) {
+        throw new Error('cannot link memories across isolated namespaces');
+      }
+    }
 
     // Atomic. targetId is a NOT NULL foreign key, so a caller-supplied
     // relatesTo.conceptId that does not reference an existing memory used to
@@ -94,7 +120,7 @@ export class SemanticMemory {
       eq(schema.memories.concept, concept),
       isNull(schema.memories.archivedAt),
     ];
-    if (this.namespace) conditions.push(eq(schema.memories.namespace, this.namespace));
+    if (this.namespaceMode !== 'none' && this.namespace) conditions.push(eq(schema.memories.namespace, this.namespace));
 
     const [record] = await db
       .select()
@@ -120,12 +146,16 @@ export class SemanticMemory {
       // from the record's own original vector — so a concept-bearing query
       // scored the freshest fact lower than stale ones.
       const [existing] = await db
-        .select({ concept: schema.memories.concept })
+        .select({ concept: schema.memories.concept, namespace: schema.memories.namespace })
         .from(schema.memories)
         .where(eq(schema.memories.id, id))
         .limit(1);
 
-      const embeddable = existing?.concept
+      if (!existing || (this.namespaceMode === 'isolated' && existing.namespace !== this.namespace)) {
+        throw new Error(`Memory ${id} not found`);
+      }
+
+      const embeddable = existing.concept
         ? `${existing.concept}: ${updates.content}`
         : updates.content;
 
@@ -135,6 +165,12 @@ export class SemanticMemory {
     }
     if (updates.confidence !== undefined) updateData.confidence = updates.confidence;
     if (updates.importance !== undefined) updateData.importance = updates.importance;
+
+    if (updates.content === undefined && this.namespaceMode === 'isolated') {
+      const [existing] = await db.select({ namespace: schema.memories.namespace })
+        .from(schema.memories).where(eq(schema.memories.id, id)).limit(1);
+      if (!existing || existing.namespace !== this.namespace) throw new Error(`Memory ${id} not found`);
+    }
 
     await db.update(schema.memories).set(updateData).where(eq(schema.memories.id, id));
   }

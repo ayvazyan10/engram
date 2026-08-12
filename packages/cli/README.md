@@ -69,6 +69,7 @@ Config file: `~/.engram/config.json`
 | `port` | `4901` | API server port |
 | `host` | `127.0.0.1` | Bind address |
 | `namespace` | `null` | Memory namespace |
+| `namespaceMode` | `none` | `none`, `filter`, or `isolated` |
 | `embeddingModel` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
 | `indexPath` | `~/.engram/engram.db.index` | Vector index path |
 | `repoPath` | `~/.engram/repo` | Cloned repo path |

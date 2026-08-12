@@ -249,7 +249,7 @@ Follow conventional commits:
 ```
 feat(core): add importance decay on recall
 fix(server): correct socket.io namespace initialization
-docs: add integration guide for OpenClaw
+docs: add integration guide for Custom Agent
 refactor(mcp): simplify tool registration pattern
 ```
 

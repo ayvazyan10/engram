@@ -86,7 +86,7 @@ Adapters live in `adapters/`. The simplest adapter needs two things:
 1. **Recall** — call `POST /api/recall` with the user query before the AI responds
 2. **Store** — call `POST /api/memory` after the AI responds to persist the exchange
 
-See `adapters/ollama/` for a proxy pattern and `adapters/openclaw/` for a library pattern.
+See `adapters/ollama/` for a proxy pattern or call the documented REST API directly.
 
 ```typescript
 // Minimal adapter pattern

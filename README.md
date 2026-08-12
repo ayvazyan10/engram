@@ -22,7 +22,7 @@
 
 ## What is Engram?
 
-Engram gives any AI model **human-like memory** that persists across sessions, systems, and restarts. Connect it once and every AI you use — Claude Code, Ollama, OpenClaw, or any custom integration — shares a single, growing brain.
+Engram gives any AI model **human-like memory** that persists across sessions, systems, and restarts. Connect it once and every AI you use — Claude Code, Ollama, or any custom integration — shares a single, growing brain.
 
 Most AI tools forget everything the moment a session ends. Engram solves this by acting as a universal memory backend: it stores what your AIs learn, retrieves the right memories at the right time, and presents them as context — automatically.
 
@@ -42,7 +42,7 @@ Most AI tools forget everything the moment a session ends. Engram solves this by
 | **Memory Decay & GC** | Ebbinghaus forgetting curve, auto-archive stale memories, episodic→semantic consolidation |
 | **Memory Reflection** | AI-driven insight engine — the AI connected over MCP reasons over your memories to surface patterns, knowledge gaps, trends, and contradictions. Engram runs no LLM of its own — no API keys, no external calls. |
 | **Dashboard v2** | Multi-view dashboard: 3D neural graph, Timeline, Analytics (charts + heatmaps), Reflections panel |
-| **Namespace Isolation** | Isolated memory workspaces per project/agent, opt-in cross-namespace recall |
+| **Optional Namespaces** | Disabled by default; enable filtering or strict isolation per project/agent |
 | **Contradiction Detection** | Auto-detect conflicting memories, 5 resolution strategies (keep_newest/oldest/important/both/manual) |
 | **Embedding Upgradability** | Swap embedding models, store model ID alongside vectors, batch re-embedding pipeline |
 | **Streaming Recall** | SSE endpoint — high-confidence memories first, graph-expanded backfill later |
@@ -90,7 +90,6 @@ The AI responds with awareness of everything it has ever learned. After the exch
 Claude Code    ──MCP──────────→ ┐
 Claude Desktop ──extension────→ │  Engram  →  SQLite
 Ollama         ──proxy────────→ │  REST :4901
-OpenClaw       ──REST─────────→ │  WebSocket :4901/neural
 Any app        ──REST─────────→ │
 CLI            ──direct───────→ ┘
 ```
@@ -100,7 +99,6 @@ CLI            ──direct───────→ ┘
 | **Claude Code** | MCP (21 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
 | **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/skills/ayvazyan10/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
-| **OpenClaw** | REST adapter | `EngramClient` or `withMemory()` wrapper |
 | **Any app** | Direct REST API | `POST /api/recall` + `POST /api/memory` |
 | **Terminal** | CLI | `engram recall "what was the last decision?"` |
 
@@ -332,7 +330,6 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `@engram-ai-memory/web` | Multi-view dashboard — 3D neural graph, Timeline, Analytics, Reflections | — |
 | `@engram-ai-memory/vis` | Force-directed layout + animation helpers | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/vis?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/vis) |
 | `@engram-ai-memory/adapter-ollama` | Transparent Ollama memory proxy (:11435) | — |
-| `@engram-ai-memory/adapter-openclaw` | OpenClaw REST adapter | — |
 
 ---
 
@@ -344,7 +341,8 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `HOST` | `0.0.0.0` | Bind address |
 | `ENGRAM_SOURCE` | `mcp-client` | Client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
 | `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
-| `ENGRAM_NAMESPACE` | *(none)* | Scope all operations to a namespace |
+| `ENGRAM_NAMESPACE_MODE` | `none` | Namespace behavior: `none`, `filter`, or `isolated` |
+| `ENGRAM_NAMESPACE` | *(none)* | Namespace value used when mode is `filter` or `isolated` |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
@@ -353,6 +351,8 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_PG_SCHEMA_READY` | `false` | Escape hatch: set `true` only if you provisioned a compatible PostgreSQL schema yourself. Unsupported. |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
 | `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
+
+Namespaces are disabled by default. Set `ENGRAM_NAMESPACE_MODE=filter` for optional scoping, or `isolated` together with `ENGRAM_NAMESPACE` for a fixed boundary that rejects overrides and cross-namespace queries. Existing configurations that already contain `ENGRAM_NAMESPACE` continue in `filter` mode automatically.
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
@@ -407,7 +407,7 @@ Embeddings run **locally** using ONNX Runtime WASM — no OpenAI API, no cost, n
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, data flow, component overview |
 | [docs/API.md](docs/API.md) | Full REST API reference (40+ endpoints) |
-| [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Claude Code, Ollama, OpenClaw, webhooks, plugins |
+| [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Claude Code, Ollama, REST, webhooks, plugins |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Monorepo, build system, contributing |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment variables, database, tuning |
 
