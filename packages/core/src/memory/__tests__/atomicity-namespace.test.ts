@@ -20,6 +20,7 @@ import { eq } from 'drizzle-orm';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { getDb, closeDb, schema } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -44,9 +45,7 @@ describe('SemanticMemory.store atomicity', () => {
   beforeEach(() => { dbPath = createTestDb(); });
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('leaves no orphaned memory row when an edge target does not exist', async () => {
@@ -94,9 +93,7 @@ describe('namespace isolation in the memory classes', () => {
   beforeEach(() => { dbPath = createTestDb(); });
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('stamps the brain namespace on direct semantic writes', async () => {

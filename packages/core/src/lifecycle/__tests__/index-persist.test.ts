@@ -22,6 +22,7 @@ import Database from 'better-sqlite3';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
 import { VectorSearch } from '../../retrieval/VectorSearch.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -42,14 +43,6 @@ function createTestDb(): string {
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
   sqlite.close();
   return dbPath;
-}
-
-function cleanup(...paths: string[]) {
-  for (const p of paths) {
-    try { fs.unlinkSync(p); } catch {}
-    try { fs.unlinkSync(p + '-wal'); } catch {}
-    try { fs.unlinkSync(p + '-shm'); } catch {}
-  }
 }
 
 // ─── VectorSearch Serialize/Deserialize ──────────────────────────────────────
@@ -99,7 +92,7 @@ describe('VectorSearch — persistence', () => {
     expect(meta!.entryCount).toBe(2);
     expect(vs2.size).toBe(2);
 
-    cleanup(filePath);
+    cleanupTestDb(filePath);
   });
 
   it('loadFromDisk returns null for missing file', () => {
@@ -403,7 +396,7 @@ describe('VectorSearch — async persistence', () => {
     expect(meta!.entryCount).toBe(1);
     expect(meta!.ids.has('first')).toBe(true);
 
-    cleanup(filePath);
+    cleanupTestDb(filePath);
   });
 });
 
@@ -420,7 +413,7 @@ describe('NeuralBrain — index persistence', () => {
 
   afterEach(() => {
     closeDb();
-    cleanup(dbPath, indexPath);
+    cleanupTestDb(dbPath);
   });
 
   it('first init loads from database, no index file', async () => {

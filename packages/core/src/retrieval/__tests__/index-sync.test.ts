@@ -20,6 +20,7 @@ import Database from 'better-sqlite3';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
 import { embed, packFP16 } from '../../embedding/Embedder.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -38,14 +39,6 @@ function createTestDb(): string {
   sqlite.exec('ALTER TABLE memories ADD COLUMN embedding_model text');
   sqlite.close();
   return dbPath;
-}
-
-function cleanup(...paths: string[]) {
-  for (const p of paths) {
-    for (const suffix of ['', '-wal', '-shm']) {
-      try { fs.unlinkSync(p + suffix); } catch { /* already gone */ }
-    }
-  }
 }
 
 /**
@@ -90,7 +83,7 @@ describe('NeuralBrain — cross-process index sync', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath, indexPath);
+    cleanupTestDb(dbPath);
   });
 
   it('search() finds a memory committed by another connection', async () => {

@@ -19,6 +19,7 @@ import { NeuralBrain } from '../../NeuralBrain.js';
 import { getDb, closeDb, schema } from '../../db/index.js';
 import { DecayEngine } from '../DecayEngine.js';
 import { mergePolicy } from '../DecayPolicy.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -48,9 +49,7 @@ describe('decay linearity', () => {
 
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('does not re-apply the full idle period on every sweep', async () => {
@@ -104,9 +103,7 @@ describe('autoConsolidate age cutoff', () => {
 
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('passes the age cutoff through to consolidateFn', async () => {

@@ -7,10 +7,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import type { FastifyInstance } from 'fastify';
+import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
 
 const dbPath = path.join(os.tmpdir(), `engram-server-mgmt-${Date.now()}.db`);
 
@@ -31,9 +31,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
   try { brain?.shutdown(); } catch { /* best effort */ }
-  for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-    try { fs.unlinkSync(dbPath + suffix); } catch {}
-  }
+  cleanupTestDb(dbPath);
 });
 
 async function store(content: string, extra: Record<string, unknown> = {}): Promise<string> {

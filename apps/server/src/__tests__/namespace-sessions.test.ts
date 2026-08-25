@@ -8,11 +8,11 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { getDb, schema } from '@engram-ai-memory/core';
 import type { FastifyInstance } from 'fastify';
+import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
 
 const dbPath = path.join(os.tmpdir(), `engram-ns-sessions-test-${process.pid}.db`);
 
@@ -37,14 +37,7 @@ afterAll(async () => {
   try { brain?.shutdown(); } catch { /* best effort */ }
   delete process.env['ENGRAM_NAMESPACE_MODE'];
   delete process.env['ENGRAM_NAMESPACE'];
-  for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-    try { fs.unlinkSync(dbPath + suffix); } catch {}
-  }
-  for (const file of fs.readdirSync(os.tmpdir())) {
-    if (file.startsWith(path.basename(dbPath) + '.index')) {
-      try { fs.unlinkSync(path.join(os.tmpdir(), file)); } catch {}
-    }
-  }
+  cleanupTestDb(dbPath);
 });
 
 describe('GET /api/sessions in filter mode', () => {

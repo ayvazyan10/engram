@@ -8,6 +8,7 @@ import { ReflectionEngine, DEFAULT_REFLECTION_CONFIG } from '../ReflectionEngine
 import type { Memory } from '../../db/schema.js';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -224,10 +225,7 @@ describe('NeuralBrain reflection integration', () => {
 
   afterEach(async () => {
     await closeDb();
-    try { fs.unlinkSync(dbPath); } catch {}
-    try { fs.unlinkSync(dbPath + '-shm'); } catch {}
-    try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-    try { fs.unlinkSync(dbPath + '.index'); } catch {}
+    cleanupTestDb(dbPath);
   });
 
   it('getReflectionTasks() returns empty with too few memories', async () => {

@@ -20,6 +20,7 @@ import Database from 'better-sqlite3';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
 import { WebhookManager } from '../WebhookManager.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 // These tests exercise CRUD, event filtering and delivery mechanics using
 // placeholder/loopback URLs. The SSRF guard (covered by urlGuard.test.ts) would
@@ -58,12 +59,6 @@ function createTestDb(): string {
   return dbPath;
 }
 
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
-}
-
 // ─── WebhookManager CRUD ─────────────────────────────────────────────────────
 
 describe('WebhookManager — CRUD', () => {
@@ -76,7 +71,7 @@ describe('WebhookManager — CRUD', () => {
 
   afterEach(() => {
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('subscribe creates a webhook', async () => {
@@ -158,7 +153,7 @@ describe('NeuralBrain — webhook integration', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('getWebhookManager returns the manager', () => {
@@ -200,7 +195,7 @@ describe('NeuralBrain — webhook integration', () => {
 
     freshBrain.shutdown();
     closeDb();
-    cleanup(freshPath);
+    cleanupTestDb(freshPath);
   });
 
   it('fireAsync returns delivery results (fails gracefully for unreachable URLs)', async () => {

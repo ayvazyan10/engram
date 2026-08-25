@@ -20,6 +20,7 @@ import Database from 'better-sqlite3';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
 import type { RecallChunk, RecallStreamComplete } from '../../retrieval/ContextAssembler.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -42,12 +43,6 @@ function createTestDb(): string {
   return dbPath;
 }
 
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
-}
-
 // ─── Streaming Recall ────────────────────────────────────────────────────────
 
 describe('Streaming Recall — basic', () => {
@@ -63,7 +58,7 @@ describe('Streaming Recall — basic', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('yields vector phase chunks followed by complete event', async () => {
@@ -193,7 +188,7 @@ describe('Streaming Recall — edge cases', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('empty store yields only complete event with empty context', async () => {

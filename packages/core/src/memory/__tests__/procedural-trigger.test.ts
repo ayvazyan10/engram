@@ -12,6 +12,7 @@ import Database from 'better-sqlite3';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -39,9 +40,7 @@ describe('ProceduralMemory.getByTrigger', () => {
 
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('ranks trigger-relevant rules above unrelated ones', async () => {

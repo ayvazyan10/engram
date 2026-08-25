@@ -7,11 +7,11 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
 
 const dbPath = path.join(os.tmpdir(), `engram-mcp-mgmt-${Date.now()}.db`);
 
@@ -45,9 +45,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await client?.close().catch(() => {});
   try { brain?.shutdown(); } catch { /* best effort */ }
-  for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-    try { fs.unlinkSync(dbPath + suffix); } catch {}
-  }
+  cleanupTestDb(dbPath);
 });
 
 describe('add_knowledge', () => {

@@ -7,7 +7,7 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.ts'],
       // Barrel files are pure re-exports; migrations and scripts are not library code.
-      exclude: ['src/**/__tests__/**', 'src/**/index.ts', 'src/db/migrations/**'],
+      exclude: ['src/**/__tests__/**', 'src/test-helpers/**', 'src/**/index.ts', 'src/db/migrations/**'],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
     },
   },

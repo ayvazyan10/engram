@@ -18,6 +18,7 @@ import Database from 'better-sqlite3';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -40,12 +41,6 @@ function createTestDb(): string {
   return dbPath;
 }
 
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
-}
-
 // ─── Tag Cloud ───────────────────────────────────────────────────────────────
 
 describe('Tags — cloud', () => {
@@ -61,7 +56,7 @@ describe('Tags — cloud', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('getTags returns empty for no memories', async () => {
@@ -111,7 +106,7 @@ describe('Tags — getByTag', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('returns only memories with the given tag', async () => {
@@ -161,7 +156,7 @@ describe('Tags — mutations', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('addTag adds a new tag', async () => {
@@ -210,7 +205,7 @@ describe('Tags — collections', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('groups tags by prefix', async () => {

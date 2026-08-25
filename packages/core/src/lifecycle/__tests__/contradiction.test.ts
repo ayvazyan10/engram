@@ -18,6 +18,7 @@ import Database from 'better-sqlite3';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 import { eq } from 'drizzle-orm';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,12 +39,6 @@ function createTestDb(): string {
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
   sqlite.close();
   return dbPath;
-}
-
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
 }
 
 // ─── Contradiction Detection ─────────────────────────────────────────────────
@@ -69,7 +64,7 @@ describe('Contradiction Detection — basic', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('store returns StoreResult with contradiction info', async () => {
@@ -145,7 +140,7 @@ describe('Contradiction Resolution', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('resolveContradiction with keep_newest archives old memory', async () => {
@@ -251,7 +246,7 @@ describe('Contradiction Config', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('getContradictionConfig returns default config', () => {
@@ -302,7 +297,7 @@ describe('ContradictionDetector — signal analysis', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('detects temporal override signals', async () => {
