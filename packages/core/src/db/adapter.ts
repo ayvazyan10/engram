@@ -126,6 +126,13 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
   sqlite.pragma('synchronous = NORMAL');
   sqlite.pragma('cache_size = 10000');
   sqlite.pragma('foreign_keys = ON');
+  // better-sqlite3 defaults to a 0ms busy timeout (immediate SQLITE_BUSY) on
+  // lock contention. Engram routinely runs the REST server, the MCP server,
+  // and the CLI against one shared file, so two processes can legitimately
+  // write at the same instant (see getDeviceId()'s local_meta bootstrap for
+  // one real example). Wait briefly for the other writer instead of failing
+  // outright.
+  sqlite.pragma('busy_timeout = 5000');
 
   // Auto-migrations for SQLite
   runSqliteMigrations(sqlite);
@@ -149,13 +156,53 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
   };
 }
 
+// ─── Migration helpers ──────────────────────────────────────────────────────
+//
+// `runSqliteMigrations` runs on EVERY connection open, in EVERY process that
+// touches this database (REST server, MCP server, CLI), forever — so each
+// existence check below must stay a single cheap read, and every DDL
+// statement must be gated so it executes at most once per database file
+// rather than re-running on every open.
+
+/** Whether `column` exists on `table` in this SQLite database. */
+function columnExists(sqlite: any, table: string, column: string): boolean {
+  const row = sqlite
+    .prepare('SELECT COUNT(*) as cnt FROM pragma_table_info(?) WHERE name = ?')
+    .get(table, column) as { cnt: number };
+  return row.cnt > 0;
+}
+
+/** Whether `table` exists in this SQLite database. */
+function tableExists(sqlite: any, table: string): boolean {
+  const row = sqlite
+    .prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name=?")
+    .get(table) as { cnt: number };
+  return row.cnt > 0;
+}
+
+/** Whether `index` exists in this SQLite database. */
+function indexExists(sqlite: any, index: string): boolean {
+  const row = sqlite
+    .prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='index' AND name=?")
+    .get(index) as { cnt: number };
+  return row.cnt > 0;
+}
+
+/**
+ * Adds `column` (as `type`) to `table` if it doesn't already exist. Always
+ * additive/nullable — never changes an existing column's type, nullability,
+ * or default. Safe and cheap to call unconditionally on every connection
+ * open: it no-ops (one read, no write) once the column is present.
+ */
+function addColumnIfMissing(sqlite: any, table: string, column: string, type: string): void {
+  if (!columnExists(sqlite, table, column)) {
+    sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
 function runSqliteMigrations(sqlite: any): void {
   // v0.1.0: Create base tables if they don't exist (fresh database)
-  const hasMemories = sqlite.prepare(
-    "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='memories'"
-  ).get() as { cnt: number };
-
-  if (hasMemories.cnt === 0) {
+  if (!tableExists(sqlite, 'memories')) {
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS memories (
         id TEXT PRIMARY KEY NOT NULL,
@@ -165,7 +212,7 @@ function runSqliteMigrations(sqlite: any): void {
         embedding BLOB,
         embedding_dim INTEGER NOT NULL DEFAULT 384,
         importance REAL NOT NULL DEFAULT 0.5,
-        confidence REAL NOT NULL DEFAULT 1.0,
+        confidence REAL NOT NULL DEFAULT 1,
         access_count INTEGER NOT NULL DEFAULT 0,
         last_accessed_at TEXT,
         event_at TEXT,
@@ -174,13 +221,14 @@ function runSqliteMigrations(sqlite: any): void {
         concept TEXT,
         trigger_pattern TEXT,
         action_pattern TEXT,
-        namespace TEXT,
-        embedding_model TEXT,
         metadata TEXT NOT NULL DEFAULT '{}',
         tags TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
         updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        archived_at TEXT
+        archived_at TEXT,
+        namespace TEXT,
+        embedding_model TEXT,
+        device_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_memories_type ON memories (type);
       CREATE INDEX IF NOT EXISTS idx_memories_source ON memories (source);
@@ -189,33 +237,43 @@ function runSqliteMigrations(sqlite: any): void {
       CREATE INDEX IF NOT EXISTS idx_memories_concept ON memories (concept);
       CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories (archived_at);
       CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace);
+      CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at);
 
       CREATE TABLE IF NOT EXISTS memory_connections (
         id TEXT PRIMARY KEY NOT NULL,
         source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
         target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
         relationship TEXT NOT NULL,
-        strength REAL NOT NULL DEFAULT 1.0,
-        bidirectional INTEGER NOT NULL DEFAULT 0,
+        strength REAL NOT NULL DEFAULT 1,
+        bidirectional INTEGER NOT NULL DEFAULT false,
         metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+        updated_at TEXT,
+        deleted_at TEXT,
+        device_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_connections_source ON memory_connections (source_id);
       CREATE INDEX IF NOT EXISTS idx_connections_target ON memory_connections (target_id);
       CREATE INDEX IF NOT EXISTS idx_connections_relationship ON memory_connections (relationship);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_unique_pair ON memory_connections (source_id, target_id, relationship);
+      CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at);
+      CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at);
 
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY NOT NULL,
         source TEXT NOT NULL,
         context TEXT,
-        namespace TEXT,
         started_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        ended_at TEXT
+        ended_at TEXT,
+        namespace TEXT,
+        updated_at TEXT,
+        deleted_at TEXT,
+        device_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source);
       CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions (started_at);
       CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace);
+      CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at);
 
       CREATE TABLE IF NOT EXISTS context_assemblies (
         id TEXT PRIMARY KEY NOT NULL,
@@ -224,9 +282,9 @@ function runSqliteMigrations(sqlite: any): void {
         assembled_context TEXT NOT NULL,
         source TEXT,
         session_id TEXT,
-        namespace TEXT,
         latency_ms INTEGER,
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+        namespace TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_assemblies_source ON context_assemblies (source);
       CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies (session_id);
@@ -246,48 +304,50 @@ function runSqliteMigrations(sqlite: any): void {
         fail_count INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active);
+
+      CREATE TABLE IF NOT EXISTS local_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sync_state (
+        id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        pull_cursor TEXT,
+        last_push_at TEXT,
+        last_sync_at TEXT,
+        last_error TEXT,
+        embedding_model TEXT,
+        created_at TEXT NOT NULL
+      );
     `);
     return; // Fresh DB — no need for incremental migrations
   }
 
   // v0.2.0: namespace column
-  const hasNamespace = sqlite.prepare(
-    "SELECT COUNT(*) as cnt FROM pragma_table_info('memories') WHERE name='namespace'"
-  ).get() as { cnt: number };
-  if (hasNamespace.cnt === 0) {
-    sqlite.exec('ALTER TABLE memories ADD COLUMN namespace text');
+  const memoriesNamespaceIsNew = !columnExists(sqlite, 'memories', 'namespace');
+  addColumnIfMissing(sqlite, 'memories', 'namespace', 'text');
+  if (memoriesNamespaceIsNew) {
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
   }
 
-  const hasSessionNamespace = sqlite.prepare(
-    "SELECT COUNT(*) as cnt FROM pragma_table_info('sessions') WHERE name='namespace'"
-  ).get() as { cnt: number };
-  if (hasSessionNamespace.cnt === 0) {
-    sqlite.exec('ALTER TABLE sessions ADD COLUMN namespace text');
+  const sessionsNamespaceIsNew = !columnExists(sqlite, 'sessions', 'namespace');
+  addColumnIfMissing(sqlite, 'sessions', 'namespace', 'text');
+  if (sessionsNamespaceIsNew) {
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace)');
   }
 
-  const hasAssemblyNamespace = sqlite.prepare(
-    "SELECT COUNT(*) as cnt FROM pragma_table_info('context_assemblies') WHERE name='namespace'"
-  ).get() as { cnt: number };
-  if (hasAssemblyNamespace.cnt === 0) {
-    sqlite.exec('ALTER TABLE context_assemblies ADD COLUMN namespace text');
+  const assembliesNamespaceIsNew = !columnExists(sqlite, 'context_assemblies', 'namespace');
+  addColumnIfMissing(sqlite, 'context_assemblies', 'namespace', 'text');
+  if (assembliesNamespaceIsNew) {
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace)');
   }
 
   // v0.3.0: embedding_model column
-  const hasEmbeddingModel = sqlite.prepare(
-    "SELECT COUNT(*) as cnt FROM pragma_table_info('memories') WHERE name='embedding_model'"
-  ).get() as { cnt: number };
-  if (hasEmbeddingModel.cnt === 0) {
-    sqlite.exec('ALTER TABLE memories ADD COLUMN embedding_model text');
-  }
+  addColumnIfMissing(sqlite, 'memories', 'embedding_model', 'text');
 
   // v0.4.0: webhooks table
-  const hasWebhooks = sqlite.prepare(
-    "SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='webhooks'"
-  ).get() as { cnt: number };
-  if (hasWebhooks.cnt === 0) {
+  if (!tableExists(sqlite, 'webhooks')) {
     sqlite.exec(`
       CREATE TABLE webhooks (
         id TEXT PRIMARY KEY,
@@ -303,6 +363,66 @@ function runSqliteMigrations(sqlite: any): void {
       )
     `);
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active)');
+  }
+
+  // v0.5.0: multi-device sync foundation (schema only — see .claude/PRPs/plans/postgres-cloud-sync.md)
+  addColumnIfMissing(sqlite, 'memories', 'device_id', 'text');
+
+  // Needed by the future sync push query: WHERE updated_at > cursor. `updated_at`
+  // itself has existed on `memories` since v0.1.0, so only the index is new
+  // here — there's no "column just added" event to hang the CREATE INDEX off
+  // of, so it's gated on the index's own existence instead, to keep this
+  // running once per database file rather than on every connection open.
+  if (!indexExists(sqlite, 'idx_memories_updated_at')) {
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at)');
+  }
+
+  const connectionsUpdatedAtIsNew = !columnExists(sqlite, 'memory_connections', 'updated_at');
+  addColumnIfMissing(sqlite, 'memory_connections', 'updated_at', 'text');
+  if (connectionsUpdatedAtIsNew) {
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at)');
+  }
+
+  const connectionsDeletedAtIsNew = !columnExists(sqlite, 'memory_connections', 'deleted_at');
+  addColumnIfMissing(sqlite, 'memory_connections', 'deleted_at', 'text');
+  if (connectionsDeletedAtIsNew) {
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at)');
+  }
+
+  addColumnIfMissing(sqlite, 'memory_connections', 'device_id', 'text');
+
+  addColumnIfMissing(sqlite, 'sessions', 'updated_at', 'text');
+
+  const sessionsDeletedAtIsNew = !columnExists(sqlite, 'sessions', 'deleted_at');
+  addColumnIfMissing(sqlite, 'sessions', 'deleted_at', 'text');
+  if (sessionsDeletedAtIsNew) {
+    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at)');
+  }
+
+  addColumnIfMissing(sqlite, 'sessions', 'device_id', 'text');
+
+  if (!tableExists(sqlite, 'local_meta')) {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS local_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+  }
+
+  if (!tableExists(sqlite, 'sync_state')) {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS sync_state (
+        id TEXT PRIMARY KEY,
+        device_id TEXT NOT NULL,
+        pull_cursor TEXT,
+        last_push_at TEXT,
+        last_sync_at TEXT,
+        last_error TEXT,
+        embedding_model TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
   }
 }
 

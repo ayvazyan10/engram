@@ -59,6 +59,9 @@ export const memories = sqliteTable(
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
     archivedAt: text('archived_at'), // soft delete
+
+    // Multi-device sync (Phase 0 foundation — not yet populated by write paths)
+    deviceId: text('device_id'), // device that last wrote this row (LWW tie-breaking)
   },
   (t) => ({
     typeIdx: index('idx_memories_type').on(t.type),
@@ -68,6 +71,7 @@ export const memories = sqliteTable(
     conceptIdx: index('idx_memories_concept').on(t.concept),
     archivedIdx: index('idx_memories_archived').on(t.archivedAt),
     namespaceIdx: index('idx_memories_namespace').on(t.namespace),
+    updatedAtIdx: index('idx_memories_updated_at').on(t.updatedAt), // sync push query: WHERE updated_at > cursor
   })
 );
 
@@ -93,6 +97,11 @@ export const memoryConnections = sqliteTable(
     createdAt: text('created_at')
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
+
+    // Multi-device sync (Phase 0 foundation — not yet populated by write paths)
+    updatedAt: text('updated_at'),
+    deletedAt: text('deleted_at'), // tombstone — hard deletes can't be tracked across sync replicas
+    deviceId: text('device_id'),
   },
   (t) => ({
     sourceIdx: index('idx_connections_source').on(t.sourceId),
@@ -103,6 +112,8 @@ export const memoryConnections = sqliteTable(
       t.targetId,
       t.relationship
     ),
+    deletedIdx: index('idx_connections_deleted_at').on(t.deletedAt),
+    updatedIdx: index('idx_connections_updated_at').on(t.updatedAt),
   })
 );
 
@@ -120,11 +131,17 @@ export const sessions = sqliteTable(
       .default(sql`CURRENT_TIMESTAMP`)
       .notNull(),
     endedAt: text('ended_at'),
+
+    // Multi-device sync (Phase 0 foundation — not yet populated by write paths)
+    updatedAt: text('updated_at'),
+    deletedAt: text('deleted_at'), // tombstone
+    deviceId: text('device_id'),
   },
   (t) => ({
     sourceIdx: index('idx_sessions_source').on(t.source),
     startedIdx: index('idx_sessions_started').on(t.startedAt),
     namespaceIdx: index('idx_sessions_namespace').on(t.namespace),
+    deletedIdx: index('idx_sessions_deleted_at').on(t.deletedAt),
   })
 );
 
@@ -178,6 +195,30 @@ export const webhooks = sqliteTable(
   })
 );
 
+// ─── local_meta ────────────────────────────────────────────────────────────────
+// Device-local key/value store. Never synced — holds things like device_id
+// that must stay unique per physical installation (see sync/deviceId.ts).
+
+export const localMeta = sqliteTable('local_meta', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+});
+
+// ─── sync_state ──────────────────────────────────────────────────────────────
+// One row per configured sync target (a Postgres URL). Bookkeeping for the
+// (future) SyncEngine — never synced itself.
+
+export const syncState = sqliteTable('sync_state', {
+  id: text('id').primaryKey(), // sha256 of the normalized sync URL
+  deviceId: text('device_id').notNull(),
+  pullCursor: text('pull_cursor'), // server_updated_at of the last accepted row
+  lastPushAt: text('last_push_at'),
+  lastSyncAt: text('last_sync_at'),
+  lastError: text('last_error'),
+  embeddingModel: text('embedding_model'), // guards against incompatible embeddings
+  createdAt: text('created_at').notNull(),
+});
+
 // ─── Type exports ─────────────────────────────────────────────────────────────
 
 export type Memory = typeof memories.$inferSelect;
@@ -203,3 +244,9 @@ export type NewContextAssembly = typeof contextAssemblies.$inferInsert;
 
 export type Webhook = typeof webhooks.$inferSelect;
 export type NewWebhook = typeof webhooks.$inferInsert;
+
+export type LocalMeta = typeof localMeta.$inferSelect;
+export type NewLocalMeta = typeof localMeta.$inferInsert;
+
+export type SyncState = typeof syncState.$inferSelect;
+export type NewSyncState = typeof syncState.$inferInsert;

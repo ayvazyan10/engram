@@ -193,6 +193,13 @@ export class ContextAssembler {
     // Update access counts in DB. These must be awaited: drizzle query builders
     // are lazy, so a bare `void db.update(...)` never sends the statement. The
     // increment is done in SQL so concurrent recalls cannot clobber each other.
+    //
+    // Deliberately does NOT set `updatedAt` here. Bumping it on every recall
+    // would push every recalled memory to the cloud on every agent turn —
+    // dozens of rows per call. `access_count` is designed to be write-hot
+    // (see the raw `+ 1` above) and gets its own MAX-merge sync rule in a
+    // later phase instead of last-write-wins; do not "fix" this to bump
+    // updatedAt without that rule in place.
     const now = new Date().toISOString();
     if (selected.length > 0) {
       await db
@@ -225,6 +232,11 @@ export class ContextAssembler {
       sessionId: sessionId ?? null,
       namespace: this.namespace ?? null,
       latencyMs,
+      // Explicit ISO timestamp — the column's `CURRENT_TIMESTAMP` default
+      // yields second-precision "2026-08-25 14:23:01" with no T/Z, breaking
+      // any last-write-wins comparison against the millisecond ISO strings
+      // every other write site produces.
+      createdAt: now,
     };
 
     await db.insert(schema.contextAssemblies).values(assemblyLog);
@@ -385,6 +397,8 @@ export class ContextAssembler {
     }
 
     // Update access counts — awaited and incremented in SQL (see recall()).
+    // Deliberately does NOT set `updatedAt` — see the comment in recall();
+    // access_count is intentionally excluded from last-write-wins sync.
     const now = new Date().toISOString();
     if (allYielded.length > 0) {
       await db
@@ -413,6 +427,9 @@ export class ContextAssembler {
       sessionId: sessionId ?? null,
       namespace: this.namespace ?? null,
       latencyMs,
+      // See recall() — explicit ISO timestamp instead of the CURRENT_TIMESTAMP
+      // column default, which is second-precision with no T/Z.
+      createdAt: now,
     });
 
     // Final sort by score for the complete context

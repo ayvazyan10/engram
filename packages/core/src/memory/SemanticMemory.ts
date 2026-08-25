@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory, NewMemoryConnection, RelationshipType } from '../db/schema.js';
 import { embed, packFP16 } from '../embedding/Embedder.js';
+import { getDeviceId } from '../sync/deviceId.js';
+import { upsertConnections } from '../graph/connectionStore.js';
 
 export interface StoreSemanticInput {
   concept: string;
@@ -50,6 +52,7 @@ export class SemanticMemory {
   async store(input: StoreSemanticInput): Promise<Memory> {
     const db = getDb();
     const now = new Date().toISOString();
+    const deviceId = getDeviceId();
 
     const fullText = `${input.concept}: ${input.content}`;
     const embedding = await embed(fullText);
@@ -69,6 +72,7 @@ export class SemanticMemory {
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
       updatedAt: now,
+      deviceId,
     };
 
     const connections: NewMemoryConnection[] = (input.relatesTo ?? []).map((rel) => ({
@@ -80,6 +84,8 @@ export class SemanticMemory {
       bidirectional: rel.relationship === 'relates_to',
       metadata: '{}',
       createdAt: now,
+      updatedAt: now,
+      deviceId,
     }));
 
     if (this.namespaceMode === 'isolated' && connections.length > 0) {
@@ -100,7 +106,11 @@ export class SemanticMemory {
     db.transaction((tx) => {
       tx.insert(schema.memories).values(record).run();
       if (connections.length > 0) {
-        tx.insert(schema.memoryConnections).values(connections).run();
+        // upsertConnections rather than a raw insert — see
+        // graph/connectionStore.ts: it resurrects a tombstoned row that
+        // occupies the same (source, target, relationship) slot instead of
+        // throwing the UNIQUE constraint violation a naive insert would.
+        upsertConnections(tx, connections);
       }
     });
 
@@ -136,6 +146,7 @@ export class SemanticMemory {
 
     const updateData: Partial<NewMemory> = {
       updatedAt: now,
+      deviceId: getDeviceId(),
     };
 
     if (updates.content !== undefined) {

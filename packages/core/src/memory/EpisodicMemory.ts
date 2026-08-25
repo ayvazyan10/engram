@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
 import { embed, packFP16 } from '../embedding/Embedder.js';
+import { getDeviceId } from '../sync/deviceId.js';
 
 export interface StoreEpisodicInput {
   content: string;
@@ -67,6 +68,7 @@ export class EpisodicMemory {
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
       updatedAt: now,
+      deviceId: getDeviceId(),
     };
 
     await db.insert(schema.memories).values(record);

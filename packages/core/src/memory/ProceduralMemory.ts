@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
 import { embed, packFP16, unpackFP16 } from '../embedding/Embedder.js';
+import { getDeviceId } from '../sync/deviceId.js';
 
 /** Cosine similarity between two equal-length embedding vectors. */
 function cosineSimilarity(a: Float32Array | number[], b: Float32Array | number[]): number {
@@ -86,6 +87,7 @@ export class ProceduralMemory {
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
       updatedAt: now,
+      deviceId: getDeviceId(),
     };
 
     await db.insert(schema.memories).values(record);
@@ -144,7 +146,7 @@ export class ProceduralMemory {
     const db = getDb();
     await db
       .update(schema.memories)
-      .set({ confidence: newConfidence, updatedAt: new Date().toISOString() })
+      .set({ confidence: newConfidence, updatedAt: new Date().toISOString(), deviceId: getDeviceId() })
       .where(eq(schema.memories.id, id));
   }
 }
