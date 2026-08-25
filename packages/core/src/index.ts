@@ -44,6 +44,7 @@ export type {
 
 // Graph
 export { KnowledgeGraph } from './graph/KnowledgeGraph.js';
+export { upsertConnection, upsertConnections } from './graph/connectionStore.js';
 
 // Embedder
 export {
@@ -91,3 +92,6 @@ export type {
 // DB client
 export { getDb, closeDb, schema, getDatabaseDialect, getDatabaseConnection } from './db/index.js';
 export type { DatabaseDialect, AdapterConfig, DatabaseConnection } from './db/index.js';
+
+// Sync (multi-device) — Phase 0 foundation
+export { getDeviceId } from './sync/deviceId.js';

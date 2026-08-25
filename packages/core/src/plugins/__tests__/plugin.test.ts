@@ -22,6 +22,7 @@ import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
 import { PluginRegistry } from '../PluginRegistry.js';
 import type { EngramPlugin } from '../PluginRegistry.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -48,12 +49,6 @@ function createTestDb(): string {
   )`);
   sqlite.close();
   return dbPath;
-}
-
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
 }
 
 // ─── PluginRegistry Unit ─────────────────────────────────────────────────────
@@ -160,7 +155,7 @@ describe('NeuralBrain — plugin hooks', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('registerPlugin / listPlugins work', () => {

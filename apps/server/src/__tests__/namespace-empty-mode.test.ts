@@ -12,9 +12,9 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
 
 const dbPath = path.join(os.tmpdir(), `engram-empty-mode-test-${process.pid}.db`);
 
@@ -35,9 +35,7 @@ afterAll(async () => {
   try { brain?.shutdown(); } catch { /* best effort */ }
   delete process.env['ENGRAM_NAMESPACE_MODE'];
   delete process.env['ENGRAM_NAMESPACE'];
-  for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-    try { fs.unlinkSync(dbPath + suffix); } catch {}
-  }
+  cleanupTestDb(dbPath);
 });
 
 describe('empty ENGRAM_NAMESPACE_MODE', () => {

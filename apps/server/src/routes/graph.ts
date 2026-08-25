@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, schema } from '@engram-ai-memory/core';
+import { getDb, getDeviceId, schema, upsertConnection } from '@engram-ai-memory/core';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { brain } from '../index.js';
 
@@ -49,9 +49,12 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
             .select()
             .from(schema.memoryConnections)
             .where(
-              or(
-                inArray(schema.memoryConnections.sourceId, frontier),
-                inArray(schema.memoryConnections.targetId, frontier)
+              and(
+                or(
+                  inArray(schema.memoryConnections.sourceId, frontier),
+                  inArray(schema.memoryConnections.targetId, frontier)
+                ),
+                isNull(schema.memoryConnections.deletedAt)
               )
             );
 
@@ -144,6 +147,9 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'Memory not found' };
       }
 
+      // Same createdAt/updatedAt instant on insert, matching the invariant
+      // NeuralBrain's own write paths use for new rows.
+      const now = new Date().toISOString();
       const connection = {
         id: uuidv4(),
         sourceId: req.body.sourceId,
@@ -152,24 +158,52 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         strength: req.body.strength ?? 1.0,
         bidirectional: req.body.bidirectional ?? false,
         metadata: '{}',
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
+        deviceId: getDeviceId(),
       };
 
-      await db.insert(schema.memoryConnections).values(connection);
+      // upsertConnection rather than a raw insert — see
+      // graph/connectionStore.ts: it resurrects a tombstoned row that
+      // occupies the same (source, target, relationship) slot instead of
+      // throwing the UNIQUE constraint violation a naive insert would (e.g. a
+      // connection that was forgotten and is now being re-created). A LIVE
+      // duplicate still throws exactly as a raw insert always did — no route
+      // in apps/server/src/routes/ maps a conflict to 409 today, so this
+      // preserves the existing (unhandled -> 500) behavior rather than
+      // inventing a new error convention unilaterally.
+      upsertConnection(db, connection);
+
+      // Re-read the persisted row rather than trusting the locally built
+      // `connection` object: when upsertConnection resurrects a tombstoned
+      // row, that row keeps its OWN original id — not the fresh uuid
+      // generated above — so `connection.id` would otherwise be returned to
+      // the caller without ever existing in the table.
+      const [persisted] = await db
+        .select()
+        .from(schema.memoryConnections)
+        .where(
+          and(
+            eq(schema.memoryConnections.sourceId, connection.sourceId),
+            eq(schema.memoryConnections.targetId, connection.targetId),
+            eq(schema.memoryConnections.relationship, connection.relationship)
+          )
+        )
+        .limit(1);
 
       // Mirror into the in-memory graph. Recall traverses that graph, and it is
       // only loaded once at startup — a DB-only insert was invisible to recall
       // for the entire process lifetime even though GET /graph/:id showed it.
       brain.getGraph().addEdge({
-        sourceId: connection.sourceId,
-        targetId: connection.targetId,
-        relationship: connection.relationship,
-        strength: connection.strength,
-        bidirectional: connection.bidirectional,
+        sourceId: persisted!.sourceId,
+        targetId: persisted!.targetId,
+        relationship: persisted!.relationship,
+        strength: persisted!.strength,
+        bidirectional: persisted!.bidirectional,
       });
 
       reply.code(201);
-      return connection;
+      return persisted;
     },
   });
 };

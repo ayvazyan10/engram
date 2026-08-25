@@ -21,6 +21,7 @@ import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
 import { getEmbeddingModelId, unpackFP16 } from '../../embedding/Embedder.js';
 import { VectorSearch } from '../../retrieval/VectorSearch.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -44,12 +45,6 @@ function createTestDb(): string {
   return dbPath;
 }
 
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
-}
-
 // ─── Model ID Stored on New Memories ─────────────────────────────────────────
 
 describe('Embedding — model tracking', () => {
@@ -65,7 +60,7 @@ describe('Embedding — model tracking', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('stores the current model ID on new memories', async () => {
@@ -99,7 +94,7 @@ describe('Embedding — status', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('reports all memories as current when freshly stored', async () => {
@@ -165,7 +160,7 @@ describe('Embedding — backfill', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('tags legacy memories with the current model ID', async () => {
@@ -215,7 +210,7 @@ describe('Embedding — re-embed pipeline', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('re-embeds stale memories with the current model', async () => {
@@ -311,8 +306,7 @@ describe('Embedding — re-embed persists the index', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
-    try { fs.unlinkSync(indexPath); } catch {}
+    cleanupTestDb(dbPath);
   });
 
   it('writes refreshed vectors to disk without waiting for shutdown', async () => {
@@ -441,6 +435,6 @@ describe('Embedding — auto-migration', () => {
 
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 });

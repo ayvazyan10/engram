@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, schema, embed, packFP16 } from '@engram-ai-memory/core';
+import { getDb, getDeviceId, schema, embed, packFP16 } from '@engram-ai-memory/core';
 import type { MemoryType } from '@engram-ai-memory/core';
 import { isNull, and, eq, sql, gte, desc } from 'drizzle-orm';
 import { brain } from '../index.js';
@@ -141,7 +141,10 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'Memory not found' };
       }
 
-      const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+      const updates: Record<string, unknown> = {
+        updatedAt: new Date().toISOString(),
+        deviceId: getDeviceId(),
+      };
       if (content !== undefined) updates['content'] = content;
       if (importance !== undefined) updates['importance'] = importance;
       if (tags !== undefined) updates['tags'] = JSON.stringify(tags);
@@ -203,6 +206,10 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       const db = getDb();
       const { ids, tag } = req.body;
       let modified = 0;
+      // Hoisted out of the loop: one device id for the whole batch, and a
+      // single db.insert (inside getDeviceId's first-call path) instead of one
+      // per row.
+      const deviceId = getDeviceId();
 
       for (const id of ids) {
         const [mem] = await db
@@ -217,7 +224,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           existing.push(tag);
           await db
             .update(schema.memories)
-            .set({ tags: JSON.stringify(existing), updatedAt: new Date().toISOString() })
+            .set({ tags: JSON.stringify(existing), updatedAt: new Date().toISOString(), deviceId })
             .where(eq(schema.memories.id, id));
           modified++;
         }

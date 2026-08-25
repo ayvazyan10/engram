@@ -8,10 +8,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import type { FastifyInstance } from 'fastify';
+import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
 
 const dbPath = path.join(os.tmpdir(), `engram-server-test-${Date.now()}.db`);
 
@@ -35,9 +35,7 @@ afterAll(async () => {
   await app?.close();
   // shutdown() is synchronous.
   try { brain?.shutdown(); } catch { /* best effort */ }
-  for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-    try { fs.unlinkSync(dbPath + suffix); } catch {}
-  }
+  cleanupTestDb(dbPath);
 });
 
 /** Store a memory through the API and return its id. */

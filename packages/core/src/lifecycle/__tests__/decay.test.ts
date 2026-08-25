@@ -22,6 +22,7 @@ import {
   mergePolicy,
 } from '../DecayPolicy.js';
 import { DecayEngine } from '../DecayEngine.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 import {
   computeRetentionScore,
   decayImportance,
@@ -276,10 +277,7 @@ describe('NeuralBrain decay integration', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    // Clean up test DB files
-    try { fs.unlinkSync(dbPath); } catch {}
-    try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-    try { fs.unlinkSync(dbPath + '-shm'); } catch {}
+    cleanupTestDb(dbPath);
   });
 
   it('getDecayPolicy returns merged policy', () => {

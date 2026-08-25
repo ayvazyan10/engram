@@ -22,6 +22,8 @@ import {
   getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
+import { upsertConnection, upsertConnections } from './graph/connectionStore.js';
+import { getDeviceId } from './sync/deviceId.js';
 import { EpisodicMemory } from './memory/EpisodicMemory.js';
 import { ProceduralMemory } from './memory/ProceduralMemory.js';
 import { SemanticMemory } from './memory/SemanticMemory.js';
@@ -409,9 +411,14 @@ export class NeuralBrain {
       }
     }
 
-    // Load all edges into graph
+    // Load all edges into graph. Tombstoned edges (deleted_at set) must be
+    // excluded here — otherwise a connection "deleted" on this or another
+    // device reappears in the graph on the next restart.
     const activeIds = new Set(allMemories.map((memory) => memory.id));
-    const loadedConnections = await db.select().from(schema.memoryConnections);
+    const loadedConnections = await db
+      .select()
+      .from(schema.memoryConnections)
+      .where(isNull(schema.memoryConnections.deletedAt));
     const allConnections = this.namespaceMode === 'isolated'
       ? loadedConnections.filter((connection) =>
           activeIds.has(connection.sourceId) && activeIds.has(connection.targetId))
@@ -570,9 +577,12 @@ export class NeuralBrain {
           .select()
           .from(schema.memoryConnections)
           .where(
-            or(
-              inArray(schema.memoryConnections.sourceId, slice),
-              inArray(schema.memoryConnections.targetId, slice)
+            and(
+              or(
+                inArray(schema.memoryConnections.sourceId, slice),
+                inArray(schema.memoryConnections.targetId, slice)
+              ),
+              isNull(schema.memoryConnections.deletedAt)
             )
           );
 
@@ -616,6 +626,10 @@ export class NeuralBrain {
     const type = input.type ?? 'episodic';
     const source = input.source ?? this.config.defaultSource ?? null;
     const now = new Date().toISOString();
+    // Hoisted once per store() call rather than read per-row below — the id
+    // is memoized on disk, but there's no reason to touch it more than once
+    // per write.
+    const deviceId = getDeviceId();
 
     const embedding = await embed(input.content);
     const embeddingBuf = packFP16(embedding);
@@ -639,6 +653,7 @@ export class NeuralBrain {
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
       updatedAt: now,
+      deviceId,
     };
 
     // ── Auto-concept: derive the topic label BEFORE the insert, so the row is
@@ -672,6 +687,8 @@ export class NeuralBrain {
           bidirectional: true,
           metadata: '{}',
           createdAt: now,
+          updatedAt: now,
+          deviceId,
         }));
     } catch {
       // Auto-link is best-effort — don't fail the store
@@ -688,7 +705,11 @@ export class NeuralBrain {
     db.transaction((tx) => {
       tx.insert(schema.memories).values(record).run();
       if (edges.length > 0) {
-        tx.insert(schema.memoryConnections).values(edges).run();
+        // upsertConnections rather than a raw insert: the source id is fresh
+        // here, but going through the shared helper keeps every
+        // memory_connections write path consistent with the tombstone
+        // resurrection rule (see graph/connectionStore.ts).
+        upsertConnections(tx, edges);
       }
     });
 
@@ -740,9 +761,11 @@ export class NeuralBrain {
               suggestedStrategy: c.suggestedStrategy,
             }),
             createdAt: now,
+            updatedAt: now,
+            deviceId,
           };
 
-          await db.insert(schema.memoryConnections).values(edge);
+          upsertConnection(db, edge);
           this.graph.addEdge({
             sourceId: edge.sourceId,
             targetId: edge.targetId,
@@ -914,18 +937,34 @@ export class NeuralBrain {
     if (ids.length === 0) return;
     const db = getDb();
     const archivedAt = new Date().toISOString();
+    const deviceId = getDeviceId();
 
     db.transaction((tx) => {
       tx.update(schema.memories)
-        .set({ archivedAt })
+        // updatedAt MUST move with archivedAt. Every forget() and every
+        // consolidate() goes through this method, so leaving updated_at
+        // untouched would make an archival invisible to a
+        // `WHERE updated_at > cursor` sync push — the memory would vanish
+        // locally and silently resurrect on the next pull from another
+        // device.
+        .set({ archivedAt, updatedAt: archivedAt, deviceId })
         .where(inArray(schema.memories.id, ids))
         .run();
 
-      tx.delete(schema.memoryConnections)
+      // Tombstone instead of hard-delete: a physical DELETE can't be
+      // represented in a `WHERE updated_at > cursor` sync query either, so a
+      // deleted edge would never propagate and would reappear on the next
+      // pull. `isNull(deletedAt)` keeps this from re-touching (and re-dating)
+      // edges that are already tombstoned.
+      tx.update(schema.memoryConnections)
+        .set({ deletedAt: archivedAt, updatedAt: archivedAt, deviceId })
         .where(
-          or(
-            inArray(schema.memoryConnections.sourceId, ids),
-            inArray(schema.memoryConnections.targetId, ids)
+          and(
+            or(
+              inArray(schema.memoryConnections.sourceId, ids),
+              inArray(schema.memoryConnections.targetId, ids)
+            ),
+            isNull(schema.memoryConnections.deletedAt)
           )
         )
         .run();
@@ -960,11 +999,19 @@ export class NeuralBrain {
    */
   async createSession(source: string, context?: Record<string, unknown>): Promise<string> {
     const db = getDb();
+    const now = new Date().toISOString();
     const session: NewSession = {
       id: uuidv4(),
       source,
       context: context ? JSON.stringify(context) : null,
       namespace: this.activeNamespace ?? null,
+      // Explicit ISO timestamp — the column's `CURRENT_TIMESTAMP` default
+      // yields "2026-08-25 14:23:01" (second precision, no T/Z), which breaks
+      // any last-write-wins comparison against the millisecond ISO strings
+      // every other write site produces.
+      startedAt: now,
+      updatedAt: now,
+      deviceId: getDeviceId(),
     };
     await db.insert(schema.sessions).values(session);
     return session.id;
@@ -975,9 +1022,10 @@ export class NeuralBrain {
    */
   async endSession(sessionId: string): Promise<void> {
     const db = getDb();
+    const now = new Date().toISOString();
     await db
       .update(schema.sessions)
-      .set({ endedAt: new Date().toISOString() })
+      .set({ endedAt: now, updatedAt: now, deviceId: getDeviceId() })
       .where(this.activeNamespace
         ? and(eq(schema.sessions.id, sessionId), eq(schema.sessions.namespace, this.activeNamespace))
         : eq(schema.sessions.id, sessionId));
@@ -1433,7 +1481,7 @@ export class NeuralBrain {
     tags.push(tag);
     await db
       .update(schema.memories)
-      .set({ tags: JSON.stringify(tags), updatedAt: new Date().toISOString() })
+      .set({ tags: JSON.stringify(tags), updatedAt: new Date().toISOString(), deviceId: getDeviceId() })
       .where(eq(schema.memories.id, memoryId));
 
     return tags;
@@ -1459,7 +1507,7 @@ export class NeuralBrain {
 
     await db
       .update(schema.memories)
-      .set({ tags: JSON.stringify(filtered), updatedAt: new Date().toISOString() })
+      .set({ tags: JSON.stringify(filtered), updatedAt: new Date().toISOString(), deviceId: getDeviceId() })
       .where(eq(schema.memories.id, memoryId));
 
     return filtered;
@@ -1550,6 +1598,9 @@ export class NeuralBrain {
     const db = getDb();
     const currentModel = getEmbeddingModelId();
     const currentDim = getModelDimension();
+    // Hoisted out of the per-row loop below — this is the device performing
+    // the re-embed, not something that varies per memory.
+    const deviceId = getDeviceId();
 
     // Re-embedding under a different model produces different-length vectors.
     // Resize (and clear) the index first — upsert now rejects mismatches rather
@@ -1606,6 +1657,7 @@ export class NeuralBrain {
                 embeddingDim: currentDim,
                 embeddingModel: currentModel,
                 updatedAt: new Date().toISOString(),
+                deviceId,
               })
               .where(eq(schema.memories.id, memory.id));
 
@@ -1665,10 +1717,15 @@ export class NeuralBrain {
     this.assertInitialized();
     const db = getDb();
     const currentModel = getEmbeddingModelId();
+    const now = new Date().toISOString();
+    const deviceId = getDeviceId();
 
     const result = await db
       .update(schema.memories)
-      .set({ embeddingModel: currentModel })
+      // updatedAt/deviceId must move with the change — this write silently
+      // mutated embeddingModel with no updatedAt bump, so a backfill would
+      // never propagate to another device's sync cursor.
+      .set({ embeddingModel: currentModel, updatedAt: now, deviceId })
       .where(
         and(
           isNull(schema.memories.archivedAt),
@@ -1740,7 +1797,12 @@ export class NeuralBrain {
     const edges = await db
       .select()
       .from(schema.memoryConnections)
-      .where(eq(schema.memoryConnections.relationship, 'contradicts'));
+      .where(
+        and(
+          eq(schema.memoryConnections.relationship, 'contradicts'),
+          isNull(schema.memoryConnections.deletedAt)
+        )
+      );
 
     const results: Array<{
       edge: { id: string; sourceId: string; targetId: string; strength: number; metadata: string };
@@ -1865,33 +1927,46 @@ export class NeuralBrain {
     // deletes removed the edge, so a failure in between left a resolved
     // contradiction that still reported itself as unresolved.
     if (strategy !== 'keep_both') {
+      const resolvedAt = new Date().toISOString();
+      const deviceId = getDeviceId();
+
       db.transaction((tx) => {
         if (archivedId) {
           tx.update(schema.memories)
-            .set({ archivedAt: new Date().toISOString() })
+            // updatedAt must move with archivedAt — see archiveAtomic for why
+            // (this is the same class of bug: a soft-delete invisible to a
+            // sync cursor never propagates).
+            .set({ archivedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
             .where(eq(schema.memories.id, archivedId))
             .run();
 
-          tx.delete(schema.memoryConnections)
+          tx.update(schema.memoryConnections)
+            .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
             .where(
-              or(
-                eq(schema.memoryConnections.sourceId, archivedId),
-                eq(schema.memoryConnections.targetId, archivedId)
+              and(
+                or(
+                  eq(schema.memoryConnections.sourceId, archivedId),
+                  eq(schema.memoryConnections.targetId, archivedId)
+                ),
+                isNull(schema.memoryConnections.deletedAt)
               )
             )
             .run();
         }
 
-        // Drop the contradicts edge in both directions. Archiving already prunes
-        // any edge touching the loser, but this also covers the case where no
-        // memory was archived.
+        // Tombstone the contradicts edge in both directions. Archiving above
+        // already tombstones any edge touching the loser, but this also
+        // covers the case where no memory was archived — a resolved
+        // contradiction must not keep reporting itself as unresolved.
         for (const [a, b] of [[sourceId, targetId], [targetId, sourceId]] as const) {
-          tx.delete(schema.memoryConnections)
+          tx.update(schema.memoryConnections)
+            .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
             .where(
               and(
                 eq(schema.memoryConnections.sourceId, a),
                 eq(schema.memoryConnections.targetId, b),
-                eq(schema.memoryConnections.relationship, 'contradicts')
+                eq(schema.memoryConnections.relationship, 'contradicts'),
+                isNull(schema.memoryConnections.deletedAt)
               )
             )
             .run();

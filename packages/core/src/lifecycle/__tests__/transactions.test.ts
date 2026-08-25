@@ -17,10 +17,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
-import { eq, or } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { getDb, closeDb, schema } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -45,9 +46,7 @@ describe('transaction mechanism', () => {
   beforeEach(() => { dbPath = createTestDb(); });
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('rolls back every statement when one fails', async () => {
@@ -103,9 +102,7 @@ describe('store() atomicity', () => {
   beforeEach(() => { dbPath = createTestDb(); });
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
   it('writes the memory and its auto-link edges together', async () => {
@@ -173,12 +170,10 @@ describe('forget() and consolidate() atomicity', () => {
   beforeEach(() => { dbPath = createTestDb(); });
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
-  it('forget() archives the row and prunes its edges in one step', async () => {
+  it('forget() archives the row and tombstones its edges in one step', async () => {
     const brain = new NeuralBrain({ dbPath });
     await brain.initialize();
 
@@ -196,12 +191,24 @@ describe('forget() and consolidate() atomicity', () => {
 
     const [row] = await db.select().from(schema.memories).where(eq(schema.memories.id, memory.id));
     expect(row!.archivedAt).toBeTruthy();
+    // The archival itself must be visible to a `WHERE updated_at > cursor`
+    // sync query, or the deletion would never propagate to another device.
+    expect(row!.updatedAt).toBe(row!.archivedAt);
 
+    // Tombstoned, not hard-deleted: the rows still physically exist with
+    // deleted_at set...
     const after = await db
       .select()
       .from(schema.memoryConnections)
       .where(or(eq(schema.memoryConnections.sourceId, memory.id), eq(schema.memoryConnections.targetId, memory.id)));
-    expect(after).toHaveLength(0);
+    expect(after.length).toBe(before.length);
+    for (const edge of after) {
+      expect(edge.deletedAt).toBeTruthy();
+    }
+
+    // ...but no longer appear to any live (deleted_at IS NULL) read.
+    const live = after.filter((e) => e.deletedAt === null);
+    expect(live).toHaveLength(0);
   });
 
   it('consolidate() archives the whole cluster, never a partial one', async () => {
@@ -234,11 +241,26 @@ describe('forget() and consolidate() atomicity', () => {
       expect(byId.get(id)?.archivedAt, `episode ${id} should be archived`).toBeTruthy();
     }
 
-    // ...and no edges may survive pointing at an archived episode.
-    const edges = await db.select().from(schema.memoryConnections);
-    for (const e of edges) {
+    // ...and no LIVE edge may survive pointing at an archived episode —
+    // tombstoned edges pointing at them are expected (archiveAtomic tombstones
+    // rather than deletes) and checked separately below.
+    const liveEdges = await db
+      .select()
+      .from(schema.memoryConnections)
+      .where(isNull(schema.memoryConnections.deletedAt));
+    for (const e of liveEdges) {
       expect(byId.get(e.sourceId)?.archivedAt ?? null).toBeNull();
       expect(byId.get(e.targetId)?.archivedAt ?? null).toBeNull();
+    }
+
+    // Every edge that touched an archived episode must be tombstoned, not
+    // gone — a hard delete can't be represented in a sync cursor query.
+    const allEdges = await db.select().from(schema.memoryConnections);
+    for (const e of allEdges) {
+      const touchesArchived = byId.get(e.sourceId)?.archivedAt || byId.get(e.targetId)?.archivedAt;
+      if (touchesArchived) {
+        expect(e.deletedAt).toBeTruthy();
+      }
     }
   });
 });
@@ -249,12 +271,10 @@ describe('resolveContradiction() atomicity', () => {
   beforeEach(() => { dbPath = createTestDb(); });
   afterEach(async () => {
     await closeDb();
-    for (const suffix of ['', '-shm', '-wal', '-journal', '.index']) {
-      try { fs.unlinkSync(dbPath + suffix); } catch {}
-    }
+    cleanupTestDb(dbPath);
   });
 
-  it('archives the loser and removes the contradicts edge together', async () => {
+  it('archives the loser and tombstones the contradicts edge together', async () => {
     const brain = new NeuralBrain({ dbPath });
     await brain.initialize();
 
@@ -282,18 +302,33 @@ describe('resolveContradiction() atomicity', () => {
 
     const [loser] = await db.select().from(schema.memories).where(eq(schema.memories.id, b.memory.id));
     expect(loser!.archivedAt).toBeTruthy();
+    expect(loser!.updatedAt).toBe(loser!.archivedAt);
 
     const [winner] = await db.select().from(schema.memories).where(eq(schema.memories.id, a.memory.id));
     expect(winner!.archivedAt).toBeNull();
 
-    // The contradicts edge must be gone — it used to be deleted by two separate
-    // statements after the archive, so a failure between them left a resolved
-    // contradiction still reporting itself.
+    // The contradicts edge must be tombstoned, not gone — it used to be
+    // deleted by two separate statements after the archive, so a failure
+    // between them left a resolved contradiction still reporting itself. It
+    // still physically exists (a hard delete can't propagate through sync)
+    // but no longer shows up in a live read.
     const remaining = await db
       .select()
       .from(schema.memoryConnections)
       .where(eq(schema.memoryConnections.relationship, 'contradicts'));
-    expect(remaining).toHaveLength(0);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]!.deletedAt).toBeTruthy();
+
+    const live = await db
+      .select()
+      .from(schema.memoryConnections)
+      .where(
+        and(
+          eq(schema.memoryConnections.relationship, 'contradicts'),
+          isNull(schema.memoryConnections.deletedAt)
+        )
+      );
+    expect(live).toHaveLength(0);
   });
 
   it('keep_both leaves both memories and the edge intact', async () => {

@@ -16,6 +16,7 @@ import Database from 'better-sqlite3';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
+import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_SQL = fs.readFileSync(
@@ -38,19 +39,6 @@ function createTestDb(): string {
   return dbPath;
 }
 
-function cleanup(dbPath: string) {
-  try { fs.unlinkSync(dbPath); } catch {}
-  try { fs.unlinkSync(dbPath + '-wal'); } catch {}
-  try { fs.unlinkSync(dbPath + '-shm'); } catch {}
-  try {
-    const directory = path.dirname(dbPath);
-    const indexPrefix = path.basename(dbPath) + '.index';
-    for (const file of fs.readdirSync(directory)) {
-      if (file.startsWith(indexPrefix)) fs.unlinkSync(path.join(directory, file));
-    }
-  } catch {}
-}
-
 // ─── Backwards Compatibility ────────────────────────────────────────────────
 
 describe('Namespace — backwards compatibility', () => {
@@ -66,7 +54,7 @@ describe('Namespace — backwards compatibility', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('no namespace configured — getNamespace returns undefined', () => {
@@ -107,7 +95,7 @@ describe('Namespace — scoped operations', () => {
   afterEach(() => {
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('getNamespace returns configured namespace', () => {
@@ -163,7 +151,7 @@ describe('Namespace — two brains, one DB', () => {
   afterEach(() => {
     brainB.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('brain B only sees its own memories in stats', async () => {
@@ -239,7 +227,7 @@ describe('Namespace — auto-migration', () => {
 
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 });
 
@@ -256,7 +244,7 @@ describe('Namespace modes', () => {
 
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('keeps legacy namespace-only configuration in filter mode', async () => {
@@ -271,7 +259,7 @@ describe('Namespace modes', () => {
 
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('requires a namespace in isolated mode', () => {
@@ -288,7 +276,7 @@ describe('Namespace modes', () => {
 
     brain.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 
   it('keeps foreign memories out of an isolated in-memory index', async () => {
@@ -308,6 +296,6 @@ describe('Namespace modes', () => {
 
     isolated.shutdown();
     closeDb();
-    cleanup(dbPath);
+    cleanupTestDb(dbPath);
   });
 });
