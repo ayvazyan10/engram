@@ -1,7 +1,7 @@
 {
   "name": "@engram-ai-memory/mcp",
-  "version": "0.4.1",
-  "description": "MCP Server \u2014 connects Engram brain to any AI client (Claude Code, Cursor, Windsurf, and more)",
+  "version": "0.5.0",
+  "description": "MCP Server — connects Engram brain to any AI client (Claude Code, Cursor, Windsurf, and more)",
   "main": "./dist/server.js",
   "files": [
     "dist"
@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.11.0",
-    "@engram-ai-memory/core": "workspace:*",
+    "@engram-ai-memory/core": "^0.5.0",
     "uuid": "^11.1.0",
     "zod": "^4.3.6"
   },

@@ -405,6 +405,7 @@ program
       ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
       ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
       ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
+      ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
     };
 
     if (opts.foreground) {
@@ -899,6 +900,7 @@ program
           ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
           ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
           ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
+          ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
         };
         fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
         const logFd = fs.openSync(LOG_PATH, 'a');
