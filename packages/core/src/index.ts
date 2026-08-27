@@ -108,3 +108,11 @@ export type {
   PgSession, NewPgSession,
   PgSyncConnection,
 } from './db/pg/index.js';
+
+// Sync — Engine (Phase 2)
+export { SyncEngine, PgSyncClient, computeSyncId, compareLWW, shouldApplyPulledRow } from './sync/index.js';
+export type {
+  SyncConfig, SyncStatus, SyncResult,
+  MergeResult, CursorState,
+  PushBatch, PullBatch, PgSyncClientOptions,
+} from './sync/index.js';

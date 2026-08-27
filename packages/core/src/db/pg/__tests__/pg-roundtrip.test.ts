@@ -113,6 +113,14 @@ describeWithPg('PostgreSQL sync schema — round-trip integration', () => {
   }, 120000);
 
   afterAll(async () => {
+    // Clean up test data so other PG test suites sharing the same TEST_PG_URL
+    // database don't fail on stale rows (e.g. embedding_model values that
+    // trip SyncEngine's compatibility check).
+    if (conn) {
+      await conn.pool.query('DELETE FROM memory_connections').catch(() => {});
+      await conn.pool.query('DELETE FROM sessions').catch(() => {});
+      await conn.pool.query('DELETE FROM memories').catch(() => {});
+    }
     await conn?.close();
     await pgContainer?.stop();
     delete process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'];
