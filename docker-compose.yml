@@ -1,10 +1,11 @@
 version: '3.9'
 
 services:
-  # PostgreSQL with pgvector — NOT currently usable as an Engram backend.
-  # Engram ships no PostgreSQL migrations (the Drizzle schema is SQLite-only),
-  # so ENGRAM_DATABASE=postgresql fails fast by design. This service is kept
-  # only for local experimentation; the api service below uses SQLite.
+  # PostgreSQL — NOT usable as an Engram primary backend. Engram's core
+  # engine is SQLite-only; setting ENGRAM_DATABASE=postgresql fails fast by
+  # design. This service is kept for cloud sync testing (ENGRAM_SYNC_URL —
+  # see docs/CLOUD-SYNC.md), not as a primary backend; the api service below
+  # always uses SQLite.
   postgres:
     image: pgvector/pgvector:pg16
     ports:
@@ -33,9 +34,9 @@ services:
       NODE_ENV: production
     volumes:
       - api_data:/data
-    # No depends_on postgres: this service is configured for SQLite
-    # (ENGRAM_DB_PATH only). Add ENGRAM_DATABASE=postgresql + DATABASE_URL and
-    # restore the dependency if you switch it to the Postgres backend.
+    # No depends_on postgres: this service always runs on SQLite
+    # (ENGRAM_DB_PATH only). The postgres service above is for cloud sync
+    # testing (ENGRAM_SYNC_URL), not an alternate primary backend.
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '-', 'http://localhost:4901/api/health']
       interval: 10s

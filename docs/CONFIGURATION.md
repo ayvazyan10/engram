@@ -10,9 +10,7 @@ All Engram components are configured via environment variables. No config files 
 |---|---|---|
 | `PORT` | `4901` | HTTP server port |
 | `HOST` | `0.0.0.0` | Bind address |
-| `ENGRAM_DATABASE` | `sqlite` | Database dialect: `sqlite` or `postgresql` |
-| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database file path (sqlite mode) |
-| `DATABASE_URL` | *(none)* | PostgreSQL connection URL (postgresql mode) |
+| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database file path |
 | `NODE_ENV` | `development` | `production` enables stricter logging |
 | `ENGRAM_NAMESPACE_MODE` | `none` | `none` disables namespaces, `filter` enables optional scoping/overrides, `isolated` enforces one fixed namespace |
 | `ENGRAM_NAMESPACE` | *(none)* | Namespace value for `filter` or `isolated`; required by `isolated` |
@@ -137,43 +135,13 @@ PRAGMA foreign_keys = ON;       -- enforce FK constraints
 
 WAL mode is critical for performance — it allows reads to proceed concurrently with a write, enabling high-throughput batch inserts.
 
-### PostgreSQL + pgvector (production)
+### PostgreSQL
 
-Switch to PostgreSQL by updating the Drizzle config and connection string.
+PostgreSQL is not supported as a primary storage backend. Engram uses SQLite
+for all local operations.
 
-**1. Install pgvector extension**
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-```
-
-**2. Update `packages/core/drizzle.config.ts`**
-
-```typescript
-export default defineConfig({
-  dialect: 'postgresql',
-  schema: './src/db/schema.ts',
-  out: './src/db/migrations',
-  dbCredentials: {
-    url: process.env.DATABASE_URL!,
-  },
-});
-```
-
-**3. Set `DATABASE_URL`**
-
-```bash
-DATABASE_URL=postgresql://user:password@localhost:5432/engram
-```
-
-**4. Update the db client** in `packages/core/src/db/index.ts` to use `drizzle-orm/node-postgres`.
-
-**5. Run migrations**
-
-```bash
-pnpm db:generate
-pnpm db:migrate
-```
+For multi-device synchronization, Engram can replicate data through a shared
+PostgreSQL instance. See [Cloud Sync](CLOUD-SYNC.md) for setup instructions.
 
 ---
 
@@ -426,7 +394,7 @@ The vector index can be persisted to disk for fast startup. Instead of re-scanni
 
 > Give every process its own `ENGRAM_INDEX_PATH` when more than one runs against the same database. Sharing the default `<db>.index` means they overwrite each other's index, and during a rolling deploy processes on different format versions will each reject and rewrite what the other wrote. Nothing is lost — the database stays authoritative — but a large index gets rebuilt repeatedly for as long as the mix lasts.
 
-> **Known limits of cross-process sync.** It relies on `PRAGMA data_version`, which SQLite reports per *connection*: two `NeuralBrain` instances sharing one connection inside a single process will not see each other's writes this way (engram itself creates one brain per process, so this does not arise in normal deployments). On PostgreSQL there is no equivalent, so the reconcile is skipped and the index stays as loaded at startup. Graph edges are synced only where one endpoint is a newly arrived memory — an edge created externally between two memories this process already held is picked up on the next restart.
+> **Known limits of cross-process sync.** It relies on `PRAGMA data_version`, which SQLite reports per *connection*: two `NeuralBrain` instances sharing one connection inside a single process will not see each other's writes this way (engram itself creates one brain per process, so this does not arise in normal deployments). Graph edges are synced only where one endpoint is a newly arrived memory — an edge created externally between two memories this process already held is picked up on the next restart.
 
 ### Binary format
 

@@ -347,8 +347,6 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
-| `ENGRAM_DATABASE` | `sqlite` | Storage backend. **`postgresql` is not implemented yet** — Engram ships no PostgreSQL migrations, so selecting it fails fast with an explanatory error instead of breaking on the first write. |
-| `ENGRAM_PG_SCHEMA_READY` | `false` | Escape hatch: set `true` only if you provisioned a compatible PostgreSQL schema yourself. Unsupported. |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
 | `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
@@ -428,8 +426,8 @@ Key areas where help is especially welcome:
 - **New adapters** — LM Studio, llama.cpp, Anthropic API, OpenAI API
 - **Mobile / browser** — lightweight browser-side memory client
 - **Multi-modal embeddings** — images, audio alongside text
-- **PostgreSQL backend** — the adapter exists but ships no schema/migrations (the Drizzle schema is SQLite-only), so it currently refuses to start; see `ENGRAM_DATABASE` below
-- **ANN vector index** — replace the brute-force cosine scan with HNSW (or pgvector) so recall stops scaling linearly with memory count
+- **Multi-device cloud sync** — SQLite stays the local engine; devices replicate through a shared PostgreSQL instance via `ENGRAM_SYNC_URL` (see [Cloud Sync](docs/CLOUD-SYNC.md))
+- **ANN vector index** — replace the brute-force cosine scan with HNSW so recall stops scaling linearly with memory count
 
 ---
 

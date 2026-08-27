@@ -95,3 +95,16 @@ export type { DatabaseDialect, AdapterConfig, DatabaseConnection } from './db/in
 
 // Sync (multi-device) — Phase 0 foundation
 export { getDeviceId } from './sync/deviceId.js';
+
+// Sync — Postgres replication target (Phase 1)
+export {
+  pgMemories, pgMemoryConnections, pgSessions,
+  createPgSyncConnection, validateSyncUrl, redactSyncUrl,
+  runPgSyncMigrations,
+} from './db/pg/index.js';
+export type {
+  PgMemory, NewPgMemory,
+  PgMemoryConnection, NewPgMemoryConnection,
+  PgSession, NewPgSession,
+  PgSyncConnection,
+} from './db/pg/index.js';
