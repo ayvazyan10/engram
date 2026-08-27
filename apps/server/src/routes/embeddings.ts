@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain, realtime } from '../index.js';
+import { brain, realtime, notifySyncWrite } from '../index.js';
 
 export const embeddingRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/embeddings/status — embedding model status and stale counts
@@ -37,6 +37,7 @@ export const embeddingRoutes: FastifyPluginAsync = async (app) => {
       const result = await brain.reEmbed(onlyStale, batchSize, (progress) => {
         realtime?.emit('embedding:progress', progress);
       });
+      if (result.processed > 0) notifySyncWrite();
 
       realtime?.emit('embedding:complete', result);
 
@@ -57,7 +58,8 @@ export const embeddingRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Tag legacy memories (no model ID) with the current model, without re-embedding',
     },
     handler: async () => {
-      await brain.backfillEmbeddingModel();
+      const backfilled = await brain.backfillEmbeddingModel();
+      if (backfilled > 0) notifySyncWrite();
       const status = await brain.embeddingStatus();
       return {
         ...status,

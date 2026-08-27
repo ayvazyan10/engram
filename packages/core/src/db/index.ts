@@ -2,8 +2,8 @@
  * Database client — backwards-compatible wrapper over the adapter layer.
  *
  * getDb() and closeDb() maintain the same API as before.
- * Internally they delegate to the DatabaseAdapter which supports
- * both SQLite (default) and PostgreSQL (opt-in).
+ * Internally they delegate to the DatabaseAdapter, which uses SQLite as the
+ * only supported primary backend.
  */
 
 import { getDatabase, closeDatabase, getDialect, schema } from './adapter.js';
@@ -12,14 +12,13 @@ import type { DatabaseDialect, AdapterConfig, DatabaseConnection } from './adapt
 export type { Memory, NewMemory, MemoryType, RelationshipType, MemoryConnection, NewMemoryConnection, Session, NewSession, ContextAssembly, NewContextAssembly, Webhook, NewWebhook } from './schema.js';
 
 // Re-export the drizzle type for backwards compat
-// Both SQLite and PostgreSQL drizzle instances expose the same query API
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 type DrizzleDb = BetterSQLite3Database<typeof schema>;
 
 /**
  * Get the drizzle ORM instance.
  *
- * @param dbPath Optional SQLite path (backwards compat). Ignored in PostgreSQL mode.
+ * @param dbPath Optional SQLite path (backwards compat).
  */
 export function getDb(dbPath?: string): DrizzleDb {
   const conn = getDatabase(dbPath);
@@ -49,7 +48,7 @@ export function getDatabaseConnection(config?: AdapterConfig): DatabaseConnectio
 
 /**
  * Force WAL checkpoint so the current connection sees external writes.
- * Safe to call any time — no-op on PostgreSQL or if no connection exists.
+ * Safe to call any time — no-op if no connection exists.
  */
 export function walCheckpoint(): void {
   try {
@@ -62,8 +61,8 @@ export function walCheckpoint(): void {
 
 /**
  * Counter that changes when another connection commits — see
- * DatabaseConnection.dataVersion. Returns null when unavailable (PostgreSQL, or
- * no connection yet), which means "unknown", not "unchanged".
+ * DatabaseConnection.dataVersion. Returns null when unavailable (no
+ * connection yet), which means "unknown", not "unchanged".
  */
 export function getDataVersion(): number | null {
   try {

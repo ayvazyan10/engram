@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { DecayPolicyConfig } from '@engram-ai-memory/core';
-import { brain, VERSION } from '../index.js';
+import { brain, VERSION, notifySyncWrite } from '../index.js';
 
 export const healthRoutes: FastifyPluginAsync = async (app) => {
   app.get('/health', {
@@ -48,6 +48,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
     handler: async (req) => {
       const { minClusterSize, threshold } = (req.body as { minClusterSize?: number; threshold?: number }) ?? {};
       const results = await brain.consolidate(minClusterSize, threshold);
+      if (results.length > 0) notifySyncWrite();
       return {
         consolidated: results.length,
         memories: results.map((m) => ({ id: m.id, concept: m.concept, content: m.content?.slice(0, 200) })),
@@ -70,7 +71,11 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req) => {
       const { dryRun } = (req.body as { dryRun?: boolean }) ?? {};
-      return brain.runDecaySweep(dryRun ?? false);
+      const result = await brain.runDecaySweep(dryRun ?? false);
+      if (!dryRun && (result.archivedCount > 0 || result.decayedCount > 0 || result.consolidatedCount > 0)) {
+        notifySyncWrite();
+      }
+      return result;
     },
   });
 

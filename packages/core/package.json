@@ -1,7 +1,7 @@
 {
   "name": "@engram-ai-memory/core",
   "version": "0.4.0",
-  "description": "The Brain \u2014 memory engine, embeddings, graph, and retrieval",
+  "description": "The Brain — memory engine, embeddings, graph, and retrieval",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
@@ -15,7 +15,8 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && pnpm run copy:pg-migrations",
+    "copy:pg-migrations": "node -e \"const fs=require('fs');const src='src/db/pg/migrations';if(fs.existsSync(src)){fs.cpSync(src,'dist/db/pg/migrations',{recursive:true});}\"",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -24,6 +25,7 @@
     "clean": "rm -rf dist *.tsbuildinfo",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:generate:pg": "drizzle-kit generate --config drizzle.pg.config.ts",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
@@ -37,13 +39,15 @@
     "pg": "^8.13.0"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.0",
     "@engram-ai-memory/tsconfig": "workspace:*",
+    "@testcontainers/postgresql": "^12.1.0",
     "@types/better-sqlite3": "^7.6.12",
+    "@types/pg": "^8.11.0",
     "@types/uuid": "^10.0.0",
+    "@vitest/coverage-v8": "^3.1.1",
     "drizzle-kit": "^0.30.0",
+    "testcontainers": "^12.1.0",
     "typescript": "5.7.3",
-    "vitest": "^3.1.1",
-    "@vitest/coverage-v8": "^3.1.1"
+    "vitest": "^3.1.1"
   }
 }

@@ -12,7 +12,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { NeuralBrain } from '@engram-ai-memory/core';
+import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 import { z } from 'zod';
 import fs from 'fs';
@@ -43,6 +43,17 @@ const brain = new NeuralBrain({
   namespaceMode,
   namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
 });
+
+// Cloud sync (Phase 3) — opt-in via ENGRAM_SYNC_URL. Left unset, none of this
+// runs: no SyncEngine is constructed and every `syncEngine?.notifyWrite()`
+// below is a no-op, so non-sync users pay zero overhead.
+const syncUrl = process.env['ENGRAM_SYNC_URL'];
+const syncMode = (process.env['ENGRAM_SYNC_MODE'] || 'auto') as 'auto' | 'manual' | 'off';
+const syncInterval = process.env['ENGRAM_SYNC_INTERVAL']
+  ? parseInt(process.env['ENGRAM_SYNC_INTERVAL'], 10)
+  : undefined;
+
+let syncEngine: SyncEngine | null = null;
 
 const server = new McpServer(
   {
@@ -121,6 +132,7 @@ server.tool(
       sessionId,
       namespace,
     });
+    syncEngine?.notifyWrite();
 
     const response: Record<string, unknown> = {
       id: result.memory.id,
@@ -335,6 +347,7 @@ server.tool(
       importance,
       source: defaultSource,
     });
+    syncEngine?.notifyWrite();
 
     return {
       content: [
@@ -383,6 +396,7 @@ server.tool(
     for (const id of ids) {
       await brain.forget(id);
     }
+    syncEngine?.notifyWrite();
 
     return {
       content: [
@@ -415,6 +429,7 @@ server.tool(
     await ensureInitialized();
 
     const result = await brain.runDecaySweep(dryRun);
+    if (!dryRun) syncEngine?.notifyWrite();
 
     return {
       content: [
@@ -561,6 +576,7 @@ server.tool(
     await ensureInitialized();
 
     const result = await brain.resolveContradiction(sourceId, targetId, strategy);
+    if (result.resolved) syncEngine?.notifyWrite();
 
     return {
       content: [
@@ -662,6 +678,7 @@ server.tool(
     const tags = action === 'add'
       ? await brain.addTag(memoryId, tag)
       : await brain.removeTag(memoryId, tag);
+    syncEngine?.notifyWrite();
 
     return {
       content: [{
@@ -793,6 +810,7 @@ server.tool(
   async ({ onlyStale, batchSize }) => {
     await ensureInitialized();
     const result = await brain.reEmbed(onlyStale, batchSize);
+    if (result.processed > 0) syncEngine?.notifyWrite();
     return {
       content: [
         {
@@ -865,6 +883,7 @@ server.tool(
         content: [{ type: 'text' as const, text: 'Insight was empty or marked NO_INSIGHT — nothing stored.' }],
       };
     }
+    syncEngine?.notifyWrite();
 
     return {
       content: [{ type: 'text' as const, text: `Stored ${type} reflection (${stored.id}).` }],
@@ -921,6 +940,22 @@ async function ensureInitialized(): Promise<void> {
     });
   }
   await initPromise;
+
+  if (syncUrl && !syncEngine) {
+    syncEngine = new SyncEngine({
+      syncUrl,
+      mode: syncMode,
+      intervalMs: syncInterval,
+      onIndexRebuildNeeded: async () => {
+        await brain.syncIndexFromStore();
+      },
+      onSyncError: (err: Error) => {
+        console.error(`[engram] Sync error: ${err.message}`);
+      },
+    });
+    syncEngine.start();
+    console.error(`[engram] Cloud sync enabled: ${redactSyncUrl(syncUrl)}`);
+  }
 }
 
 // ─── Start server ─────────────────────────────────────────────────────────────
@@ -936,6 +971,14 @@ async function shutdown(signal: string): Promise<void> {
   try {
     await server.close();
   } catch { /* transport may already be gone */ }
+  if (syncEngine) {
+    try {
+      await syncEngine.dispose();
+    } catch (err: unknown) {
+      console.error('[engram-mcp] sync engine dispose failed:', err);
+    }
+    syncEngine = null;
+  }
   try {
     await brain.shutdown();
   } catch (err: unknown) {

@@ -53,15 +53,12 @@ brain.shutdown();
 - **Webhooks** — Subscribe to memory events (stored, forgotten, decayed, consolidated, contradiction)
 - **Tags & Collections** — Tag cloud, filter by tag, prefix-based collections
 - **Plugin System** — 6 lifecycle hooks (onStore, onRecall, onForget, onDecay, onStartup, onShutdown)
-- **PostgreSQL Support** — Optional, via `ENGRAM_DATABASE=postgresql`
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
-| `ENGRAM_DATABASE` | `sqlite` | `sqlite` or `postgresql` |
-| `DATABASE_URL` | — | PostgreSQL connection URL |
+| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path (the only supported primary backend) |
 | `ENGRAM_NAMESPACE_MODE` | `none` | `none`, `filter`, or `isolated` |
 | `ENGRAM_NAMESPACE` | — | Namespace used by `filter`/`isolated` modes |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |

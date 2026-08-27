@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { getDb, getDeviceId, schema, embed, packFP16 } from '@engram-ai-memory/core';
 import type { MemoryType } from '@engram-ai-memory/core';
 import { isNull, and, eq, sql, gte, desc } from 'drizzle-orm';
-import { brain } from '../index.js';
+import { brain, notifySyncWrite } from '../index.js';
 
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { days?: string } }>('/analytics', {
@@ -167,6 +167,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         .update(schema.memories)
         .set(updates)
         .where(eq(schema.memories.id, id));
+      notifySyncWrite();
 
       if (newVector) {
         brain.getVectorSearch().upsert({
@@ -229,6 +230,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           modified++;
         }
       }
+      if (modified > 0) notifySyncWrite();
 
       return { modified, total: ids.length };
     },
@@ -251,6 +253,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           // skip missing
         }
       }
+      if (archived > 0) notifySyncWrite();
 
       return { archived, total: ids.length };
     },

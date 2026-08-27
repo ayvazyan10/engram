@@ -347,11 +347,13 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
-| `ENGRAM_DATABASE` | `sqlite` | Storage backend. **`postgresql` is not implemented yet** — Engram ships no PostgreSQL migrations, so selecting it fails fast with an explanatory error instead of breaking on the first write. |
-| `ENGRAM_PG_SCHEMA_READY` | `false` | Escape hatch: set `true` only if you provisioned a compatible PostgreSQL schema yourself. Unsupported. |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
 | `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
+| `ENGRAM_SYNC_URL` | *(none)* | PostgreSQL connection string for multi-device sync. Unset = sync disabled. See [Cloud Sync](docs/CLOUD-SYNC.md). |
+| `ENGRAM_SYNC_MODE` | `auto` | Sync behavior: `auto` (background sync on interval + debounce), `manual` (explicit only), `off`. |
+| `ENGRAM_SYNC_INTERVAL` | `30000` | Background sync interval in milliseconds (auto mode only). |
+| `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS PostgreSQL connections. For local development only — production should always use `sslmode=require`. |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 
@@ -428,8 +430,8 @@ Key areas where help is especially welcome:
 - **New adapters** — LM Studio, llama.cpp, Anthropic API, OpenAI API
 - **Mobile / browser** — lightweight browser-side memory client
 - **Multi-modal embeddings** — images, audio alongside text
-- **PostgreSQL backend** — the adapter exists but ships no schema/migrations (the Drizzle schema is SQLite-only), so it currently refuses to start; see `ENGRAM_DATABASE` below
-- **ANN vector index** — replace the brute-force cosine scan with HNSW (or pgvector) so recall stops scaling linearly with memory count
+- **Multi-device cloud sync** — SQLite stays the local engine; devices replicate through a shared PostgreSQL instance via `ENGRAM_SYNC_URL` (see [Cloud Sync](docs/CLOUD-SYNC.md))
+- **ANN vector index** — replace the brute-force cosine scan with HNSW so recall stops scaling linearly with memory count
 
 ---
 
@@ -472,7 +474,8 @@ Tool: `store_memory` + `resolve_contradiction` · Engram flags the conflict with
 
 Engram is local-first and privacy-preserving by design:
 
-- **No data leaves your machine.** All memories are stored in a local SQLite database (`~/.engram/engram.db` by default).
+- **Local by default.** All memories are stored in a local SQLite database (`~/.engram/engram.db`). No data leaves your machine unless you explicitly enable cloud sync.
+- **Cloud sync is opt-in.** Setting `ENGRAM_SYNC_URL` replicates memories to a PostgreSQL database you own and control — Engram never phones home and never touches any third-party service on its own. See [Cloud Sync](docs/CLOUD-SYNC.md).
 - **All embeddings run on-device.** The `all-MiniLM-L6-v2` model runs locally via `@xenova/transformers` — no external embedding API calls.
 - **No telemetry.** Engram does not collect usage statistics, crash reports, or any analytics.
 - **Webhooks are opt-in.** If you configure webhooks, memory events are sent to your chosen URL — fully under your control.

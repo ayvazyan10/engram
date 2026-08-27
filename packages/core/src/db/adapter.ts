@@ -1,38 +1,30 @@
 /**
- * Database Adapter — abstraction layer for SQLite and PostgreSQL.
+ * Database Adapter — SQLite storage layer.
  *
- * SQLite is the default (zero config, embedded).
- * PostgreSQL is opt-in via ENGRAM_DATABASE=postgresql + DATABASE_URL.
- *
- * Both adapters expose the same drizzle ORM interface so NeuralBrain
- * and all routes work identically regardless of backend.
+ * SQLite is Engram's only supported primary backend (zero config, embedded).
+ * PostgreSQL is not supported as a primary backend — for multi-device sync,
+ * use ENGRAM_SYNC_URL instead (see docs/CLOUD-SYNC.md).
  */
 
-import { sql } from 'drizzle-orm';
 import path from 'path';
 import * as schema from './schema.js';
 
-export type DatabaseDialect = 'sqlite' | 'postgresql';
+/** Database dialect. SQLite is the only supported primary backend. */
+export type DatabaseDialect = 'sqlite';
 
 export interface AdapterConfig {
-  /** Database dialect. Default: 'sqlite' */
+  /** Database dialect. Only 'sqlite' is supported. Default: 'sqlite' */
   dialect?: DatabaseDialect;
   /** SQLite: path to .db file. Default: ./engram.db */
   sqlitePath?: string;
-  /** PostgreSQL: connection URL. Required when dialect is 'postgresql' */
-  postgresUrl?: string;
 }
 
 export interface DatabaseConnection {
-  /** The drizzle ORM instance (works the same for both dialects) */
+  /** The drizzle ORM instance */
   db: any;
-  /** Which dialect is active */
-  dialect: DatabaseDialect;
   /** Close the connection */
   close: () => void;
-  /** Whether pgvector is available (PostgreSQL only) */
-  hasPgVector: boolean;
-  /** Force WAL checkpoint so reads see external writes (SQLite only, no-op on PG) */
+  /** Force WAL checkpoint so reads see external writes */
   walCheckpoint: () => void;
   /**
    * A counter that changes whenever ANOTHER connection commits, and never for
@@ -42,8 +34,8 @@ export interface DatabaseConnection {
    * their own writes already updated it, so only a change here means somebody
    * else's data has arrived and the derived state is stale.
    *
-   * Returns null when the backend cannot report it (PostgreSQL), meaning
-   * "unknown" — callers must not read that as "nothing changed".
+   * Returns null when the backend cannot report it, meaning "unknown" —
+   * callers must not read that as "nothing changed".
    */
   dataVersion: () => number | null;
 }
@@ -54,21 +46,13 @@ let _connection: DatabaseConnection | null = null;
 /**
  * Resolve config from explicit options, env vars, and defaults.
  */
-function resolveConfig(config?: AdapterConfig): Required<AdapterConfig> {
-  const dialect: DatabaseDialect =
-    (config?.dialect ?? process.env['ENGRAM_DATABASE'] ?? 'sqlite') as DatabaseDialect;
-
+function resolveConfig(config?: AdapterConfig): { sqlitePath: string } {
   const sqlitePath =
     config?.sqlitePath ??
     process.env['ENGRAM_DB_PATH'] ??
     path.join(process.cwd(), 'engram.db');
 
-  const postgresUrl =
-    config?.postgresUrl ??
-    process.env['DATABASE_URL'] ??
-    '';
-
-  return { dialect, sqlitePath, postgresUrl };
+  return { sqlitePath };
 }
 
 /**
@@ -80,6 +64,16 @@ function resolveConfig(config?: AdapterConfig): Required<AdapterConfig> {
 export function getDatabase(configOrPath?: AdapterConfig | string): DatabaseConnection {
   if (_connection) return _connection;
 
+  if (process.env['ENGRAM_DATABASE'] === 'postgresql') {
+    throw new Error(
+      [
+        'PostgreSQL as a primary backend is not supported.',
+        'For multi-device sync, use ENGRAM_SYNC_URL instead.',
+        'See: https://github.com/AiondaDotCom/neuralCore/blob/master/docs/CLOUD-SYNC.md',
+      ].join('\n')
+    );
+  }
+
   const config: AdapterConfig | undefined =
     typeof configOrPath === 'string'
       ? { sqlitePath: configOrPath }
@@ -87,11 +81,7 @@ export function getDatabase(configOrPath?: AdapterConfig | string): DatabaseConn
 
   const resolved = resolveConfig(config);
 
-  if (resolved.dialect === 'postgresql') {
-    _connection = createPostgresConnection(resolved.postgresUrl);
-  } else {
-    _connection = createSqliteConnection(resolved.sqlitePath);
-  }
+  _connection = createSqliteConnection(resolved.sqlitePath);
 
   return _connection;
 }
@@ -105,17 +95,16 @@ export function closeDatabase(): void {
 }
 
 /**
- * Get the current dialect without creating a connection.
+ * Get the current dialect. SQLite is the only supported primary backend,
+ * so this always returns 'sqlite'. Kept for backwards compatibility.
  */
 export function getDialect(): DatabaseDialect {
-  if (_connection) return _connection.dialect;
-  return (process.env['ENGRAM_DATABASE'] ?? 'sqlite') as DatabaseDialect;
+  return 'sqlite';
 }
 
 // ─── SQLite Adapter ──────────────────────────────────────────────────────────
 
 function createSqliteConnection(dbPath: string): DatabaseConnection {
-  // Dynamic import to avoid loading better-sqlite3 when using PostgreSQL
   const Database = require('better-sqlite3');
   const { drizzle } = require('drizzle-orm/better-sqlite3');
 
@@ -141,11 +130,9 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
 
   return {
     db,
-    dialect: 'sqlite',
     close: () => {
       sqlite.close();
     },
-    hasPgVector: false,
     walCheckpoint: () => {
       sqlite.pragma('wal_checkpoint(PASSIVE)');
     },
@@ -424,127 +411,6 @@ function runSqliteMigrations(sqlite: any): void {
       )
     `);
   }
-}
-
-// ─── PostgreSQL Adapter ──────────────────────────────────────────────────────
-
-function createPostgresConnection(url: string): DatabaseConnection {
-  if (!url) {
-    throw new Error(
-      'ENGRAM_DATABASE=postgresql requires DATABASE_URL to be set.\n' +
-      'Example: DATABASE_URL=postgresql://user:pass@localhost:5432/engram'
-    );
-  }
-
-  let pg: any;
-  let drizzlePg: any;
-  try {
-    pg = require('pg');
-    drizzlePg = require('drizzle-orm/node-postgres');
-  } catch {
-    throw new Error(
-      'PostgreSQL support requires the "pg" package.\n' +
-      'Install it: pnpm add pg @types/pg'
-    );
-  }
-
-  // The PostgreSQL backend has no schema of its own: the Drizzle schema is
-  // sqliteTable-only and drizzle.config targets dialect 'sqlite', so no PG
-  // migrations are generated and the base tables are never created. Previously
-  // this function returned a healthy-looking connection that failed on the very
-  // first store with `relation "memories" does not exist` — refuse loudly
-  // instead of handing back something known-broken.
-  if (process.env['ENGRAM_PG_SCHEMA_READY'] !== 'true') {
-    throw new Error(
-      [
-        'PostgreSQL backend is not implemented yet.',
-        '',
-        'Engram ships no PostgreSQL migrations — the Drizzle schema is SQLite-only',
-        '(sqliteTable) and drizzle.config.ts targets dialect "sqlite", so the',
-        'memories / memory_connections / sessions / context_assemblies tables are',
-        'never created. Connecting would appear to succeed and then fail on the',
-        'first store with: relation "memories" does not exist.',
-        '',
-        'Use the default SQLite backend (unset ENGRAM_DATABASE), or — if you have',
-        'provisioned a compatible PostgreSQL schema yourself — set',
-        'ENGRAM_PG_SCHEMA_READY=true to proceed at your own risk.',
-      ].join('\n')
-    );
-  }
-
-  const pool = new pg.Pool({ connectionString: url });
-  const db = drizzlePg.drizzle(pool, { schema });
-
-  // Check for pgvector extension (async — we'll set it after first query)
-  let hasPgVector = false;
-  pool.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
-    .then((res: any) => {
-      hasPgVector = res.rows.length > 0;
-    })
-    .catch(() => {
-      // pgvector not available
-    });
-
-  // Run PostgreSQL migrations
-  runPostgresMigrations(pool);
-
-  const connection: DatabaseConnection = {
-    db,
-    dialect: 'postgresql',
-    close: () => {
-      pool.end();
-    },
-    get hasPgVector() { return hasPgVector; },
-    walCheckpoint: () => {},
-    // No cheap equivalent of PRAGMA data_version here. Reporting "unknown"
-    // rather than a fabricated constant keeps callers from concluding that
-    // nothing has changed.
-    dataVersion: () => null,
-  };
-
-  return connection;
-}
-
-function runPostgresMigrations(pool: any): void {
-  // Each statement runs on its own. Previously these were a single
-  // multi-statement query, so the trailing CREATE INDEX failing on a fresh
-  // database aborted the implicit transaction and rolled back everything before
-  // it — invisibly, because the whole thing was wrapped in `.catch(() => {})`.
-  const statements = [
-    `DO $$ BEGIN
-       ALTER TABLE memories ADD COLUMN IF NOT EXISTS namespace TEXT;
-     EXCEPTION WHEN undefined_table THEN NULL; END $$`,
-    `DO $$ BEGIN
-       ALTER TABLE memories ADD COLUMN IF NOT EXISTS embedding_model TEXT;
-     EXCEPTION WHEN undefined_table THEN NULL; END $$`,
-    `CREATE TABLE IF NOT EXISTS webhooks (
-       id TEXT PRIMARY KEY,
-       url TEXT NOT NULL,
-       secret TEXT,
-       events TEXT NOT NULL DEFAULT '[]',
-       active BOOLEAN NOT NULL DEFAULT true,
-       description TEXT,
-       metadata TEXT NOT NULL DEFAULT '{}',
-       created_at TEXT NOT NULL DEFAULT (NOW()::TEXT),
-       last_triggered_at TEXT,
-       fail_count INTEGER NOT NULL DEFAULT 0
-     )`,
-    `CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active)`,
-    `CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)`,
-  ];
-
-  for (const sql of statements) {
-    pool.query(sql).catch((err: unknown) => {
-      // Surface the failure instead of discarding it.
-      const label = sql.trim().split('\n')[0]?.slice(0, 60);
-      console.error(`[engram] PostgreSQL migration failed (${label}...):`, err);
-    });
-  }
-
-  // Try to enable pgvector
-  pool.query('CREATE EXTENSION IF NOT EXISTS vector').catch(() => {
-    // pgvector not installed — that's okay, we'll use in-memory search
-  });
 }
 
 export { schema };

@@ -18,6 +18,21 @@ jobs:
       matrix:
         node-version: ['22.x']
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: engram_test
+          POSTGRES_PASSWORD: engram_test_pass
+          POSTGRES_DB: engram_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v5
 
@@ -58,6 +73,8 @@ jobs:
         run: pnpm turbo run test
         env:
           ENGRAM_DB_PATH: /tmp/engram-test.db
+          TEST_PG_URL: 'postgres://engram_test:engram_test_pass@localhost:5432/engram_test?sslmode=disable'
+          ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true'
 
       # The Desktop Extension manifest has its own schema — an unsupported key
       # only surfaces at pack time, which is during a release otherwise.

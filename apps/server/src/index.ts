@@ -1,8 +1,9 @@
 import Fastify from 'fastify';
-import { NeuralBrain } from '@engram-ai-memory/core';
+import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Namespace } from 'socket.io';
+import type { Server as HttpServer } from 'http';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -29,6 +30,7 @@ import { tagRoutes } from './routes/tags.js';
 import { pluginRoutes } from './routes/plugins.js';
 import { reflectionRoutes } from './routes/reflection.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { syncRoutes } from './routes/sync.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '4901', 10);
 const HOST = process.env['HOST'] ?? '127.0.0.1';
@@ -85,6 +87,16 @@ if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
   throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
 }
 
+/**
+ * Cloud sync (Phase 3). Unset ENGRAM_SYNC_URL means sync stays fully off —
+ * no SyncEngine is constructed and every write path pays zero overhead.
+ */
+const SYNC_URL = process.env['ENGRAM_SYNC_URL'];
+const SYNC_MODE = (process.env['ENGRAM_SYNC_MODE'] || 'auto') as 'auto' | 'manual' | 'off';
+const SYNC_INTERVAL = process.env['ENGRAM_SYNC_INTERVAL']
+  ? parseInt(process.env['ENGRAM_SYNC_INTERVAL'], 10)
+  : undefined;
+
 // Shared brain instance (initialized once)
 export const brain = new NeuralBrain({
   dbPath: process.env['ENGRAM_DB_PATH'],
@@ -105,6 +117,69 @@ export let io: SocketIOServer;
  * go through this — emitting on the default namespace silently reaches nobody.
  */
 export let realtime: Namespace | undefined;
+
+/**
+ * Shared SyncEngine instance. Stays null unless ENGRAM_SYNC_URL is configured
+ * — see start(). Exported (not a private module symbol) so routes/sync.ts can
+ * read status/trigger a sync the same way memory.ts reads `brain`/`realtime`.
+ */
+export let syncEngine: SyncEngine | null = null;
+
+/** Route handlers call this after every write so 'auto' mode can debounce-sync it. */
+export function notifySyncWrite(): void {
+  syncEngine?.notifyWrite();
+}
+
+/**
+ * Attach Socket.io to an already-listening HTTP server and wire up the
+ * '/neural' namespace: auth middleware plus connect/disconnect logging.
+ *
+ * Split out from start() (rather than inlined there) so tests can attach
+ * Socket.io to a Fastify instance they control — e.g. one listening on an
+ * OS-assigned port — without pulling in the rest of start()'s side effects
+ * (sync engine, decay timer, process signal handlers). Sets the module-level
+ * `io`/`realtime` exports as a side effect, same as start() did inline.
+ */
+export function setupRealtime(server: HttpServer): Namespace {
+  io = new SocketIOServer(server, {
+    // Same allowlist as the REST API — '*' let any page open a socket and read
+    // every broadcast memory event.
+    cors: {
+      origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
+      credentials: false,
+    },
+  });
+
+  // Routes must emit on the SAME namespace the dashboard connects to.
+  // Namespaces are isolated, so a top-level io.emit() call would broadcast
+  // on '/' and never reach a client connected on '/neural'.
+  realtime = io.of('/neural');
+  const neuralNs = realtime;
+
+  // ─── Socket.io auth (Phase 4, task 4.4) ─────────────────────────────────
+  // When ENGRAM_API_KEY is set, require the same key for WebSocket connections.
+  // The client passes it as `auth.token` in the socket handshake:
+  //   io('/neural', { auth: { token: 'my-api-key' } })
+  if (API_KEY) {
+    neuralNs.use((socket, next) => {
+      const token = socket.handshake.auth?.['token'] as string | undefined;
+      if (!token || !secretsMatch(token, API_KEY)) {
+        next(new Error('Unauthorized: invalid or missing API key'));
+        return;
+      }
+      next();
+    });
+  }
+
+  neuralNs.on('connection', (socket) => {
+    console.info(`WebSocket connected: ${socket.id}`);
+    socket.on('disconnect', () => {
+      console.info(`WebSocket disconnected: ${socket.id}`);
+    });
+  });
+
+  return neuralNs;
+}
 
 /**
  * Build the fully-configured Fastify instance WITHOUT listening.
@@ -159,6 +234,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
         { name: 'plugins', description: 'Plugin registration and management' },
         { name: 'reflection', description: 'Memory reflection and LLM-powered insights' },
         { name: 'analytics', description: 'Aggregated memory analytics and management' },
+        { name: 'sync', description: 'Cloud sync status and manual triggering' },
         { name: 'health', description: 'Health and status' },
       ],
     },
@@ -179,6 +255,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   await app.register(pluginRoutes, { prefix: '/api' });
   await app.register(reflectionRoutes, { prefix: '/api' });
   await app.register(analyticsRoutes, { prefix: '/api' });
+  await app.register(syncRoutes, { prefix: '/api' });
 
   // ─── Serve 3D dashboard (if built) ──────────────────────────────────────
   const dashboardPath = path.resolve(__dirname, '..', '..', '..', 'apps', 'web', 'dist');
@@ -218,6 +295,25 @@ async function start() {
   await brain.initialize();
   console.info('Brain initialized.');
 
+  // ─── Cloud sync (Phase 3) ────────────────────────────────────────────────
+  if (SYNC_URL) {
+    syncEngine = new SyncEngine({
+      syncUrl: SYNC_URL,
+      mode: SYNC_MODE,
+      intervalMs: SYNC_INTERVAL,
+      // Wrapped so the callback's return type is exactly Promise<void> — the
+      // count syncIndexFromStore() resolves with isn't needed here.
+      onIndexRebuildNeeded: async () => {
+        await brain.syncIndexFromStore();
+      },
+      onSyncError: (err) => {
+        console.error(`[engram] Sync error: ${err.message}`);
+      },
+    });
+    syncEngine.start();
+    console.info(`[engram] Cloud sync enabled: ${redactSyncUrl(SYNC_URL)}`);
+  }
+
   const app = await buildApp();
 
   // Start Fastify — it creates and owns the HTTP server
@@ -227,26 +323,7 @@ async function start() {
   console.info(`  Swagger:   http://${HOST}:${PORT}/docs`);
 
   // Attach Socket.io to Fastify's underlying HTTP server
-  io = new SocketIOServer(app.server, {
-    // Same allowlist as the REST API — '*' let any page open a socket and read
-    // every broadcast memory event.
-    cors: {
-      origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
-      credentials: false,
-    },
-  });
-
-  // Routes must emit on the SAME namespace the dashboard connects to.
-  // Namespaces are isolated, so the previous top-level io.emit() calls were
-  // broadcast on '/' and never reached the client on '/neural'.
-  realtime = io.of('/neural');
-  const neuralNs = realtime;
-  neuralNs.on('connection', (socket) => {
-    console.info(`WebSocket connected: ${socket.id}`);
-    socket.on('disconnect', () => {
-      console.info(`WebSocket disconnected: ${socket.id}`);
-    });
-  });
+  const neuralNs = setupRealtime(app.server);
   console.info(`WebSocket: ws://${HOST}:${PORT}/neural`);
 
   // ─── Auto-decay timer ────────────────────────────────────────────────────
@@ -278,6 +355,10 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.info(`Received ${signal}, shutting down...`);
   try {
+    if (syncEngine) {
+      await syncEngine.dispose();
+      syncEngine = null;
+    }
     await brain.shutdown();
   } catch (err: unknown) {
     console.error('[engram] shutdown failed:', err);
