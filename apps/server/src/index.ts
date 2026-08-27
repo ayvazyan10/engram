@@ -3,6 +3,7 @@ import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Namespace } from 'socket.io';
+import type { Server as HttpServer } from 'http';
 import cors from '@fastify/cors';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -127,6 +128,57 @@ export let syncEngine: SyncEngine | null = null;
 /** Route handlers call this after every write so 'auto' mode can debounce-sync it. */
 export function notifySyncWrite(): void {
   syncEngine?.notifyWrite();
+}
+
+/**
+ * Attach Socket.io to an already-listening HTTP server and wire up the
+ * '/neural' namespace: auth middleware plus connect/disconnect logging.
+ *
+ * Split out from start() (rather than inlined there) so tests can attach
+ * Socket.io to a Fastify instance they control — e.g. one listening on an
+ * OS-assigned port — without pulling in the rest of start()'s side effects
+ * (sync engine, decay timer, process signal handlers). Sets the module-level
+ * `io`/`realtime` exports as a side effect, same as start() did inline.
+ */
+export function setupRealtime(server: HttpServer): Namespace {
+  io = new SocketIOServer(server, {
+    // Same allowlist as the REST API — '*' let any page open a socket and read
+    // every broadcast memory event.
+    cors: {
+      origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
+      credentials: false,
+    },
+  });
+
+  // Routes must emit on the SAME namespace the dashboard connects to.
+  // Namespaces are isolated, so a top-level io.emit() call would broadcast
+  // on '/' and never reach a client connected on '/neural'.
+  realtime = io.of('/neural');
+  const neuralNs = realtime;
+
+  // ─── Socket.io auth (Phase 4, task 4.4) ─────────────────────────────────
+  // When ENGRAM_API_KEY is set, require the same key for WebSocket connections.
+  // The client passes it as `auth.token` in the socket handshake:
+  //   io('/neural', { auth: { token: 'my-api-key' } })
+  if (API_KEY) {
+    neuralNs.use((socket, next) => {
+      const token = socket.handshake.auth?.['token'] as string | undefined;
+      if (!token || !secretsMatch(token, API_KEY)) {
+        next(new Error('Unauthorized: invalid or missing API key'));
+        return;
+      }
+      next();
+    });
+  }
+
+  neuralNs.on('connection', (socket) => {
+    console.info(`WebSocket connected: ${socket.id}`);
+    socket.on('disconnect', () => {
+      console.info(`WebSocket disconnected: ${socket.id}`);
+    });
+  });
+
+  return neuralNs;
 }
 
 /**
@@ -271,26 +323,7 @@ async function start() {
   console.info(`  Swagger:   http://${HOST}:${PORT}/docs`);
 
   // Attach Socket.io to Fastify's underlying HTTP server
-  io = new SocketIOServer(app.server, {
-    // Same allowlist as the REST API — '*' let any page open a socket and read
-    // every broadcast memory event.
-    cors: {
-      origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
-      credentials: false,
-    },
-  });
-
-  // Routes must emit on the SAME namespace the dashboard connects to.
-  // Namespaces are isolated, so the previous top-level io.emit() calls were
-  // broadcast on '/' and never reached the client on '/neural'.
-  realtime = io.of('/neural');
-  const neuralNs = realtime;
-  neuralNs.on('connection', (socket) => {
-    console.info(`WebSocket connected: ${socket.id}`);
-    socket.on('disconnect', () => {
-      console.info(`WebSocket disconnected: ${socket.id}`);
-    });
-  });
+  const neuralNs = setupRealtime(app.server);
   console.info(`WebSocket: ws://${HOST}:${PORT}/neural`);
 
   // ─── Auto-decay timer ────────────────────────────────────────────────────
