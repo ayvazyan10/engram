@@ -44,6 +44,10 @@ interface EngramConfig {
   embeddingModel: string;
   indexPath: string;
   repoPath: string;
+  syncUrl?: string;
+  syncInterval?: number;
+  syncMode?: 'auto' | 'manual' | 'off';
+  deviceName?: string;
 }
 
 const DEFAULT_CONFIG: EngramConfig = {
@@ -76,6 +80,9 @@ function loadConfig(): EngramConfig {
 function saveConfig(config: EngramConfig): void {
   fs.mkdirSync(ENGRAM_HOME, { recursive: true });
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+  // Cloud sync stores a Postgres connection string (with password) in this
+  // file — it must never be world- or group-readable.
+  fs.chmodSync(CONFIG_PATH, 0o600);
 }
 
 function getApiBase(): string {
@@ -394,6 +401,10 @@ program
       ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
       ENGRAM_NAMESPACE_MODE: config.namespaceMode,
       ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
+      ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
+      ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
+      ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
+      ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
     };
 
     if (opts.foreground) {
@@ -624,6 +635,131 @@ configCmd.action(() => {
   console.log(JSON.stringify(config, null, 2));
 });
 
+// ─── cloud ───────────────────────────────────────────────────────────────────
+
+const cloudCmd = program.command('cloud').description('Multi-device cloud sync via PostgreSQL');
+
+cloudCmd
+  .command('connect <url>')
+  .description('Connect to a PostgreSQL database for multi-device sync')
+  .action(async (url: string) => {
+    const { validateSyncUrl, redactSyncUrl } = await import('@engram-ai-memory/core');
+    try {
+      // Allow unencrypted for local dev if user explicitly passes sslmode=disable
+      if (url.includes('sslmode=disable')) {
+        process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+      }
+      validateSyncUrl(url);
+    } catch (err) {
+      console.error(`❌ ${(err as Error).message}`);
+      process.exit(1);
+    }
+    const config = loadConfig();
+    config.syncUrl = url;
+    saveConfig(config);
+    console.log(`✅ Cloud sync configured: ${redactSyncUrl(url)}`);
+    console.log('   Sync will start automatically on next engram launch.');
+  });
+
+cloudCmd
+  .command('disconnect')
+  .description('Disconnect from cloud sync (local data is preserved)')
+  .action(() => {
+    const config = loadConfig();
+    delete config.syncUrl;
+    delete config.syncInterval;
+    delete config.syncMode;
+    saveConfig(config);
+    console.log('✅ Cloud sync disconnected. Local database is unchanged.');
+  });
+
+cloudCmd
+  .command('status')
+  .description('Show cloud sync status')
+  .action(async () => {
+    const config = loadConfig();
+    if (!config.syncUrl) {
+      console.log('Cloud sync is not configured. Run: engram cloud connect <postgres-url>');
+      return;
+    }
+    const { redactSyncUrl, SyncEngine } = await import('@engram-ai-memory/core');
+
+    process.env['ENGRAM_DB_PATH'] = config.dbPath || undefined;
+    if (config.syncUrl.includes('sslmode=disable')) {
+      process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+    }
+
+    const engine = new SyncEngine({ syncUrl: config.syncUrl, mode: 'manual' });
+    const status = engine.status();
+    await engine.dispose();
+
+    const deviceName = config.deviceName || os.hostname();
+    console.log(`Device:       ${deviceName} (${status.deviceId.slice(0, 8)}…)`);
+    console.log(`Sync URL:     ${redactSyncUrl(config.syncUrl)}`);
+    console.log(`State:        ${status.state}`);
+    console.log(`Last sync:    ${status.lastSyncAt ?? 'never'}`);
+    console.log(`Pending push: ${status.pendingPushCount}`);
+    console.log(`Pull cursor:  ${status.pullCursor ?? 'none'}`);
+    console.log(`Model:        ${status.embeddingModel ?? 'unknown'}`);
+    if (status.lastError) {
+      console.log(`Last error:   ${status.lastError}`);
+    }
+  });
+
+cloudCmd
+  .command('sync')
+  .description('Run a one-shot sync cycle (push + pull)')
+  .action(async () => {
+    const config = loadConfig();
+    if (!config.syncUrl) {
+      console.error('Cloud sync is not configured. Run: engram cloud connect <postgres-url>');
+      process.exit(1);
+    }
+
+    process.env['ENGRAM_DB_PATH'] = config.dbPath || undefined;
+    if (config.syncUrl.includes('sslmode=disable')) {
+      process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+    }
+
+    const { SyncEngine } = await import('@engram-ai-memory/core');
+    const engine = new SyncEngine({ syncUrl: config.syncUrl, mode: 'manual' });
+    try {
+      console.log('Syncing…');
+      const result = await engine.sync();
+      console.log(`✅ Sync complete in ${result.durationMs}ms`);
+      console.log(`   Pushed: ${result.pushed.memories} memories, ${result.pushed.connections} connections, ${result.pushed.sessions} sessions`);
+      console.log(`   Pulled: ${result.pulled.memories} memories, ${result.pulled.connections} connections, ${result.pulled.sessions} sessions`);
+      if (result.conflicts > 0) {
+        console.log(`   Conflicts resolved: ${result.conflicts}`);
+      }
+    } catch (err) {
+      console.error(`❌ Sync failed: ${(err as Error).message}`);
+      process.exit(1);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
+cloudCmd
+  .command('devices')
+  .description('Show known devices (from local sync state)')
+  .action(async () => {
+    const config = loadConfig();
+    if (!config.syncUrl) {
+      console.log('Cloud sync is not configured. Run: engram cloud connect <postgres-url>');
+      return;
+    }
+
+    const { getDeviceId } = await import('@engram-ai-memory/core');
+    process.env['ENGRAM_DB_PATH'] = config.dbPath || undefined;
+
+    const deviceId = getDeviceId();
+    const deviceName = config.deviceName || os.hostname();
+    console.log(`This device: ${deviceName} (${deviceId})`);
+    console.log('\nNote: Full device listing requires querying the shared database.');
+    console.log('Use "engram cloud status" to see sync state for this device.');
+  });
+
 // ─── init ───────────────────────────────────────────────────────────────────
 
 const MEMORY_INSTRUCTIONS = `# Memory (Engram)
@@ -759,6 +895,10 @@ program
           ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
           ENGRAM_NAMESPACE_MODE: config.namespaceMode,
           ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
+          ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
+          ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
+          ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
+          ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
         };
         fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
         const logFd = fs.openSync(LOG_PATH, 'a');

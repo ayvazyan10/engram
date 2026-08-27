@@ -40,6 +40,21 @@ startCommand:
           Xenova (ONNX) embedding model to use for semantic similarity.
           Defaults to Xenova/all-MiniLM-L6-v2 (384-dim, runs 100% locally).
         default: ""
+      syncUrl:
+        type: string
+        title: Cloud Sync URL
+        description: >
+          PostgreSQL connection string for multi-device sync
+          (e.g. postgres://user:pass@host/db?sslmode=require).
+          Leave empty to keep all data local only.
+        default: ""
+      syncMode:
+        type: string
+        title: Sync Mode
+        description: >
+          Sync behavior: auto (background sync), manual, or off.
+        enum: [auto, manual, off]
+        default: auto
   commandFunction: |-
     (config) => ({
       command: "npx",
@@ -49,5 +64,7 @@ startCommand:
         ENGRAM_NAMESPACE_MODE: config.namespaceMode || "none",
         ...(config.namespace    ? { ENGRAM_NAMESPACE:        config.namespace }    : {}),
         ...(config.embeddingModel ? { ENGRAM_EMBEDDING_MODEL: config.embeddingModel } : {}),
+        ...(config.syncUrl      ? { ENGRAM_SYNC_URL:         config.syncUrl }      : {}),
+        ...(config.syncMode     ? { ENGRAM_SYNC_MODE:        config.syncMode }     : {}),
       }
     })

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, getDeviceId, schema, upsertConnection } from '@engram-ai-memory/core';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
-import { brain } from '../index.js';
+import { brain, notifySyncWrite } from '../index.js';
 
 export const graphRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/graph/:id — get connections for a memory node
@@ -173,6 +173,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
       // preserves the existing (unhandled -> 500) behavior rather than
       // inventing a new error convention unilaterally.
       upsertConnection(db, connection);
+      notifySyncWrite();
 
       // Re-read the persisted row rather than trusting the locally built
       // `connection` object: when upsertConnection resurrects a tombstoned

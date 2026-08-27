@@ -27,6 +27,8 @@
         "ENGRAM_DB_PATH": "${user_config.db_path}",
         "ENGRAM_NAMESPACE_MODE": "${user_config.namespace_mode}",
         "ENGRAM_NAMESPACE": "${user_config.namespace}",
+        "ENGRAM_SYNC_URL": "${user_config.sync_url}",
+        "ENGRAM_SYNC_MODE": "${user_config.sync_mode}",
         "ENGRAM_PACKAGE_VERSION": "0.4.1"
       }
     }
@@ -76,6 +78,21 @@
       "description": "Namespace behavior. None disables namespaces; filter enables optional scoping; isolated enforces the configured namespace.",
       "required": false,
       "default": "none"
+    },
+    "sync_url": {
+      "type": "string",
+      "title": "Cloud Sync URL",
+      "description": "PostgreSQL connection string for multi-device sync (e.g. postgres://user:pass@host/db?sslmode=require). Leave empty to keep all data local only.",
+      "required": false,
+      "default": "",
+      "sensitive": true
+    },
+    "sync_mode": {
+      "type": "string",
+      "title": "Sync Mode",
+      "description": "Sync behavior: auto (background sync on interval + debounce after writes), manual (explicit only), off (disabled).",
+      "required": false,
+      "default": "auto"
     }
   },
   "compatibility": {

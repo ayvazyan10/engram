@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain } from '../index.js';
+import { brain, notifySyncWrite } from '../index.js';
 
 export const tagRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/tags — tag cloud with counts
@@ -70,6 +70,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req) => {
       const tags = await brain.addTag(req.params.id, req.body.tag);
+      notifySyncWrite();
       return { id: req.params.id, tags };
     },
   });
@@ -84,6 +85,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req, reply) => {
       const tags = await brain.removeTag(req.params.id, req.params.tag);
+      notifySyncWrite();
       return { id: req.params.id, tags };
     },
   });

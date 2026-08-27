@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
 import { eq, isNull, desc, and, or } from 'drizzle-orm';
-import { brain, realtime } from '../index.js';
+import { brain, realtime, notifySyncWrite } from '../index.js';
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/memory — store a memory
@@ -41,6 +41,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
       }
       const result = await brain.store(req.body);
+      notifySyncWrite();
       // Broadcast the full record: the dashboard appends this straight into its
       // store, and a {id,type} stub left content undefined and crashed rendering.
       realtime?.emit('memory:stored', result.memory);
@@ -123,6 +124,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
             })
           )
         );
+        notifySyncWrite();
         reply.code(201);
         return {
           count: results.length,
@@ -199,6 +201,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     schema: { tags: ['memory'], summary: 'Archive (soft-delete) a memory' },
     handler: async (req, reply) => {
       await brain.forget(req.params.id);
+      notifySyncWrite();
       reply.code(204);
     },
   });
@@ -239,6 +242,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req, reply) => {
       const id = await brain.createSession(req.body.source, req.body.context);
+      notifySyncWrite();
       reply.code(201);
       return { id };
     },

@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { brain, realtime } from '../index.js';
+import { brain, realtime, notifySyncWrite } from '../index.js';
 
 export const contradictionRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/contradictions — list all unresolved contradictions
@@ -93,6 +93,7 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
       );
 
       if (result.resolved) {
+        notifySyncWrite();
         realtime?.emit('memory:contradiction_resolved', {
           sourceId: req.body.sourceId,
           targetId: req.body.targetId,

@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { NeuralBrain } from '@engram-ai-memory/core';
+import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Namespace } from 'socket.io';
@@ -29,6 +29,7 @@ import { tagRoutes } from './routes/tags.js';
 import { pluginRoutes } from './routes/plugins.js';
 import { reflectionRoutes } from './routes/reflection.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { syncRoutes } from './routes/sync.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '4901', 10);
 const HOST = process.env['HOST'] ?? '127.0.0.1';
@@ -85,6 +86,16 @@ if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
   throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
 }
 
+/**
+ * Cloud sync (Phase 3). Unset ENGRAM_SYNC_URL means sync stays fully off —
+ * no SyncEngine is constructed and every write path pays zero overhead.
+ */
+const SYNC_URL = process.env['ENGRAM_SYNC_URL'];
+const SYNC_MODE = (process.env['ENGRAM_SYNC_MODE'] || 'auto') as 'auto' | 'manual' | 'off';
+const SYNC_INTERVAL = process.env['ENGRAM_SYNC_INTERVAL']
+  ? parseInt(process.env['ENGRAM_SYNC_INTERVAL'], 10)
+  : undefined;
+
 // Shared brain instance (initialized once)
 export const brain = new NeuralBrain({
   dbPath: process.env['ENGRAM_DB_PATH'],
@@ -105,6 +116,18 @@ export let io: SocketIOServer;
  * go through this — emitting on the default namespace silently reaches nobody.
  */
 export let realtime: Namespace | undefined;
+
+/**
+ * Shared SyncEngine instance. Stays null unless ENGRAM_SYNC_URL is configured
+ * — see start(). Exported (not a private module symbol) so routes/sync.ts can
+ * read status/trigger a sync the same way memory.ts reads `brain`/`realtime`.
+ */
+export let syncEngine: SyncEngine | null = null;
+
+/** Route handlers call this after every write so 'auto' mode can debounce-sync it. */
+export function notifySyncWrite(): void {
+  syncEngine?.notifyWrite();
+}
 
 /**
  * Build the fully-configured Fastify instance WITHOUT listening.
@@ -159,6 +182,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
         { name: 'plugins', description: 'Plugin registration and management' },
         { name: 'reflection', description: 'Memory reflection and LLM-powered insights' },
         { name: 'analytics', description: 'Aggregated memory analytics and management' },
+        { name: 'sync', description: 'Cloud sync status and manual triggering' },
         { name: 'health', description: 'Health and status' },
       ],
     },
@@ -179,6 +203,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   await app.register(pluginRoutes, { prefix: '/api' });
   await app.register(reflectionRoutes, { prefix: '/api' });
   await app.register(analyticsRoutes, { prefix: '/api' });
+  await app.register(syncRoutes, { prefix: '/api' });
 
   // ─── Serve 3D dashboard (if built) ──────────────────────────────────────
   const dashboardPath = path.resolve(__dirname, '..', '..', '..', 'apps', 'web', 'dist');
@@ -217,6 +242,25 @@ async function start() {
   console.info('Initializing Engram brain...');
   await brain.initialize();
   console.info('Brain initialized.');
+
+  // ─── Cloud sync (Phase 3) ────────────────────────────────────────────────
+  if (SYNC_URL) {
+    syncEngine = new SyncEngine({
+      syncUrl: SYNC_URL,
+      mode: SYNC_MODE,
+      intervalMs: SYNC_INTERVAL,
+      // Wrapped so the callback's return type is exactly Promise<void> — the
+      // count syncIndexFromStore() resolves with isn't needed here.
+      onIndexRebuildNeeded: async () => {
+        await brain.syncIndexFromStore();
+      },
+      onSyncError: (err) => {
+        console.error(`[engram] Sync error: ${err.message}`);
+      },
+    });
+    syncEngine.start();
+    console.info(`[engram] Cloud sync enabled: ${redactSyncUrl(SYNC_URL)}`);
+  }
 
   const app = await buildApp();
 
@@ -278,6 +322,10 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.info(`Received ${signal}, shutting down...`);
   try {
+    if (syncEngine) {
+      await syncEngine.dispose();
+      syncEngine = null;
+    }
     await brain.shutdown();
   } catch (err: unknown) {
     console.error('[engram] shutdown failed:', err);
