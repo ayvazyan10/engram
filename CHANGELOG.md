@@ -9,6 +9,38 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-device cloud sync** — Engram now replicates memories, sessions, and connections across devices through a shared PostgreSQL instance. SQLite remains the local-first primary backend; Postgres is purely a sync target. Enable with `ENGRAM_SYNC_URL`. See [docs/CLOUD-SYNC.md](docs/CLOUD-SYNC.md).
+
+- **`@engram-ai-memory/core`** — `SyncEngine` orchestrates push/pull replication with configurable modes (`auto`, `manual`, `off`), exponential backoff on errors, embedding model compatibility checks, and a concurrency guard. `PgSyncClient` handles batched upserts (500 rows) with Last-Write-Wins conflict resolution and MAX-merge for counters. Cursor-based pull with a 5-minute overlap window catches late-committed transactions.
+
+- **`@engram-ai-memory/core`** — PostgreSQL schema (`packages/core/src/db/pg/`) with Drizzle ORM: `memories`, `sessions`, `memory_connections` tables plus a `sync_metadata` table for device registration and embedding model tracking. `server_updated_at` column with a `BEFORE UPDATE` trigger provides a reliable pull cursor independent of device clocks.
+
+- **`@engram-ai-memory/cli`** — `engram cloud` command group: `connect`, `disconnect`, `status`, `sync`, `devices`. Config file permissions set to `0600` to protect connection strings.
+
+- **`@engram-ai-memory/mcp`** — SyncEngine integration: writes from `store_memory`, `add_knowledge`, `forget`, `tag_memory`, `decay_sweep`, `resolve_contradiction`, `store_reflection`, and `re_embed` all notify the sync engine for debounced replication.
+
+- **`@engram-ai-memory/server`** — SyncEngine lifecycle in the REST server. New routes: `GET /api/sync/status`, `POST /api/sync/trigger`. All 15 mutation routes across memory, tags, analytics, graph, contradictions, health, and embeddings notify the sync engine.
+
+- **`@engram-ai-memory/server`** — Socket.io `/neural` namespace now requires API key authentication (timing-safe comparison) when `ENGRAM_API_KEY` is set. Backward compatible — unauthenticated connections still work when no key is configured.
+
+- **Smithery / MCPB** — `syncUrl` and `syncMode` added to configuration schemas for both distribution channels.
+
+### Changed
+
+- **`@engram-ai-memory/server`** — Socket.io setup extracted into `setupRealtime()` for testability — tests can attach Socket.io to a Fastify-controlled server without side effects from `start()`.
+
+- **`docs/CONFIGURATION.md`** — PostgreSQL section rewritten: no longer describes Postgres as a primary storage backend (it was never functional as one). Now points to Cloud Sync documentation.
+
+### Security
+
+- **Password redaction** — `redactSyncUrl()` masks credentials in all connection string surfaces: error messages, sync status responses, and log output. Tested with 10 unit/integration tests.
+
+- **TLS enforcement** — `validateSyncUrl()` rejects non-TLS PostgreSQL connections unless `ENGRAM_SYNC_ALLOW_UNENCRYPTED=true` is explicitly set.
+
+- **Socket.io auth** — `/neural` WebSocket namespace validates `auth.token` against `ENGRAM_API_KEY` using constant-time comparison. Tested with 4 integration tests.
+
 ## [0.4.1] — 2026-08-13
 
 ### Fixed

@@ -350,6 +350,10 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
 | `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
+| `ENGRAM_SYNC_URL` | *(none)* | PostgreSQL connection string for multi-device sync. Unset = sync disabled. See [Cloud Sync](docs/CLOUD-SYNC.md). |
+| `ENGRAM_SYNC_MODE` | `auto` | Sync behavior: `auto` (background sync on interval + debounce), `manual` (explicit only), `off`. |
+| `ENGRAM_SYNC_INTERVAL` | `30000` | Background sync interval in milliseconds (auto mode only). |
+| `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS PostgreSQL connections. For local development only — production should always use `sslmode=require`. |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 
@@ -470,7 +474,8 @@ Tool: `store_memory` + `resolve_contradiction` · Engram flags the conflict with
 
 Engram is local-first and privacy-preserving by design:
 
-- **No data leaves your machine.** All memories are stored in a local SQLite database (`~/.engram/engram.db` by default).
+- **Local by default.** All memories are stored in a local SQLite database (`~/.engram/engram.db`). No data leaves your machine unless you explicitly enable cloud sync.
+- **Cloud sync is opt-in.** Setting `ENGRAM_SYNC_URL` replicates memories to a PostgreSQL database you own and control — Engram never phones home and never touches any third-party service on its own. See [Cloud Sync](docs/CLOUD-SYNC.md).
 - **All embeddings run on-device.** The `all-MiniLM-L6-v2` model runs locally via `@xenova/transformers` — no external embedding API calls.
 - **No telemetry.** Engram does not collect usage statistics, crash reports, or any analytics.
 - **Webhooks are opt-in.** If you configure webhooks, memory events are sent to your chosen URL — fully under your control.

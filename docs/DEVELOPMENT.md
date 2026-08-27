@@ -285,19 +285,18 @@ pnpm turbo run lint
 
 ## Docker
 
-`docker-compose.yml` provides a production-like environment with PostgreSQL + pgvector:
+`docker-compose.yml` provides a containerised environment:
 
 ```bash
 # Start all services
 docker-compose up -d
 
 # Services:
-#   postgres:5432   — PostgreSQL 16 + pgvector
-#   api:4901        — Engram REST API
+#   api:4901        — Engram REST API (SQLite inside the container)
 #   web:4902        — Dashboard (standalone container, optional)
 
 # Logs
 docker-compose logs -f api
 ```
 
-Environment variables for Docker are configured in `docker-compose.yml`. Change `ENGRAM_DB_PATH` to use the PostgreSQL connection string for production.
+Environment variables for Docker are configured in `docker-compose.yml`. For multi-device sync, set `ENGRAM_SYNC_URL` to a PostgreSQL connection string — see [Cloud Sync](CLOUD-SYNC.md).

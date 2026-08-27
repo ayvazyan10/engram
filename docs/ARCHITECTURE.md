@@ -188,7 +188,7 @@ Ebbinghaus decay: `R = e^(-t/S)` where `t` = days since last access, `S` = 7-day
 
 ## Database schema
 
-Four tables managed by **Drizzle ORM** with SQLite in development, PostgreSQL + pgvector in production.
+Four tables managed by **Drizzle ORM** with SQLite as the primary backend. PostgreSQL is used only as a sync replication target for multi-device setups — see [Cloud Sync](CLOUD-SYNC.md).
 
 ### `memories`
 
