@@ -406,6 +406,7 @@ program
       ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
       ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
       ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
+      ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
     };
 
     if (opts.foreground) {
@@ -761,6 +762,53 @@ cloudCmd
     console.log('Use "engram cloud status" to see sync state for this device.');
   });
 
+cloudCmd
+  .command('encrypt <passphrase>')
+  .description('Initialize end-to-end encryption for cloud sync')
+  .action(async (passphrase: string) => {
+    const config = loadConfig();
+    if (!config.syncUrl) {
+      console.error('Cloud sync is not configured. Run: engram cloud connect <postgres-url>');
+      process.exit(1);
+    }
+
+    if (config.syncUrl.includes('sslmode=disable')) {
+      process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+    }
+
+    const { createPgSyncConnection, PgSyncClient, EncryptionManager, EncryptionError } =
+      await import('@engram-ai-memory/core');
+
+    let conn: Awaited<ReturnType<typeof createPgSyncConnection>> | null = null;
+    try {
+      conn = await createPgSyncConnection(config.syncUrl);
+      const pgClient = new PgSyncClient({ db: conn.db, pool: conn.pool });
+      const manager = new EncryptionManager(pgClient);
+      await manager.initialize(passphrase);
+
+      console.log('🔐 Encryption initialized successfully.');
+      console.log('');
+      console.log('To enable encryption on every sync, set the environment variable:');
+      console.log(`  export ENGRAM_SYNC_ENCRYPTION_KEY="${passphrase}"`);
+      console.log('');
+      console.log('Or pass it when starting the server:');
+      console.log(`  ENGRAM_SYNC_ENCRYPTION_KEY="${passphrase}" engram start`);
+      console.log('');
+      console.log('⚠️  Use the same passphrase on all devices.');
+      console.log('⚠️  If you lose the passphrase, encrypted data cannot be recovered.');
+    } catch (err) {
+      if (err instanceof EncryptionError && err.code === 'WRONG_PASSPHRASE') {
+        console.error('❌ This database already has encryption configured with a different passphrase.');
+        console.error('   Use the same passphrase that was used to initialize encryption on the first device.');
+      } else {
+        console.error(`❌ Failed to initialize encryption: ${(err as Error).message}`);
+      }
+      process.exit(1);
+    } finally {
+      if (conn) await conn.close().catch(() => {});
+    }
+  });
+
 // ─── init ───────────────────────────────────────────────────────────────────
 
 const MEMORY_INSTRUCTIONS = `# Memory (Engram)
@@ -901,6 +949,7 @@ program
           ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
           ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
           ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
+          ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
         };
         fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
         const logFd = fs.openSync(LOG_PATH, 'a');

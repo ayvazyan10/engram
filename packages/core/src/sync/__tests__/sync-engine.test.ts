@@ -18,7 +18,7 @@
  * (or re-synced) right after activating the device it should act as.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -32,6 +32,7 @@ import { getDeviceId, _resetMemoizedDeviceIdForTests } from '../deviceId.js';
 import { getEmbeddingModelId } from '../../embedding/Embedder.js';
 import { createPgSyncConnection, type PgSyncConnection } from '../../db/pg/connection.js';
 import { SyncEngine, type SyncResult } from '../SyncEngine.js';
+import { deriveKey, encryptField, generateSalt, isEncrypted } from '../crypto.js';
 
 // ─── availability guard ─────────────────────────────────────────────────────
 
@@ -112,10 +113,17 @@ function readMemory(id: string): schema.Memory | undefined {
   return getDb().select().from(schema.memories).where(eq(schema.memories.id, id)).get();
 }
 
-/** Activates `device`, then runs one full `sync()` as that device. */
-async function syncAsDevice(device: Device, syncUrl: string = PG_URL): Promise<SyncResult> {
+/** Activates `device`, then runs one full `sync()` as that device, optionally with E2E encryption. */
+async function syncAsDevice(
+  device: Device,
+  options: { syncUrl?: string; encryptionKey?: string } = {}
+): Promise<SyncResult> {
   activateDevice(device);
-  const engine = new SyncEngine({ syncUrl, mode: 'manual' });
+  const engine = new SyncEngine({
+    syncUrl: options.syncUrl ?? PG_URL,
+    mode: 'manual',
+    encryptionKey: options.encryptionKey,
+  });
   try {
     return await engine.sync();
   } finally {
@@ -138,6 +146,7 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
     await pgConn.pool.query('DELETE FROM memory_connections');
     await pgConn.pool.query('DELETE FROM sessions');
     await pgConn.pool.query('DELETE FROM memories');
+    await pgConn.pool.query('DELETE FROM sync_metadata');
     await pgConn.close();
     delete process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'];
   });
@@ -146,6 +155,9 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
     await pgConn.pool.query('DELETE FROM memory_connections');
     await pgConn.pool.query('DELETE FROM sessions');
     await pgConn.pool.query('DELETE FROM memories');
+    // encryption tests (below) persist a salt/sentinel here — clear it so
+    // every test starts from "no passphrase established yet".
+    await pgConn.pool.query('DELETE FROM sync_metadata');
 
     closeDatabase();
     delete process.env['ENGRAM_DB_PATH'];
@@ -408,5 +420,101 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
     } finally {
       await engine.dispose();
     }
+  });
+
+  // ─── 8. E2E encryption (Phase 6) ─────────────────────────────────────────
+  // Runs in the same describe block as the tests above (rather than a
+  // separate file) deliberately: it shares this suite's live Postgres
+  // fixture and blanket-truncating before/after hooks, which only stay
+  // correct if every test touching them runs sequentially in one worker —
+  // splitting into another file would let Vitest schedule it in a second
+  // worker and race the shared tables against this file's own tests.
+
+  describe('E2E encryption (Phase 6)', () => {
+    it('encrypts memory content/summary before push, and a second device with the same passphrase decrypts it back on pull', async () => {
+      const passphrase = 'correct horse battery staple';
+      const a = device();
+      const b = device();
+
+      const deviceIdA = activateDevice(a);
+      insertMemory({
+        id: 'mem-enc-1',
+        deviceId: deviceIdA,
+        content: 'sensitive content from A',
+        summary: 'sensitive summary from A',
+      });
+
+      const pushResult = await syncAsDevice(a, { encryptionKey: passphrase });
+      expect(pushResult.pushed.memories).toBe(1);
+
+      const raw = await pgConn.pool.query<{ content: string; summary: string | null }>(
+        'SELECT content, summary FROM memories WHERE id = $1',
+        ['mem-enc-1']
+      );
+      const rawContent = raw.rows[0]?.content;
+      const rawSummary = raw.rows[0]?.summary;
+      expect(rawContent).toBeDefined();
+      expect(rawContent).not.toBe('sensitive content from A');
+      expect(rawContent ? isEncrypted(rawContent) : false).toBe(true);
+      expect(rawSummary).not.toBe('sensitive summary from A');
+      expect(rawSummary ? isEncrypted(rawSummary) : false).toBe(true);
+
+      const pullResult = await syncAsDevice(b, { encryptionKey: passphrase });
+      expect(pullResult.pulled.memories).toBe(1);
+
+      activateDevice(b);
+      const local = readMemory('mem-enc-1');
+      expect(local?.content).toBe('sensitive content from A');
+      expect(local?.summary).toBe('sensitive summary from A');
+    });
+
+    it('rejects a device that syncs with the wrong passphrase once a passphrase is already established', async () => {
+      const a = device();
+      const b = device();
+
+      const deviceIdA = activateDevice(a);
+      insertMemory({ id: 'mem-guarded', deviceId: deviceIdA, content: 'guarded content' });
+      await syncAsDevice(a, { encryptionKey: 'the-real-passphrase' });
+
+      await expect(syncAsDevice(b, { encryptionKey: 'a-completely-wrong-passphrase' })).rejects.toThrow(
+        /passphrase/i
+      );
+    });
+
+    it('skips a memory row that cannot be decrypted under the current key, without aborting the rest of the sync', async () => {
+      const passphrase = 'correct horse battery staple';
+      const a = device();
+      const b = device();
+
+      const deviceIdA = activateDevice(a);
+      insertMemory({ id: 'mem-ok', deviceId: deviceIdA, content: 'decryptable content' });
+      // Establishes the salt/sentinel on PG for `passphrase`.
+      await syncAsDevice(a, { encryptionKey: passphrase });
+
+      // Simulate a row whose ciphertext was produced under a different key
+      // (corrupted data, or a leftover row from before a passphrase change)
+      // — insert it directly on Postgres so it never goes through this
+      // session's EncryptionManager.
+      const bogusKey = await deriveKey('a-totally-different-key', generateSalt());
+      const now = new Date().toISOString();
+      await pgConn.pool.query(
+        `INSERT INTO memories (id, type, content, created_at, updated_at, device_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        ['mem-corrupted', 'semantic', encryptField('unrecoverable content', bogusKey), now, now, deviceIdA]
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const pullResult = await syncAsDevice(b, { encryptionKey: passphrase });
+        expect(pullResult.pulled.memories).toBe(1); // only mem-ok, mem-corrupted was skipped
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('mem-corrupted'));
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      activateDevice(b);
+      expect(readMemory('mem-ok')?.content).toBe('decryptable content');
+      expect(readMemory('mem-corrupted')).toBeUndefined();
+    });
   });
 });

@@ -22,6 +22,7 @@
  */
 
 import { getDb } from '../db/index.js';
+import type { Memory } from '../db/schema.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import { createPgSyncConnection, redactSyncUrl } from '../db/pg/connection.js';
 import type { PgSyncConnection } from '../db/pg/connection.js';
@@ -30,6 +31,7 @@ import { getDeviceId } from './deviceId.js';
 import { computeSyncId, pullCursorWithOverlap, readCursor, writeCursor } from './cursor.js';
 import { shouldApplyPulledRow } from './conflict.js';
 import { PgSyncClient } from './PgSyncClient.js';
+import { EncryptionManager } from './encryption.js';
 import {
   countPendingPush, selectConnectionsBatch, selectMemoriesBatch, selectSessionsBatch,
 } from './syncLocalReads.js';
@@ -52,6 +54,8 @@ export interface SyncConfig {
   mode?: 'auto' | 'manual' | 'off';
   /** Debounce delay after a write before triggering sync, in ms. Default 2000. */
   debounceMs?: number;
+  /** Passphrase for E2E encryption. When set, all data pushed to PG is encrypted. */
+  encryptionKey?: string;
   /** Called after every sync cycle (success or failure) with the current status. */
   onSyncStatus?: (status: SyncStatus) => void;
   /** Called when a sync cycle fails. Never thrown past — informational only. */
@@ -103,6 +107,7 @@ export class SyncEngine {
   private pgClient: PgSyncClient | null = null;
   private connectingPromise: Promise<void> | null = null;
   private embeddingModelChecked = false;
+  private encryptionManager: EncryptionManager | null = null;
 
   private intervalTimer: NodeJS.Timeout | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
@@ -314,14 +319,29 @@ export class SyncEngine {
         batchSize: LOCAL_BATCH_SIZE,
       });
       await this.checkEmbeddingModelCompatibility();
+      await this.initializeEncryption();
     } catch (err) {
       this.connectingPromise = null;
       const conn = this.pgConn;
       this.pgConn = null;
       this.pgClient = null;
+      this.encryptionManager = null;
       if (conn) await conn.close().catch(() => {});
       throw err;
     }
+  }
+
+  /**
+   * Derives the E2E encryption key once per connection lifetime (scrypt key
+   * derivation is expensive, so this must not run on every sync cycle — see
+   * `./encryption.ts`). A no-op when `config.encryptionKey` isn't set, which
+   * keeps push/pull byte-for-byte unchanged from before encryption existed.
+   */
+  private async initializeEncryption(): Promise<void> {
+    if (!this.config.encryptionKey || !this.pgClient) return;
+    const manager = new EncryptionManager(this.pgClient);
+    await manager.initialize(this.config.encryptionKey);
+    this.encryptionManager = manager;
   }
 
   /**
@@ -357,7 +377,7 @@ export class SyncEngine {
 
     const memories = await drainPushBatches(
       (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE),
-      (rows) => client.pushMemories(rows),
+      (rows) => client.pushMemories(this.encryptMemoriesForPush(rows)),
       (row) => row.updatedAt,
       startCursor,
       LOCAL_BATCH_SIZE
@@ -388,6 +408,41 @@ export class SyncEngine {
     return { memories: memories.count, connections: connections.count, sessions: sessions.count };
   }
 
+  /**
+   * Encrypts a batch of local memory rows before they're sent to Postgres.
+   * Returns new row objects — `rows` (and the SQLite rows within it) are
+   * never mutated. A no-op (returns `rows` unchanged) when encryption isn't
+   * configured, so push behaves exactly as before when `encryptionKey` is
+   * unset. Only `memories` carries the encryptable fields (content/summary/
+   * metadata/tags/embedding) — `memory_connections` and `sessions` are
+   * pushed as-is.
+   */
+  private encryptMemoriesForPush(rows: Memory[]): Memory[] {
+    const manager = this.encryptionManager;
+    if (!manager?.initialized) return rows;
+
+    return rows.map((row) => {
+      const encrypted = manager.encryptRow({
+        content: row.content,
+        summary: row.summary,
+        metadata: row.metadata,
+        tags: row.tags,
+        embedding: row.embedding,
+      });
+      return {
+        ...row,
+        content: encrypted.content,
+        summary: encrypted.summary,
+        // `metadata`/`tags` are NOT NULL columns; encryptRow's signature
+        // allows null only for shared-shape reasons (decryptRow reuses it
+        // too) — encrypting a non-null string never actually yields null.
+        metadata: encrypted.metadata ?? row.metadata,
+        tags: encrypted.tags ?? row.tags,
+        embedding: encrypted.embedding,
+      };
+    });
+  }
+
   // ─── pull ─────────────────────────────────────────────────────────────
 
   private async doPull(): Promise<{ pulled: SyncResult['pulled']; conflicts: number }> {
@@ -399,7 +454,7 @@ export class SyncEngine {
 
     const memories = await drainPullBatches<PgMemory>(
       (c) => client.pullMemories(c, this.deviceId).then((b) => ({
-        rows: b.memories, maxServerUpdatedAt: b.maxServerUpdatedAt, hasMore: b.hasMore,
+        rows: this.decryptPulledMemories(b.memories), maxServerUpdatedAt: b.maxServerUpdatedAt, hasMore: b.hasMore,
       })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledMemory(this.db, row),
@@ -438,5 +493,44 @@ export class SyncEngine {
       pulled: { memories: memories.applied, connections: connections.applied, sessions: sessions.applied },
       conflicts: memories.conflicts + connections.conflicts + sessions.conflicts,
     };
+  }
+
+  /**
+   * Decrypts a batch of remote memory rows right after they're pulled from
+   * Postgres, before conflict resolution / apply ever sees them. A no-op
+   * (returns `rows` unchanged) when encryption isn't configured. Rows that
+   * fail to decrypt (wrong passphrase, corrupted ciphertext, or — in a
+   * mixed-key rollout — data encrypted under a different key) are dropped
+   * with a warning rather than aborting the sync; they stay on the server
+   * and are simply not applied locally.
+   */
+  private decryptPulledMemories(rows: PgMemory[]): PgMemory[] {
+    const manager = this.encryptionManager;
+    if (!manager?.initialized) return rows;
+
+    const decrypted: PgMemory[] = [];
+    for (const row of rows) {
+      const result = manager.tryDecryptRow({
+        content: row.content,
+        summary: row.summary,
+        metadata: row.metadata,
+        tags: row.tags,
+        embedding: row.embedding,
+      });
+      if (!result) {
+        console.warn(`[engram] Could not decrypt memory ${row.id} — skipping`);
+        continue;
+      }
+      decrypted.push({
+        ...row,
+        content: result.content,
+        summary: result.summary,
+        // See encryptMemoriesForPush for why the `?? row.x` fallback is safe.
+        metadata: result.metadata ?? row.metadata,
+        tags: result.tags ?? row.tags,
+        embedding: result.embedding,
+      });
+    }
+    return decrypted;
   }
 }

@@ -27,6 +27,18 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 - **Smithery / MCPB** — `syncUrl` and `syncMode` added to configuration schemas for both distribution channels.
 
+- **End-to-end encryption for cloud sync** — memory rows can now be encrypted client-side before they reach Postgres, using AES-256-GCM with scrypt key derivation (`N=2^15, r=8, p=1`). Enable with `ENGRAM_SYNC_ENCRYPTION_KEY`. See [docs/CLOUD-SYNC.md](docs/CLOUD-SYNC.md#8-end-to-end-encryption).
+
+- **`@engram-ai-memory/cli`** — `engram cloud encrypt <passphrase>` initializes encryption on a sync target: generates a salt, derives the key, and stores a verification sentinel in Postgres.
+
+- **`@engram-ai-memory/core`** — `EncryptionManager` class derives and holds the AES-256 key for a sync connection and exposes `encryptRow`/`decryptRow`/`tryDecryptRow` for encrypting and decrypting memory rows (content, summary, metadata, tags, embedding) on the push and pull paths.
+
+- **`@engram-ai-memory/core`** — `sync_metadata` PostgreSQL table stores the encryption salt and sentinel, shared across every device syncing against the same database.
+
+- **`ENGRAM_SYNC_ENCRYPTION_KEY` environment variable** — when set, `SyncEngine` derives the encryption key on connect and encrypts every push / decrypts every pull automatically. Unset keeps push/pull byte-for-byte unchanged from before encryption existed.
+
+- **Sentinel verification** — a fixed plaintext encrypted under the derived key is stored alongside the salt, so a device with the wrong passphrase fails fast with a clear `WRONG_PASSPHRASE` error instead of silently pushing or pulling undecryptable data.
+
 ### Changed
 
 - **`@engram-ai-memory/server`** — Socket.io setup extracted into `setupRealtime()` for testability — tests can attach Socket.io to a Fastify-controlled server without side effects from `start()`.
@@ -40,6 +52,12 @@ Versioning: [Semantic Versioning](https://semver.org/)
 - **TLS enforcement** — `validateSyncUrl()` rejects non-TLS PostgreSQL connections unless `ENGRAM_SYNC_ALLOW_UNENCRYPTED=true` is explicitly set.
 
 - **Socket.io auth** — `/neural` WebSocket namespace validates `auth.token` against `ENGRAM_API_KEY` using constant-time comparison. Tested with 4 integration tests.
+
+- **End-to-end encryption at rest** — when `ENGRAM_SYNC_ENCRYPTION_KEY` is set, all synced data (content, summary, metadata, tags, embeddings) is encrypted client-side before it leaves the device, so it's encrypted at rest in PostgreSQL, not just in transit.
+
+- **Zero-knowledge design** — the encryption key is derived from the passphrase locally and never sent to or stored in Postgres; the server/database operator can only ever see ciphertext, never memory content.
+
+- **Per-field random nonces** — every field and embedding gets its own random 12-byte nonce on each encryption, preventing ciphertext correlation across rows or across repeated encryptions of the same plaintext.
 
 ## [0.4.1] — 2026-08-13
 

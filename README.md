@@ -354,6 +354,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_SYNC_MODE` | `auto` | Sync behavior: `auto` (background sync on interval + debounce), `manual` (explicit only), `off`. |
 | `ENGRAM_SYNC_INTERVAL` | `30000` | Background sync interval in milliseconds (auto mode only). |
 | `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS PostgreSQL connections. For local development only — production should always use `sslmode=require`. |
+| `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for E2E encryption of synced data. Unset = data reaches Postgres as plaintext. See [Cloud Sync](docs/CLOUD-SYNC.md#8-end-to-end-encryption). |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 

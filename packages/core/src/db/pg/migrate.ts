@@ -52,6 +52,7 @@ export async function runPgSyncMigrations(
   }
 
   await createServerUpdatedAtTriggers(pool);
+  await createSyncMetadataTable(pool);
 }
 
 /**
@@ -95,5 +96,27 @@ async function createServerUpdatedAtTriggers(pool: Pool): Promise<void> {
         `PostgreSQL sync migration failed creating trigger "${triggerName}" on "${table}": ${errorMessage(err)}`
       );
     }
+  }
+}
+
+/**
+ * Creates the `sync_metadata` key-value table if it doesn't already exist.
+ * Stores the encryption salt and sentinel used by E2E encryption (Phase 6).
+ * Idempotent — this runs on every connect alongside the rest of this module.
+ */
+async function createSyncMetadataTable(pool: Pool): Promise<void> {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sync_metadata (
+        key            TEXT PRIMARY KEY,
+        value          TEXT NOT NULL,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+  } catch (err) {
+    throw new Error(
+      `PostgreSQL sync migration failed creating "sync_metadata" table: ${errorMessage(err)}`
+    );
   }
 }

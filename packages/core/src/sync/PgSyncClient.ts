@@ -295,4 +295,25 @@ export class PgSyncClient {
     );
     return result.rows[0]?.embedding_model ?? null;
   }
+
+  // ─── sync metadata (E2E encryption, Phase 6) ─────────────────────────────
+
+  /** Read a key-value pair from the sync_metadata table. */
+  async getSyncMeta(key: string): Promise<string | null> {
+    const result = await this.pool.query<{ value: string }>(
+      'SELECT value FROM sync_metadata WHERE key = $1',
+      [key]
+    );
+    return result.rows[0]?.value ?? null;
+  }
+
+  /** Upsert a key-value pair in the sync_metadata table. */
+  async setSyncMeta(key: string, value: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO sync_metadata (key, value)
+       VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()`,
+      [key, value]
+    );
+  }
 }

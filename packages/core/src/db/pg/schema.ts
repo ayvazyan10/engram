@@ -184,3 +184,19 @@ export const pgSessions = pgTable(
 
 export type PgSession = typeof pgSessions.$inferSelect;
 export type NewPgSession = typeof pgSessions.$inferInsert;
+
+// ─── sync_metadata ──────────────────────────────────────────────────────────
+
+/**
+ * Key-value metadata for the sync database — stores the encryption salt
+ * and sentinel used by E2E encryption (Phase 6).
+ */
+export const pgSyncMetadata = pgTable('sync_metadata', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type PgSyncMetadata = typeof pgSyncMetadata.$inferSelect;
+export type NewPgSyncMetadata = typeof pgSyncMetadata.$inferInsert;

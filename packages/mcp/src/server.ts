@@ -52,6 +52,10 @@ const syncMode = (process.env['ENGRAM_SYNC_MODE'] || 'auto') as 'auto' | 'manual
 const syncInterval = process.env['ENGRAM_SYNC_INTERVAL']
   ? parseInt(process.env['ENGRAM_SYNC_INTERVAL'], 10)
   : undefined;
+/** Passphrase for E2E encryption of synced rows. Read here so it is available
+ * wherever the sync engine is constructed; SyncEngine itself is responsible
+ * for using it once encryption is wired into the sync path. */
+const syncEncryptionKey = process.env['ENGRAM_SYNC_ENCRYPTION_KEY'];
 
 let syncEngine: SyncEngine | null = null;
 
@@ -946,6 +950,7 @@ async function ensureInitialized(): Promise<void> {
       syncUrl,
       mode: syncMode,
       intervalMs: syncInterval,
+      encryptionKey: syncEncryptionKey,
       onIndexRebuildNeeded: async () => {
         await brain.syncIndexFromStore();
       },
@@ -955,6 +960,9 @@ async function ensureInitialized(): Promise<void> {
     });
     syncEngine.start();
     console.error(`[engram] Cloud sync enabled: ${redactSyncUrl(syncUrl)}`);
+    if (syncEncryptionKey) {
+      console.error('🔐 E2E encryption enabled for cloud sync');
+    }
   }
 }
 

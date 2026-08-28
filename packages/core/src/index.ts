@@ -116,3 +116,7 @@ export type {
   MergeResult, CursorState,
   PushBatch, PullBatch, PgSyncClientOptions,
 } from './sync/index.js';
+
+// Sync — End-to-end encryption (Phase 3)
+export { EncryptionManager, EncryptionError, isEncrypted } from './sync/index.js';
+export type { EncryptableRow } from './sync/index.js';

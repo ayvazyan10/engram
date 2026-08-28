@@ -29,6 +29,7 @@
         "ENGRAM_NAMESPACE": "${user_config.namespace}",
         "ENGRAM_SYNC_URL": "${user_config.sync_url}",
         "ENGRAM_SYNC_MODE": "${user_config.sync_mode}",
+        "ENGRAM_SYNC_ENCRYPTION_KEY": "${user_config.sync_encryption_key}",
         "ENGRAM_PACKAGE_VERSION": "0.5.0"
       }
     }
@@ -93,6 +94,14 @@
       "description": "Sync behavior: auto (background sync on interval + debounce after writes), manual (explicit only), off (disabled).",
       "required": false,
       "default": "auto"
+    },
+    "sync_encryption_key": {
+      "type": "string",
+      "title": "Sync Encryption Key",
+      "description": "Passphrase for E2E encryption of cloud-synced memories. When set, all data pushed to PostgreSQL is encrypted with AES-256-GCM. Must be the same across all devices.",
+      "required": false,
+      "default": "",
+      "sensitive": true
     }
   },
   "compatibility": {
