@@ -93,7 +93,7 @@ Once configured, sync runs in the background:
 
 > One caveat worth knowing: if you clone or restore an `engram.db` file onto a second machine (disk image, backup restore, `cp`), that copy inherits the same `device_id` as the original. Two installations sharing one id can occasionally mis-resolve a tie between exactly those two devices. Treat a cloned database as sharing identity with its source until you've verified otherwise.
 
-You can also drive sync manually instead of waiting on the interval — see [Recovery / Troubleshooting](#9-recovery--troubleshooting).
+You can also drive sync manually instead of waiting on the interval — see [Recovery / Troubleshooting](#10-recovery--troubleshooting).
 
 ---
 
@@ -135,6 +135,7 @@ See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported
 | `ENGRAM_SYNC_MODE` | `auto` | `auto` (interval + debounce, background), `manual` (explicit sync calls only), `off` (scheduler never runs) |
 | `ENGRAM_SYNC_INTERVAL` | `30000` | Background sync interval in ms (`auto` mode only) |
 | `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS Postgres connections. Development only — see [Security](#7-security) |
+| `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for end-to-end encryption of synced data. Unset = data reaches Postgres as plaintext (still TLS-in-transit). See [End-to-end encryption](#8-end-to-end-encryption) |
 
 ---
 
@@ -143,11 +144,53 @@ See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported
 - **TLS is required by default.** Connection strings must include `?sslmode=require`, or Engram refuses to connect. Set `ENGRAM_SYNC_ALLOW_UNENCRYPTED=true` to bypass this — only do so for a trusted local Postgres during development, never against a real network connection.
 - **Passwords are never exposed.** The password portion of `ENGRAM_SYNC_URL` is redacted before it can reach a log line, a `status` response, or an error message. Every place that would otherwise print the connection string prints a masked version instead.
 - **WebSocket auth follows `ENGRAM_API_KEY`.** If you set `ENGRAM_API_KEY` on the REST server, the Socket.io `/neural` namespace requires the same key on connection (passed as `auth.token` in the socket handshake) and checks it with a timing-safe comparison. Exposing a synced Engram server beyond `localhost` without `ENGRAM_API_KEY` set means anyone who can reach it can read and write your memories.
-- **Encryption at rest is your Postgres provider's responsibility.** Engram doesn't add its own at-rest encryption — use a managed provider (Neon, Supabase, etc.) that encrypts data at rest by default, or configure it yourself on a self-hosted instance.
+- **Encryption at rest is your Postgres provider's responsibility, unless you enable Engram's own end-to-end encryption.** By default Engram doesn't add at-rest encryption — use a managed provider (Neon, Supabase, etc.) that encrypts data at rest by default, or configure it yourself on a self-hosted instance. For a stronger guarantee where the Postgres operator never sees plaintext at all, see [End-to-end encryption](#8-end-to-end-encryption).
 
 ---
 
-## 8. Namespace / Tenant Isolation
+## 8. End-to-end encryption
+
+Cloud sync can optionally encrypt memory data client-side before it ever reaches Postgres, so the database — and whoever administers it — never sees plaintext content.
+
+### Setup
+
+```bash
+# Initialize encryption (first device)
+engram cloud encrypt "my-secret-passphrase"
+
+# Set env var for automatic encryption on every sync
+export ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase"
+
+# Or pass when starting
+ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase" engram start
+```
+
+`engram cloud encrypt <passphrase>` connects to the configured `ENGRAM_SYNC_URL`, derives a key from the passphrase, and stores the salt (and a verification sentinel — see below) in Postgres. It doesn't itself enable encryption on future syncs — that's what `ENGRAM_SYNC_ENCRYPTION_KEY` does, read on every sync connection.
+
+### How it works
+
+- **AES-256-GCM with scrypt key derivation** (`N=2^15`, `r=8`, `p=1`) — a memory-hard KDF that resists brute-forcing on commodity hardware/GPUs. GCM gives both confidentiality and integrity: a tampered ciphertext fails to decrypt rather than silently returning garbage.
+- **Per-field encryption.** On a memory row, `content`, `summary`, `metadata`, `tags`, and `embedding` are each encrypted independently before push, and decrypted after pull. `memory_connections` and `sessions` rows are not encrypted.
+- **Encrypted text format:** `enc:v1:<base64(nonce || ciphertext || authTag)>`. Encrypted embeddings use the same `nonce || ciphertext || authTag` layout but stay raw bytes (no prefix, no base64) since embeddings are already stored as a byte column.
+- **Random 12-byte nonce per field.** Every encryption call generates a fresh nonce, so the same plaintext produces different ciphertext each time — rows can't be correlated by comparing ciphertext bytes.
+- **Salt stored in Postgres.** A 32-byte random salt is generated once and stored in the `sync_metadata` table (`key='encryption_salt'`), so every device can derive the same key from the same passphrase without the salt itself needing to be shared out-of-band.
+- **Sentinel verification.** A fixed plaintext, encrypted under the derived key, is stored alongside the salt (`key='encryption_sentinel'`). Any device initializing encryption decrypts the sentinel to confirm its passphrase is correct *before* trusting the derived key — this is what turns a typo'd passphrase into an immediate, clear error instead of a pile of undecryptable rows.
+
+### Multi-device setup
+
+1. Run `engram cloud encrypt <passphrase>` on the first device. This generates the salt and sentinel and stores them in Postgres.
+2. On additional devices, set `ENGRAM_SYNC_ENCRYPTION_KEY` to the **same** passphrase — no need to run `engram cloud encrypt` again on each one.
+3. Each device reads the salt from `sync_metadata`, derives the same key locally, and verifies it against the sentinel on connect. A wrong passphrase fails fast with a clear error rather than corrupting or silently dropping data.
+
+### Tradeoffs
+
+- **pgvector search disabled.** Encrypted embeddings are random bytes from Postgres's point of view, so semantic search can never run server-side against them. This is by design, not a missing feature — Engram doesn't rely on server-side vector search anyway; semantic search always runs locally against SQLite + the local vector index, plaintext, on every device.
+- **No passphrase recovery.** The passphrase is never stored anywhere, only verified via the sentinel. If it's lost, encrypted rows in Postgres are permanently unreadable — there is no reset or recovery path. Local SQLite data is unaffected either way, since sync only ever encrypts the copy that leaves the device.
+- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is (`isEncrypted()` checks the `enc:v1:` prefix and leaves unprefixed values alone). On pull, a row that fails to decrypt (wrong passphrase, corrupted ciphertext, or data encrypted under a different key) is skipped with a warning rather than aborting the whole sync — it stays on the server and simply isn't applied locally until it can be decrypted.
+
+---
+
+## 9. Namespace / Tenant Isolation
 
 If multiple *people* share a single Postgres database (as opposed to one person's multiple devices), isolation between them is controlled by `ENGRAM_NAMESPACE_MODE` — the same setting that governs local namespace behavior, not something sync-specific.
 
@@ -159,7 +202,7 @@ If multiple *people* share a single Postgres database (as opposed to one person'
 
 ---
 
-## 9. Recovery / Troubleshooting
+## 10. Recovery / Troubleshooting
 
 **Sync seems stuck**
 - Confirm `ENGRAM_SYNC_URL` is reachable from this machine (`psql "$ENGRAM_SYNC_URL" -c 'select 1'`, or just check your provider's connection status).
@@ -189,8 +232,8 @@ curl http://localhost:4901/api/sync/status
 
 ---
 
-## 10. Limitations
+## 11. Limitations
 
-- **No server-side search.** Sync replicates rows; it doesn't add `pgvector` or any server-side vector search. Semantic search still runs locally, against your local SQLite + vector index, on every device.
-- **No end-to-end encryption.** Data is encrypted in transit (TLS), but whoever administers your Postgres database can read memory content at rest unless your provider encrypts it for you. Don't sync sensitive data through a Postgres instance you don't trust.
+- **No server-side search.** Sync replicates rows; it doesn't add `pgvector` or any server-side vector search. Semantic search still runs locally, against your local SQLite + vector index, on every device. With encryption enabled this is unavoidable rather than a gap — see [End-to-end encryption](#8-end-to-end-encryption).
+- **Encryption is opt-in.** Without `ENGRAM_SYNC_ENCRYPTION_KEY` set, data is encrypted in transit (TLS) but not at rest — whoever administers your Postgres database can read memory content unless your provider encrypts it for you. Enable [end-to-end encryption](#8-end-to-end-encryption) if you don't trust the Postgres instance with plaintext.
 - **The sync interval has a practical floor.** Every cycle costs a round trip and a transaction against Postgres; pushing `ENGRAM_SYNC_INTERVAL` very low mostly adds load without meaningfully improving propagation latency (the write-triggered debounce already covers the common case of "I just changed something, sync it soon").

@@ -4,7 +4,7 @@
  * imports from here.
  */
 
-export { pgMemories, pgMemoryConnections, pgSessions } from './schema.js';
+export { pgMemories, pgMemoryConnections, pgSessions, pgSyncMetadata } from './schema.js';
 export type {
   PgMemory,
   NewPgMemory,
@@ -12,6 +12,8 @@ export type {
   NewPgMemoryConnection,
   PgSession,
   NewPgSession,
+  PgSyncMetadata,
+  NewPgSyncMetadata,
 } from './schema.js';
 
 export { createPgSyncConnection, validateSyncUrl, redactSyncUrl } from './connection.js';

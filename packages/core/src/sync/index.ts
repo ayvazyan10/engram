@@ -12,6 +12,9 @@ export { getDeviceId } from './deviceId.js';
 export { PgSyncClient } from './PgSyncClient.js';
 export type { PushBatch, PullBatch, PgSyncClientOptions } from './PgSyncClient.js';
 
+export { EncryptionManager, type EncryptableRow } from './encryption.js';
+export { EncryptionError, isEncrypted } from './crypto.js';
+
 // Re-exported for testing/extension — conflict resolution and cursor
 // bookkeeping are pure/standalone enough to be useful outside SyncEngine.
 export type { MergeResult } from './conflict.js';
