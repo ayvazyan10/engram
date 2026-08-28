@@ -55,24 +55,41 @@ export async function drainPushBatches<T>(
   return { count, maxUpdatedAt };
 }
 
+/** Composite pull cursor: timestamp + row id for deterministic pagination. */
+export interface PullCursor {
+  ts: string;
+  id: string | null;
+}
+
 /**
  * Drains one table's remote pull queue in server-side pages, applying each
  * row locally as it arrives via `apply`. `shouldApply` filters out rows
  * that shouldn't be written locally at all (e.g. an echo of our own push).
+ *
+ * Uses a composite cursor `(server_updated_at, id)` so the cursor always
+ * advances even when many rows share the same timestamp (e.g. a bulk
+ * migration). The stored cursor (in SyncEngine) remains a plain ISO
+ * timestamp — only the intra-drain loop uses the composite.
  */
 export async function drainPullBatches<TRow>(
-  pull: (cursor: string | null) => Promise<{ rows: TRow[]; maxServerUpdatedAt: string | null; hasMore: boolean }>,
+  pull: (cursorTs: string | null, cursorId: string | null) => Promise<{
+    rows: TRow[];
+    maxServerUpdatedAt: string | null;
+    lastId: string | null;
+    hasMore: boolean;
+  }>,
   shouldApply: (row: TRow) => boolean,
   apply: (row: TRow) => ApplyOutcome,
   startCursor: string | null
 ): Promise<{ applied: number; conflicts: number; maxServerUpdatedAt: string | null }> {
-  let cursor = startCursor;
+  let cursorTs = startCursor;
+  let cursorId: string | null = null;
   let maxServerUpdatedAt: string | null = null;
   let applied = 0;
   let conflicts = 0;
 
   for (;;) {
-    const batch = await pull(cursor);
+    const batch = await pull(cursorTs, cursorId);
     for (const row of batch.rows) {
       if (!shouldApply(row)) continue;
       const outcome = apply(row);
@@ -82,7 +99,15 @@ export async function drainPullBatches<TRow>(
 
     if (batch.maxServerUpdatedAt !== null) {
       maxServerUpdatedAt = batch.maxServerUpdatedAt;
-      cursor = batch.maxServerUpdatedAt;
+      const prevTs: string | null = cursorTs;
+      const prevId: string | null = cursorId;
+      cursorTs = batch.maxServerUpdatedAt;
+      cursorId = batch.lastId;
+
+      // Safety: if the composite cursor didn't advance, stop to prevent an
+      // infinite loop (e.g. all batch rows have the same ts AND the same id,
+      // which shouldn't happen with a proper PK, but guard anyway).
+      if (cursorTs === prevTs && cursorId === prevId) break;
     }
     if (!batch.hasMore) break;
   }

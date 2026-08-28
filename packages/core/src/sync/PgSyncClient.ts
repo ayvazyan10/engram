@@ -20,7 +20,7 @@
 
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Pool, QueryResult } from 'pg';
-import { and, asc, gt, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, isNull, ne, or } from 'drizzle-orm';
 import * as pgSchema from '../db/pg/schema.js';
 import { pgMemories, pgMemoryConnections, pgSessions } from '../db/pg/schema.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
@@ -40,6 +40,9 @@ export interface PullBatch {
   sessions: PgSession[];
   /** The highest server_updated_at seen in this batch, to advance the cursor. */
   maxServerUpdatedAt: string | null;
+  /** The `id` of the last row in this batch — used as a tie-breaker when multiple
+   *  rows share the same `server_updated_at` so the cursor always advances. */
+  lastId: string | null;
   /** Whether there are more rows to pull (this batch was a full page). */
   hasMore: boolean;
 }
@@ -202,18 +205,28 @@ export class PgSyncClient {
   // plain `ne()` would silently exclude it — `isNull(...) OR ne(...)` covers
   // both cases explicitly.
 
-  /** Pull `memories` rows newer than the cursor, excluding our own device's writes. */
-  async pullMemories(cursorWithOverlap: string | null, deviceId: string): Promise<PullBatch> {
+  /** Pull `memories` rows newer than the cursor, excluding our own device's writes.
+   *  Uses a composite cursor `(server_updated_at, id)` so the cursor always
+   *  advances even when many rows share the same timestamp. */
+  async pullMemories(cursorTs: string | null, cursorId: string | null, deviceId: string): Promise<PullBatch> {
     const conditions = [or(isNull(pgMemories.deviceId), ne(pgMemories.deviceId, deviceId))];
-    if (cursorWithOverlap !== null) {
-      conditions.push(gt(pgMemories.serverUpdatedAt, new Date(cursorWithOverlap)));
+    if (cursorTs !== null) {
+      if (cursorId !== null) {
+        // Composite cursor: (ts > cursorTs) OR (ts = cursorTs AND id > cursorId)
+        conditions.push(or(
+          gt(pgMemories.serverUpdatedAt, new Date(cursorTs)),
+          and(eq(pgMemories.serverUpdatedAt, new Date(cursorTs)), gt(pgMemories.id, cursorId)),
+        ));
+      } else {
+        conditions.push(gt(pgMemories.serverUpdatedAt, new Date(cursorTs)));
+      }
     }
 
     const rows = await this.db
       .select()
       .from(pgMemories)
       .where(and(...conditions))
-      .orderBy(asc(pgMemories.serverUpdatedAt))
+      .orderBy(asc(pgMemories.serverUpdatedAt), asc(pgMemories.id))
       .limit(this.batchSize);
 
     const last = rows.at(-1);
@@ -222,24 +235,32 @@ export class PgSyncClient {
       connections: [],
       sessions: [],
       maxServerUpdatedAt: last ? last.serverUpdatedAt.toISOString() : null,
+      lastId: last ? last.id : null,
       hasMore: rows.length === this.batchSize,
     };
   }
 
   /** Pull `memory_connections` rows newer than the cursor, excluding our own device's writes. */
-  async pullConnections(cursorWithOverlap: string | null, deviceId: string): Promise<PullBatch> {
+  async pullConnections(cursorTs: string | null, cursorId: string | null, deviceId: string): Promise<PullBatch> {
     const conditions = [
       or(isNull(pgMemoryConnections.deviceId), ne(pgMemoryConnections.deviceId, deviceId)),
     ];
-    if (cursorWithOverlap !== null) {
-      conditions.push(gt(pgMemoryConnections.serverUpdatedAt, new Date(cursorWithOverlap)));
+    if (cursorTs !== null) {
+      if (cursorId !== null) {
+        conditions.push(or(
+          gt(pgMemoryConnections.serverUpdatedAt, new Date(cursorTs)),
+          and(eq(pgMemoryConnections.serverUpdatedAt, new Date(cursorTs)), gt(pgMemoryConnections.id, cursorId)),
+        ));
+      } else {
+        conditions.push(gt(pgMemoryConnections.serverUpdatedAt, new Date(cursorTs)));
+      }
     }
 
     const rows = await this.db
       .select()
       .from(pgMemoryConnections)
       .where(and(...conditions))
-      .orderBy(asc(pgMemoryConnections.serverUpdatedAt))
+      .orderBy(asc(pgMemoryConnections.serverUpdatedAt), asc(pgMemoryConnections.id))
       .limit(this.batchSize);
 
     const last = rows.at(-1);
@@ -248,22 +269,30 @@ export class PgSyncClient {
       connections: rows,
       sessions: [],
       maxServerUpdatedAt: last ? last.serverUpdatedAt.toISOString() : null,
+      lastId: last ? last.id : null,
       hasMore: rows.length === this.batchSize,
     };
   }
 
   /** Pull `sessions` rows newer than the cursor, excluding our own device's writes. */
-  async pullSessions(cursorWithOverlap: string | null, deviceId: string): Promise<PullBatch> {
+  async pullSessions(cursorTs: string | null, cursorId: string | null, deviceId: string): Promise<PullBatch> {
     const conditions = [or(isNull(pgSessions.deviceId), ne(pgSessions.deviceId, deviceId))];
-    if (cursorWithOverlap !== null) {
-      conditions.push(gt(pgSessions.serverUpdatedAt, new Date(cursorWithOverlap)));
+    if (cursorTs !== null) {
+      if (cursorId !== null) {
+        conditions.push(or(
+          gt(pgSessions.serverUpdatedAt, new Date(cursorTs)),
+          and(eq(pgSessions.serverUpdatedAt, new Date(cursorTs)), gt(pgSessions.id, cursorId)),
+        ));
+      } else {
+        conditions.push(gt(pgSessions.serverUpdatedAt, new Date(cursorTs)));
+      }
     }
 
     const rows = await this.db
       .select()
       .from(pgSessions)
       .where(and(...conditions))
-      .orderBy(asc(pgSessions.serverUpdatedAt))
+      .orderBy(asc(pgSessions.serverUpdatedAt), asc(pgSessions.id))
       .limit(this.batchSize);
 
     const last = rows.at(-1);
@@ -272,6 +301,7 @@ export class PgSyncClient {
       connections: [],
       sessions: rows,
       maxServerUpdatedAt: last ? last.serverUpdatedAt.toISOString() : null,
+      lastId: last ? last.id : null,
       hasMore: rows.length === this.batchSize,
     };
   }

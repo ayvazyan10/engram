@@ -453,24 +453,33 @@ export class SyncEngine {
     const shouldApply = (deviceId: string | null): boolean => shouldApplyPulledRow(deviceId, this.deviceId);
 
     const memories = await drainPullBatches<PgMemory>(
-      (c) => client.pullMemories(c, this.deviceId).then((b) => ({
-        rows: this.decryptPulledMemories(b.memories), maxServerUpdatedAt: b.maxServerUpdatedAt, hasMore: b.hasMore,
+      (ts, id) => client.pullMemories(ts, id, this.deviceId).then((b) => ({
+        rows: this.decryptPulledMemories(b.memories),
+        maxServerUpdatedAt: b.maxServerUpdatedAt,
+        lastId: b.lastId,
+        hasMore: b.hasMore,
       })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledMemory(this.db, row),
       baseCursor
     );
     const connections = await drainPullBatches<PgMemoryConnection>(
-      (c) => client.pullConnections(c, this.deviceId).then((b) => ({
-        rows: b.connections, maxServerUpdatedAt: b.maxServerUpdatedAt, hasMore: b.hasMore,
+      (ts, id) => client.pullConnections(ts, id, this.deviceId).then((b) => ({
+        rows: b.connections,
+        maxServerUpdatedAt: b.maxServerUpdatedAt,
+        lastId: b.lastId,
+        hasMore: b.hasMore,
       })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledConnection(this.db, row),
       baseCursor
     );
     const sessions = await drainPullBatches<PgSession>(
-      (c) => client.pullSessions(c, this.deviceId).then((b) => ({
-        rows: b.sessions, maxServerUpdatedAt: b.maxServerUpdatedAt, hasMore: b.hasMore,
+      (ts, id) => client.pullSessions(ts, id, this.deviceId).then((b) => ({
+        rows: b.sessions,
+        maxServerUpdatedAt: b.maxServerUpdatedAt,
+        lastId: b.lastId,
+        hasMore: b.hasMore,
       })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledSession(this.db, row),
