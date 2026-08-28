@@ -195,6 +195,41 @@ export class PgSyncClient {
     return result.rowCount ?? 0;
   }
 
+  // ─── one-time backfill (post-connect) ────────────────────────────────
+
+  /**
+   * Stamps `device_id` onto any `memories` / `memory_connections` /
+   * `sessions` rows that were written before per-row device attribution
+   * existed (pre-sync era). A row with `device_id IS NULL` is never "ours"
+   * to any device's pull filter (`isNull(...) OR ne(...)` in `pullMemories`
+   * et al. always includes it), so it gets re-pulled — and re-applied —
+   * every single sync cycle, which is the 100%-CPU bug this fixes.
+   *
+   * Called once per connection lifetime from `SyncEngine.ensureConnected()`
+   * right after migrations run, never from the per-cycle sync path.
+   * Idempotent: a no-op (no log, returns 0) once no NULL rows remain.
+   */
+  async backfillNullDeviceIds(deviceId: string): Promise<number> {
+    const memories = await this.pool.query(
+      'UPDATE memories SET device_id = $1 WHERE device_id IS NULL',
+      [deviceId]
+    );
+    const connections = await this.pool.query(
+      'UPDATE memory_connections SET device_id = $1 WHERE device_id IS NULL',
+      [deviceId]
+    );
+    const sessions = await this.pool.query(
+      'UPDATE sessions SET device_id = $1 WHERE device_id IS NULL',
+      [deviceId]
+    );
+
+    const total = (memories.rowCount ?? 0) + (connections.rowCount ?? 0) + (sessions.rowCount ?? 0);
+    if (total > 0) {
+      console.warn(`[engram] Backfilled device_id on ${total} orphan row(s) from pre-sync era`);
+    }
+    return total;
+  }
+
   // ─── pull ─────────────────────────────────────────────────────────────
   //
   // Every pull method excludes rows whose `device_id` equals `deviceId`

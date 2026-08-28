@@ -318,6 +318,10 @@ export class SyncEngine {
         pool: this.pgConn.pool,
         batchSize: LOCAL_BATCH_SIZE,
       });
+      // Runs once per connection lifetime, right after migrations (above)
+      // and before the first push/pull — see PgSyncClient.backfillNullDeviceIds
+      // for why NULL device_id rows must never reach the per-cycle sync path.
+      await this.pgClient.backfillNullDeviceIds(this.deviceId);
       await this.checkEmbeddingModelCompatibility();
       await this.initializeEncryption();
     } catch (err) {
