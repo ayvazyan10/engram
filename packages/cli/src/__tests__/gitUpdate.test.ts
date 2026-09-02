@@ -9,6 +9,8 @@ import {
   inspectWorkingTree,
   restoreFiles,
   classifyPullFailure,
+  classifyFetchFailure,
+  nonInteractiveEnv,
   blockedPaths,
   gitErrorSummary,
   upstreamRef,
@@ -107,6 +109,78 @@ describe('classifyPullFailure', () => {
 
   it('falls back to unknown', () => {
     expect(classifyPullFailure('fatal: the remote end hung up unexpectedly')).toBe('unknown');
+  });
+});
+
+describe('classifyFetchFailure', () => {
+  it('reads the real-world 401 as auth, not as a transport problem', () => {
+    // Regression: git reports a rejected credential as an RPC/curl failure too,
+    // so matching the network wording first sends users after their connection.
+    const stderr = [
+      'error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401',
+      'fatal: expected flush after ref listing',
+    ].join('\n');
+    expect(classifyFetchFailure(stderr)).toBe('auth');
+  });
+
+  it('detects every shape of credential rejection', () => {
+    expect(classifyFetchFailure('fatal: unable to access ...: The requested URL returned error: 403')).toBe('auth');
+    expect(classifyFetchFailure('error: RPC failed; HTTP 403 curl 22')).toBe('auth');
+    expect(classifyFetchFailure('fatal: Authentication failed for \'https://github.com/x/y.git/\'')).toBe('auth');
+    expect(classifyFetchFailure('fatal: could not read Username for \'https://github.com\': terminal prompts disabled')).toBe('auth');
+    expect(classifyFetchFailure('fatal: could not read Password for \'https://x@github.com\': No such device or address')).toBe('auth');
+    expect(classifyFetchFailure('remote: Invalid username or password.')).toBe('auth');
+    expect(classifyFetchFailure('remote: Support for password authentication was removed on August 13, 2021.')).toBe('auth');
+    expect(classifyFetchFailure('git@github.com: Permission denied (publickey).')).toBe('auth');
+    expect(classifyFetchFailure('fatal: Access denied to https://github.com/x/y.git')).toBe('auth');
+  });
+
+  it('detects a missing repository', () => {
+    expect(classifyFetchFailure('remote: Repository not found.')).toBe('not-found');
+    expect(classifyFetchFailure('error: RPC failed; HTTP 404 curl 22')).toBe('not-found');
+  });
+
+  it('detects genuine connectivity failures', () => {
+    expect(classifyFetchFailure('fatal: unable to access ...: Could not resolve host: github.com')).toBe('network');
+    expect(classifyFetchFailure('fatal: unable to access ...: Could not resolve proxy: proxy.local')).toBe('network');
+    expect(classifyFetchFailure('ssh: connect to host github.com port 22: Connection timed out')).toBe('network');
+    expect(classifyFetchFailure('fatal: unable to access ...: Operation timed out after 30000 ms')).toBe('network');
+    expect(classifyFetchFailure('fatal: unable to access ...: Failed to connect to github.com port 443')).toBe('network');
+    expect(classifyFetchFailure('ssh: connect to host github.com port 22: Connection refused')).toBe('network');
+    expect(classifyFetchFailure('fatal: unable to access ...: Network is unreachable')).toBe('network');
+  });
+
+  it('falls back to unknown', () => {
+    expect(classifyFetchFailure('fatal: the remote end hung up unexpectedly')).toBe('unknown');
+    expect(classifyFetchFailure('')).toBe('unknown');
+  });
+});
+
+describe('nonInteractiveEnv', () => {
+  it('disables git and credential-manager prompts', () => {
+    const env = nonInteractiveEnv({});
+    expect(env['GIT_TERMINAL_PROMPT']).toBe('0');
+    expect(env['GCM_INTERACTIVE']).toBe('never');
+  });
+
+  it('removes the askpass hooks entirely rather than blanking them', () => {
+    const env = nonInteractiveEnv({ GIT_ASKPASS: '/usr/bin/askpass', SSH_ASKPASS: '/usr/bin/ssh-askpass' });
+    // An empty program name is worse than none — git would still try to exec it.
+    expect('GIT_ASKPASS' in env).toBe(false);
+    expect('SSH_ASKPASS' in env).toBe(false);
+  });
+
+  it('keeps every other variable', () => {
+    const env = nonInteractiveEnv({ PATH: '/usr/bin', HOME: '/home/u', GIT_ASKPASS: 'x' });
+    expect(env['PATH']).toBe('/usr/bin');
+    expect(env['HOME']).toBe('/home/u');
+  });
+
+  it('does not mutate the input', () => {
+    const base = { PATH: '/usr/bin', GIT_ASKPASS: '/usr/bin/askpass', SSH_ASKPASS: '/usr/bin/ssh-askpass' };
+    const env = nonInteractiveEnv(base);
+    expect(base).toEqual({ PATH: '/usr/bin', GIT_ASKPASS: '/usr/bin/askpass', SSH_ASKPASS: '/usr/bin/ssh-askpass' });
+    expect(env).not.toBe(base);
   });
 });
 
@@ -367,6 +441,28 @@ describe('syncRepo (real git)', () => {
     expect(result.status).toBe('fetch-failed');
     if (result.status !== 'fetch-failed') return;
     expect(result.detail).not.toBe('');
+    expect(result.failure).not.toBe('auth');
+  });
+
+  it('reports a rejected credential as auth, not as an unreachable remote', () => {
+    // A local remote helper that fails the way GitHub does when a stale
+    // credential helper entry is offered to a public repo. No network involved.
+    const helper = path.join(root, 'fail-401.sh');
+    fs.writeFileSync(helper, [
+      '#!/bin/sh',
+      'echo "error: RPC failed; HTTP 401 curl 22 The requested URL returned error: 401" >&2',
+      'echo "fatal: expected flush after ref listing" >&2',
+      'exit 128',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    git(clone, 'config', 'protocol.ext.allow', 'always');
+    git(clone, 'remote', 'set-url', 'origin', `ext::${helper}`);
+
+    const result = syncRepo(clone);
+    expect(result.status).toBe('fetch-failed');
+    if (result.status !== 'fetch-failed') return;
+    expect(result.failure).toBe('auth');
+    expect(result.detail).toContain('HTTP 401');
   });
 
   it('logs each step through the injected logger', () => {

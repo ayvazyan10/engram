@@ -19,8 +19,8 @@ import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
   readJson, installHookScript, registerHook,
 } from './claudeSetup.js';
-import { syncRepo } from './gitUpdate.js';
-import type { RepoSyncResult } from './gitUpdate.js';
+import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
+import type { FetchFailure, RepoSyncResult } from './gitUpdate.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
 
@@ -137,11 +137,41 @@ const warn = (msg: string) => console.log(`${Y}  !${X} ${msg}`);
 
 // ─── Repository sync ─────────────────────────────────────────────────────────
 
+/**
+ * Explain a failed fetch. An auth failure is worth spelling out: this checkout
+ * pulls a public repository over anonymous HTTPS, so the only way git ends up
+ * sending credentials at all is a credential helper volunteering a stale entry
+ * — which reads as a network problem unless we say otherwise.
+ */
+function reportFetchFailure(failure: FetchFailure, repoPath: string): void {
+  switch (failure) {
+    case 'auth':
+      fail('The remote asked for credentials and rejected them.');
+      console.log('  Engram is a public repository — this checkout needs no credentials.');
+      console.log('  A stale entry in a git credential helper is the usual cause.');
+      console.log(`  Fix: ${C}git credential reject <<< $'protocol=https\\nhost=github.com\\n'${X}`);
+      console.log(`  Then check: ${D}grep github.com ~/.git-credentials${X} and ${D}git config --get-all credential.helper${X}`);
+      console.log(`  Verify the remote is HTTPS and public: ${D}cd ${repoPath} && git remote -v${X}`);
+      return;
+    case 'not-found':
+      fail('The remote repository does not exist — the URL is wrong or the repository moved.');
+      console.log(`  Check the remote: ${D}cd ${repoPath} && git remote -v${X}`);
+      console.log(`  Or start over: ${D}rm -rf ${repoPath}${X} and run ${C}engram setup${X}`);
+      return;
+    case 'network':
+      fail('Could not reach the remote repository. Check your connection.');
+      return;
+    default:
+      fail('Could not fetch from the remote repository.');
+      return;
+  }
+}
+
 /** Explain a failed sync and how to get past it. */
 function reportSyncFailure(result: RepoSyncResult, repoPath: string): void {
   switch (result.status) {
     case 'fetch-failed':
-      fail('Could not reach the remote repository. Check your connection.');
+      reportFetchFailure(result.failure, repoPath);
       break;
     case 'no-upstream':
       fail(`No upstream branch is configured for ${repoPath}.`);
@@ -275,8 +305,14 @@ program
           // config.repoPath. Double quotes do not neutralise $(), backticks or
           // embedded quotes, and repoPath is user-controlled via
           // `configure set repoPath` / ENGRAM_HOME.
+          //
+          // Prompts off and stdin closed for the same reason `gitIn` does it:
+          // the repository is public, so a credential helper offering a stale
+          // entry is the only way credentials enter the picture — and git asks
+          // for the password on the tty, which would hang setup unseen.
           const clone = spawnSync('git', ['clone', '--depth=1', REPO, config.repoPath], {
-            stdio: 'pipe',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: nonInteractiveEnv(process.env),
           });
           if (clone.status !== 0) {
             throw new Error(clone.stderr?.toString().trim() || `git exited with ${clone.status}`);

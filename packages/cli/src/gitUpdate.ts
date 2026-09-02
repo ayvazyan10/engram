@@ -22,10 +22,36 @@ export interface GitResult {
 
 export type GitRunner = (args: readonly string[]) => GitResult;
 
-/** Runner bound to a repository directory. Never builds a shell string. */
+/**
+ * Environment for a git run that must never ask a human anything. Returns a new
+ * object; the caller's env is left untouched.
+ *
+ * GIT_ASKPASS/SSH_ASKPASS are removed rather than blanked — git execs whatever
+ * the variable holds, so an empty program name is worse than no askpass at all.
+ */
+export function nonInteractiveEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
+  delete env['GIT_ASKPASS'];
+  delete env['SSH_ASKPASS'];
+  return env;
+}
+
+/**
+ * Runner bound to a repository directory. Never builds a shell string.
+ *
+ * Prompts are disabled and stdin is closed: git writes its credential prompt
+ * straight to the tty even when stdout is piped, so a stale credential helper
+ * entry would leave `engram update` hanging on an invisible password question
+ * instead of failing with the 401 git already knows about.
+ */
 export function gitIn(cwd: string): GitRunner {
   return (args) => {
-    const r = spawnSync('git', [...args], { cwd, encoding: 'utf8' });
+    const r = spawnSync('git', [...args], {
+      cwd,
+      encoding: 'utf8',
+      env: nonInteractiveEnv(process.env),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     return {
       status: r.status ?? 1,
       stdout: r.stdout ?? '',
@@ -120,6 +146,26 @@ export function classifyPullFailure(stderr: string): PullFailure {
   return 'unknown';
 }
 
+export type FetchFailure = 'auth' | 'not-found' | 'network' | 'unknown';
+
+/**
+ * Map a failed `git fetch` onto the case the user can act on.
+ *
+ * Order matters: a rejected credential surfaces as a transport error too
+ * ("RPC failed; HTTP 401 curl 22 ..."), so a network-first matcher would send
+ * the user off debugging their connection. Auth and a missing repo win.
+ */
+export function classifyFetchFailure(stderr: string): FetchFailure {
+  if (/HTTP 40[13]\b|requested URL returned error: 40[13]\b|authentication failed|could not read (?:username|password)|terminal prompts disabled|invalid username or password|support for password authentication was removed|permission denied \(publickey\)|access denied/i.test(stderr)) {
+    return 'auth';
+  }
+  if (/repository not found|HTTP 404\b/i.test(stderr)) return 'not-found';
+  if (/could not resolve (?:host|proxy)|connection timed out|operation timed out|failed to connect|connection refused|network is unreachable/i.test(stderr)) {
+    return 'network';
+  }
+  return 'unknown';
+}
+
 /** The tab-indented paths git lists when it refuses to overwrite them. */
 export function blockedPaths(stderr: string): string[] {
   return stderr
@@ -192,7 +238,8 @@ export function resetToUpstream(git: GitRunner, backupBranch: string): { ok: boo
 
 export type RepoSyncResult =
   | { status: 'updated' | 'up-to-date' }
-  | { status: 'fetch-failed' | 'no-upstream'; detail: string }
+  | { status: 'fetch-failed'; failure: FetchFailure; detail: string }
+  | { status: 'no-upstream'; detail: string }
   | { status: 'blocked'; failure: PullFailure; blocked: string[]; detail: string };
 
 export interface SyncLogger {
@@ -229,7 +276,11 @@ export function syncRepo(
   log.step('Checking for updates...');
   const fetched = git(['fetch', '--quiet']);
   if (fetched.status !== 0) {
-    return { status: 'fetch-failed', detail: gitErrorSummary(fetched.stderr) };
+    return {
+      status: 'fetch-failed',
+      failure: classifyFetchFailure(fetched.stderr),
+      detail: gitErrorSummary(fetched.stderr),
+    };
   }
 
   if (!upstreamRef(git)) {
