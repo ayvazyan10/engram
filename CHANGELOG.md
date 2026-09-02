@@ -9,6 +9,32 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-09-02
+
+### Fixed
+
+- **`@engram-ai-memory/cli`** — `engram update` and `engram setup` could hang on a credential prompt nobody could see. Git writes that prompt straight to the tty even when stdout is piped, so a stale entry in a credential helper turned a `git fetch` — or the initial clone — into an invisible password question instead of an error. Every git call now runs with terminal prompts disabled, with `GIT_ASKPASS` and `SSH_ASKPASS` removed from the environment rather than blanked (git execs whatever the variable holds, so an empty program name is worse than none), and with stdin closed.
+
+- **`@engram-ai-memory/cli`** — Any failed fetch was reported as `Could not reach the remote repository. Check your connection.`, including the HTTP 401 git had already named. Failures are now classified as auth, not-found, network or unknown, each with its own guidance. Auth is matched before the network wording on purpose: a rejected credential surfaces as `RPC failed; HTTP 401 curl 22 ...`, which would otherwise send users off debugging their connection.
+
+## [0.6.2] — 2026-08-28
+
+Published as `@engram-ai-memory/core` 0.6.1 and `@engram-ai-memory/cli` / `@engram-ai-memory/mcp` 0.6.2.
+
+### Fixed
+
+- **`@engram-ai-memory/core`** — Pull pagination skipped rows. The cursor was a strict `>` on `server_updated_at` alone, so whenever many rows shared one timestamp — a bulk migration, a mass `device_id` update — the rows past a page boundary at that timestamp were stepped over and never pulled. Pulls now use a composite `(server_updated_at, id)` cursor — `ts > cursor OR (ts = cursor AND id > lastId)` — with `id` as the secondary sort for deterministic ordering, `drainPullBatches()` carries both halves of the cursor between batches, and a guard breaks the loop if the composite cursor fails to advance.
+
+- **`@engram-ai-memory/core`** — Rows written before per-row device attribution existed carry a `NULL` `device_id`, and the pull filter (`device_id IS NULL OR device_id <> ours`) can never recognise one as the local device's own, so every such row was re-pulled and re-applied on every sync cycle — a sync loop pinned at 100% CPU. `PgSyncClient.backfillNullDeviceIds()` now stamps the connecting device's id onto the orphan rows in `memories`, `memory_connections` and `sessions`. It runs once per connection lifetime from `ensureConnected()`, right after migrations and before the first push or pull, never from the per-cycle sync path, and is idempotent — a no-op once no `NULL` rows remain.
+
+## [0.6.1] — 2026-08-28
+
+### Fixed
+
+- **`@engram-ai-memory/cli`**, **`@engram-ai-memory/mcp`** — The `0.6.0` publish of both packages went out with the workspace-internal `workspace:*` range on `@engram-ai-memory/core` rather than a resolved version, so neither installed from npm. Republished as `0.6.1` with no code changes; `@engram-ai-memory/core` stays at `0.6.0`.
+
+## [0.6.0] — 2026-08-28
+
 ### Added
 
 - **Multi-device cloud sync** — Engram now replicates memories, sessions, and connections across devices through a shared PostgreSQL instance. SQLite remains the local-first primary backend; Postgres is purely a sync target. Enable with `ENGRAM_SYNC_URL`. See [docs/CLOUD-SYNC.md](docs/CLOUD-SYNC.md).
@@ -194,7 +220,11 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.3
+[0.6.2]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.2
+[0.6.1]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.1
+[0.6.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.0
 [0.4.1]: https://github.com/ayvazyan10/engram/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.4.0
 [0.1.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.1.0
