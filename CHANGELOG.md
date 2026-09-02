@@ -9,6 +9,24 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-09-02
+
+### Fixed
+
+- **`@engram-ai-memory/cli`** — `engram setup` and `engram update` refreshed the global CLI with a bare `npm install -g .`, which resolves whatever `npm config get prefix` reports. That is not necessarily the prefix the running binary lives under: a CLI installed under `~/.npm-global` on a machine whose npm config still points at `/usr` produced an `EACCES` on `/usr/lib/node_modules`, and the printed advice resolved the same wrong prefix and failed identically. The prefix is now derived from the resolved path of the running module, covering both the POSIX `<prefix>/lib/node_modules` and Windows `<prefix>/node_modules` layouts, and falls back to the previous prefix-less command when the CLI is not running from a global install. The executed command and the advice printed on failure are built from that one value, so they can no longer disagree.
+
+- **`@engram-ai-memory/cli`** — Both global-install call sites captured npm's output with `stdio: 'pipe'` and then discarded it in a bare `catch`, so a permissions failure and a network failure were indistinguishable single warning lines. npm's own last lines are now shown, bounded so they cannot bury the fix line beneath them.
+
+- **`@engram-ai-memory/cli`** — Reading the new revision for the closing banner could turn a completed update into a bare stack trace. The update has already happened by that point, so a git failure there now degrades to a warning.
+
+### Changed
+
+- **`@engram-ai-memory/cli`** — `engram update` no longer reports success it did not have. A failed global-CLI refresh or a server that does not come back replaces the green banner with a summary naming what did not happen, and exits `1`. An unattended run could previously not tell a clean update from one that left the server down.
+
+- **`@engram-ai-memory/cli`** — When the server was not running before an update, `engram update` said nothing at all and ended on a green banner that read as "restarted fine". It now states that there was nothing to restart and how to start it. This is not treated as a failure: a stopped server is a choice.
+
+- **`@engram-ai-memory/cli`** — The `--non-interactive` option on `engram setup` is documented as accepted for script compatibility. Setup has no prompt to suppress, and removing the option would break scripts that pass it, since unknown options are rejected.
+
 ## [0.6.3] — 2026-09-02
 
 ### Fixed
@@ -220,7 +238,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.4
 [0.6.3]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.3
 [0.6.2]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.2
 [0.6.1]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.1

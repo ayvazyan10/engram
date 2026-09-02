@@ -20,6 +20,9 @@ import {
   readJson, installHookScript, registerHook,
 } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
+import {
+  currentGlobalPrefix, globalInstallCommand, globalInstallAdvice, npmErrorLines,
+} from './globalInstall.js';
 import type { FetchFailure, RepoSyncResult } from './gitUpdate.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
@@ -202,6 +205,37 @@ function reportSyncFailure(result: RepoSyncResult, repoPath: string): void {
   }
 }
 
+/**
+ * Short HEAD of the updated checkout, or null when git cannot say. Only the
+ * closing banner needs it, and the update has already happened by then — a git
+ * hiccup at that point must not turn a successful update into a stack trace.
+ */
+function shortHead(repoPath: string): string | null {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
+  } catch (err) {
+    warn(`Updated, but could not read the new revision: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+// ─── Global CLI install ──────────────────────────────────────────────────────
+
+/**
+ * Explain a failed `npm install -g` in npm's own words, and hand back a fix
+ * line that targets the prefix this CLI actually lives under.
+ *
+ * Both call sites used to swallow the error whole: `stdio: 'pipe'` captures
+ * npm's diagnosis and a bare catch dropped it, so an EACCES on a prefix the
+ * user never chose surfaced as one warning line — followed by advice that
+ * resolved that same wrong prefix and failed the same way.
+ */
+function reportGlobalInstallFailure(err: unknown, prefix: string | null, verb: string): void {
+  warn(`Could not ${verb} the CLI globally.`);
+  for (const line of npmErrorLines(err)) console.log(`  ${D}${line}${X}`);
+  console.log(`  Fix: ${C}${globalInstallAdvice(prefix)}${X}`);
+}
+
 // ─── Claude Code auto-memory ───────────────────────────────────────────────────
 
 const HOOKS_DIR = path.join(ENGRAM_HOME, 'hooks');
@@ -272,7 +306,12 @@ program
   .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP + recall/session-end hooks)')
   .option('--npx', 'Use npx instead of cloning repo (fastest setup)')
   .option('--source <name>', 'AI client identifier (e.g. claude-code, cursor, windsurf)', 'mcp-client')
-  .option('--non-interactive', 'Run without prompts')
+  // Kept because commander rejects unknown options: dropping it would break
+  // any script already passing it. Setup asks nothing — git runs with
+  // GIT_TERMINAL_PROMPT=0 and stdin closed, and no other step prompts — so the
+  // flag has nothing to switch off. The help text says that instead of
+  // promising behaviour the code does not have.
+  .option('--non-interactive', 'Accepted for script compatibility — setup never prompts')
   .action(async (opts) => {
     console.log(`\n${B}  ⬡  Engram Setup${X}\n`);
 
@@ -345,11 +384,15 @@ program
       }
 
       step('Installing CLI globally...');
+      const prefix = currentGlobalPrefix();
       try {
-        execSync('npm install -g .', { cwd: path.join(config.repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
+        execSync(globalInstallCommand(prefix), { cwd: path.join(config.repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
         ok('CLI linked from repo build');
-      } catch {
-        warn('Could not install CLI globally. Try: npm install -g @engram-ai-memory/cli@latest');
+      } catch (err) {
+        // Setup carries on and still exits 0: the MCP wiring and Claude hooks
+        // below are what make the install usable, and they work with whatever
+        // `engram` binary the user already has on PATH.
+        reportGlobalInstallFailure(err, prefix, 'install');
       }
     } else {
       ok('Using npx mode — skipping clone/build');
@@ -951,12 +994,20 @@ program
       process.exit(1);
     }
 
+    // Everything that leaves the machine half-updated lands here. The repo has
+    // already moved by this point, so these are not fatal — but an unattended
+    // run must be able to tell them from a clean update, which costs the green
+    // banner and the zero exit code at the end.
+    const degraded: string[] = [];
+
     step('Updating CLI...');
+    const prefix = currentGlobalPrefix();
     try {
-      execSync('npm install -g .', { cwd: path.join(repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
+      execSync(globalInstallCommand(prefix), { cwd: path.join(repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
       ok('CLI updated globally');
-    } catch {
-      warn('Could not update CLI globally. Try: npm install -g @engram-ai-memory/cli@latest');
+    } catch (err) {
+      reportGlobalInstallFailure(err, prefix, 'update');
+      degraded.push('the global engram command was not updated — it still runs the previous version');
     }
 
     if (opts.restart !== false) {
@@ -1009,12 +1060,27 @@ program
             ? `Server exited during restart${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''}. Check logs:`
             : 'Server may not have restarted cleanly. Check logs:');
           console.log(`  ${D}cat ${LOG_PATH}${X}`);
+          degraded.push('the server did not come back up — Engram is not answering');
         }
+      } else {
+        // Not degraded — a stopped server is a choice, not a failure. It used
+        // to produce no output at all, which read as "restarted fine".
+        ok('Server was not running — nothing to restart');
+        console.log(`  Start it with: ${C}engram start${X}`);
       }
     }
 
-    const newRev = execSync('git rev-parse --short HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
-    console.log(`\n${B}${G}  Engram updated to ${newRev}${X}\n`);
+    const newRev = shortHead(repoPath);
+
+    if (degraded.length > 0) {
+      console.log(`\n${B}${Y}  Engram only partially updated${X}`);
+      console.log(`  The repository moved to ${newRev ?? 'the latest commit'}, but:`);
+      for (const problem of degraded) console.log(`    ${Y}!${X} ${problem}`);
+      console.log();
+      process.exit(1);
+    }
+
+    console.log(`\n${B}${G}  Engram updated${newRev ? ` to ${newRev}` : ''}${X}\n`);
   });
 
 // ─── store ───────────────────────────────────────────────────────────────────

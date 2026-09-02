@@ -122,6 +122,18 @@ describe('awaitServerHealthy', () => {
     expect(result.exitCode).toBe(7);
   });
 
+  it('stays unhealthy when the child died even though something else answers the port', async () => {
+    // `engram update` marks itself degraded off this flag alone, so a foreign
+    // process still serving /api/health on the port must not be mistaken for a
+    // server that came back up.
+    const { port, close } = await listenHealth();
+    const child = track(spawn(process.execPath, ['-e', 'process.exit(3)']));
+    await new Promise((r) => child.once('exit', r));
+    const result = await awaitServerHealthy(child, '127.0.0.1', port, { attempts: 10, intervalMs: 30 });
+    expect(result).toEqual({ healthy: false, exited: true, exitCode: 3 });
+    await close();
+  });
+
   it('reports failure (not exited) when a live child never becomes healthy', async () => {
     const child = track(spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']));
     const freePort = 59998; // nothing answers here
