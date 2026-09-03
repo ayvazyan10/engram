@@ -23,6 +23,7 @@ import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import {
   currentGlobalPrefix, globalInstallCommand, globalInstallAdvice, npmErrorLines,
 } from './globalInstall.js';
+import { installFailureHints } from './installFailure.js';
 import type { FetchFailure, RepoSyncResult } from './gitUpdate.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
@@ -236,6 +237,22 @@ function reportGlobalInstallFailure(err: unknown, prefix: string | null, verb: s
   console.log(`  Fix: ${C}${globalInstallAdvice(prefix)}${X}`);
 }
 
+/**
+ * Explain a failed dependency install. Shared by setup and update: the install
+ * is the same command in both, and so is everything that goes wrong with it.
+ *
+ * pnpm ran with `stdio: 'inherit'`, so its output is already on screen and none
+ * of it reached us — this adds the reading of it the user cannot do, not a
+ * diagnosis we do not have.
+ */
+function reportInstallFailure(): void {
+  fail('Install failed. Check the output above for details.');
+  for (const hint of installFailureHints()) {
+    console.log(`  ${D}${hint.cause}${X}`);
+    console.log(`  Fix: ${C}${hint.fix}${X}`);
+  }
+}
+
 // ─── Claude Code auto-memory ───────────────────────────────────────────────────
 
 const HOOKS_DIR = path.join(ENGRAM_HOME, 'hooks');
@@ -370,7 +387,7 @@ program
         execSync('pnpm install --no-frozen-lockfile', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
         ok('Dependencies installed');
       } catch {
-        fail('Install failed. Check the output above for details.');
+        reportInstallFailure();
         process.exit(1);
       }
 
@@ -981,7 +998,7 @@ program
       execSync('pnpm install --no-frozen-lockfile', { cwd: repoPath, stdio: 'inherit', env: execEnv });
       ok('Dependencies installed');
     } catch {
-      fail('Install failed. Check the output above.');
+      reportInstallFailure();
       process.exit(1);
     }
 

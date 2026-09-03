@@ -9,6 +9,16 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-09-03
+
+Published as `@engram-ai-memory/core` 0.6.2, `@engram-ai-memory/mcp` 0.6.3 and `@engram-ai-memory/cli` 0.6.5.
+
+### Fixed
+
+- **`@engram-ai-memory/core`** — `better-sqlite3` moves from `^11.9.1` to `^12.11.1`, because 11.x publishes prebuilt binaries only for Node ABIs 108 through 131, which stops at Node 23. On Node 24 `prebuild-install` found no binary and fell through to a `node-gyp` source build, so installing Engram required a full C++ toolchain — Visual Studio Build Tools on Windows, which a reported install did not have and could not finish. 12.11.1 ships prebuilds for Node 22 and 24 on every supported platform, `win32-arm64` included, so nothing is compiled locally. The bundled SQLite moves 3.49.2 to 3.53.2; none of its announced behaviour changes touch the API this package uses.
+
+- **`@engram-ai-memory/cli`** — A failed `pnpm install` during `engram setup` or `engram update` said only `Install failed. Check the output above for details.` The install inherits the terminal, so its output cannot be parsed here — but two causes account for nearly every report, and both end in the same unexplained `ELIFECYCLE` line. Both are now named with their fix: a Node version with no prebuilt native binary, quoting the version actually running, and a Windows file lock from a running Engram process, which `engram stop` clears.
+
 ## [0.6.4] — 2026-09-02
 
 ### Fixed
@@ -238,7 +248,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.5
 [0.6.4]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.4
 [0.6.3]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.3
 [0.6.2]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.2

@@ -6,9 +6,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       // cli.ts is the commander entrypoint (side effects on import); the
-      // extracted server-control and global-install logic is what carries the
-      // testable behaviour.
-      include: ['src/serverControl.ts', 'src/globalInstall.ts'],
+      // logic extracted out of it — server control, global install, the
+      // install-failure hints — is what carries the testable behaviour.
+      include: ['src/serverControl.ts', 'src/globalInstall.ts', 'src/installFailure.ts'],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
     },
   },
