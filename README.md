@@ -133,7 +133,7 @@ engram update               # Pull latest changes, rebuild, restart server
 engram update --force       # Update even with local repo changes (stashed, or kept on a backup branch)
 engram start                # Start the server (background)
 engram stop                 # Stop the server
-engram doctor               # Health checks (verifies ~/.mcp.json config)
+engram doctor               # Health checks (verifies MCP client configuration)
 engram status               # Server status + memory count
 engram configure            # View/set config (port, dbPath, namespace, etc.)
 ```
@@ -219,7 +219,17 @@ Set `ENGRAM_DB_PATH` to point at your database file.
 
 Add Engram as a native tool in any MCP-compatible AI client — no API calls, no wrappers.
 
-Create `~/.mcp.json` (global) or `.mcp.json` in a project root (per-project):
+Add the config below to the file your client reads:
+
+| Client | Config file |
+|---|---|
+| Claude Code (user scope) | `~/.claude.json` |
+| Claude Code (project scope) | `.mcp.json` in the project root |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+
+`engram setup --source <client>` writes the right one for you. Any other client
+reads its own file — check its documentation and paste the same block there.
 
 ```json
 {
@@ -235,7 +245,7 @@ Create `~/.mcp.json` (global) or `.mcp.json` in a project root (per-project):
 }
 ```
 
-> **Note:** Do not put `mcpServers` in `~/.claude/settings.json` — that file is for Claude Code settings only. MCP servers belong in `.mcp.json`.
+> **Note:** Do not put `mcpServers` in `~/.claude/settings.json` — that file is for Claude Code settings only. MCP servers belong in `~/.claude.json` (user scope) or `.mcp.json` (project scope).
 
 If you installed via `engram setup`, you can point to the local build instead:
 

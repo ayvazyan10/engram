@@ -56,7 +56,17 @@ The MCP server exposes Engram as native tools inside any MCP-compatible AI clien
 
 **Option A — npx (fastest, recommended)**
 
-Add to `~/.mcp.json` (global) or `.mcp.json` (per-project):
+Add to the config file your client reads:
+
+| Client | Config file |
+|---|---|
+| Claude Code (user scope) | `~/.claude.json` |
+| Claude Code (project scope) | `.mcp.json` in the project directory |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+
+`engram setup --source <client>` writes the right one for you. Any other client
+reads its own file — check its documentation and paste the same block there.
 
 ```json
 {
