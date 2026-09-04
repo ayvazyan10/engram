@@ -5,11 +5,43 @@ import {
   BarChart, Bar,
 } from 'recharts';
 import { useAnalyticsStore } from '../../store/analyticsStore.js';
-import { useTemplateStore } from '../../store/templateStore.js';
+import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
-import { STATUS, TYPE_COLORS } from '../../lib/tokens.js';
+import { RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, withAlpha } from '../../lib/tokens.js';
+import { toPlainText } from '../../lib/plainText.js';
 
-export default function AnalyticsView() {
+/** How many sources the bar chart plots. The panel says so out loud now
+ *  (M2) instead of silently dropping the other seven. */
+const SOURCE_CHART_LIMIT = 8;
+
+/** H5: the Y axis was 80px wide, so recharts clipped every label from the
+ *  LEFT — 'autopilot-learning' rendered as 'utopilot-learning' and
+ *  'claude-code-file-memory' as 'de-file-memory', which are not truncations,
+ *  they are different words. Real source names reach 26 characters; 140px
+ *  holds ~26 at fontSize 10. */
+export const SOURCE_AXIS_WIDTH = 140;
+export const SOURCE_LABEL_MAX = 24;
+
+const HEATMAP_CELL = 16;
+const HEATMAP_GAP = 2;
+const HEATMAP_DAY_LABEL = 28;
+/** Hour ticks: enough to orient, few enough not to collide at 9px. */
+const HEATMAP_HOUR_TICKS = [0, 6, 12, 18];
+const HEATMAP_MIN_ALPHA = 0.15;
+const HEATMAP_ALPHA_RANGE = 0.85;
+const HEATMAP_KEY_STEPS = [0, 0.25, 0.5, 0.75, 1];
+
+interface Props {
+  /** The app-level memory load state AppLayout threads to every view. This
+   *  view owns its own analytics request, so these only stand in when it has
+   *  nothing of its own to say — an auth failure fails both, and reporting it
+   *  once here beats reporting nothing. */
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+}
+
+export default function AnalyticsView({ loading: appLoading, error: appError, onRetry }: Props) {
   const { data, loading, days, error, setData, setLoading, setError } = useAnalyticsStore();
   const t = useTemplateStore((s) => s.activeTemplate);
 
@@ -23,28 +55,31 @@ export default function AnalyticsView() {
       .finally(() => setLoading(false));
   }, [days, setData, setLoading, setError]);
 
-  if (loading && !data) {
+  if ((loading || appLoading) && !data) {
     return (
       <div style={{ ...s.center, color: t.textMuted }}>Loading analytics…</div>
     );
   }
 
   // A failed request used to be indistinguishable from an empty dataset.
-  if (error && !data) {
+  const failure = error ?? appError ?? null;
+  if (failure && !data) {
     return (
-      <div style={{ ...s.center, flexDirection: 'column', gap: 12, color: STATUS.danger }}>
-        <div>Could not load analytics: {error}</div>
+      <div style={{ ...s.center, flexDirection: 'column', gap: SPACE.md, color: STATUS.danger }}>
+        <div>Could not load analytics: {failure}</div>
         <button
           className="ec-hover-tint"
           style={{
             background: 'transparent',
             border: `1px solid ${STATUS.danger}`,
             color: STATUS.danger,
-            borderRadius: 6,
-            padding: '6px 14px',
-            fontSize: 12,
+            borderRadius: RADIUS.sm,
+            padding: `${SPACE.xs} ${SPACE.lg}`,
+            fontSize: TYPE.base,
+            fontFamily: 'inherit',
           }}
           onClick={() => {
+            onRetry?.();
             setLoading(true);
             setError(null);
             api.getAnalytics(days)
@@ -66,19 +101,20 @@ export default function AnalyticsView() {
   }
 
   const typeData = Object.entries(data.byType).map(([name, value]) => ({ name, value }));
-  const sourceData = Object.entries(data.bySource)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([name, value]) => ({ name, value }));
+  const allSources = Object.entries(data.bySource).sort((a, b) => b[1] - a[1]);
+  const sourceData = allSources.slice(0, SOURCE_CHART_LIMIT).map(([name, value]) => ({ name, value }));
 
   return (
     <div style={{ ...s.root, background: t.rootBg }}>
-      {/* Stats row */}
+      {/* Stats row. M1: the fourth tile read `data.topConcepts.length`, which
+          is the API's page size and is therefore always 20 — a made-up
+          number sitting beside three real ones with equal authority. There
+          is no concept count on any endpoint, so the tile is gone rather
+          than wrong. */}
       <div style={s.statsRow}>
         <StatCard label="Total Memories" value={data.total} color={t.accent} t={t} />
-        <StatCard label="Avg Importance" value={`${(data.avgImportance * 100).toFixed(0)}%`} color="#22d3ee" t={t} />
-        <StatCard label="Concepts" value={data.topConcepts.length} color="#fbbf24" t={t} />
-        <StatCard label="Sources" value={Object.keys(data.bySource).length} color="#f472b6" t={t} />
+        <StatCard label="Avg Importance" value={`${(data.avgImportance * 100).toFixed(0)}%`} color={t.textPrimary} t={t} />
+        <StatCard label="Sources" value={allSources.length} color={t.textPrimary} t={t} />
       </div>
 
       {/* Growth chart */}
@@ -117,7 +153,7 @@ export default function AnalyticsView() {
 
       <div style={s.row}>
         {/* Type distribution */}
-        <div style={{ ...s.panel, ...s.halfPanel, background: t.cardBg, borderColor: t.panelBorder }}>
+        <div style={{ ...s.panel, background: t.cardBg, borderColor: t.panelBorder }}>
           <h3 style={{ ...s.panelTitle, color: t.textPrimary }}>By Type</h3>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
@@ -136,15 +172,22 @@ export default function AnalyticsView() {
             {typeData.map((d) => (
               <div key={d.name} style={s.legendItem}>
                 <span style={{ ...s.legendDot, background: TYPE_COLORS[d.name as keyof typeof TYPE_COLORS] ?? '#64748b' }} />
-                <span style={{ color: t.textSecondary, fontSize: '11px' }}>{d.name}: {d.value}</span>
+                <span className="ec-tabular" style={{ color: t.textSecondary, fontSize: TYPE.sm }}>{d.name}: {d.value}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Source distribution */}
-        <div style={{ ...s.panel, ...s.halfPanel, background: t.cardBg, borderColor: t.panelBorder }}>
-          <h3 style={{ ...s.panelTitle, color: t.textPrimary }}>By Source</h3>
+        {/* Source distribution. M2: was titled "By Source" above a chart
+            plotting 8 of the 15 the tile beside it counted, with no
+            qualifier saying so. */}
+        <div style={{ ...s.panel, background: t.cardBg, borderColor: t.panelBorder }}>
+          <div style={s.panelHead}>
+            <h3 style={{ ...s.panelTitle, color: t.textPrimary }}>Top Sources</h3>
+            <span className="ec-tabular" style={{ ...s.panelCaption, color: t.textMuted }}>
+              {sourceData.length} of {allSources.length}
+            </span>
+          </div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={sourceData} layout="vertical">
               <XAxis type="number" tick={{ fill: t.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -154,7 +197,8 @@ export default function AnalyticsView() {
                 tick={{ fill: t.textSecondary, fontSize: 10 }}
                 axisLine={false}
                 tickLine={false}
-                width={80}
+                width={SOURCE_AXIS_WIDTH}
+                tickFormatter={truncateSourceLabel}
               />
               <Tooltip
                 contentStyle={{ background: t.panelBg, border: `1px solid ${t.panelBorder}`, borderRadius: 8, fontSize: 12 }}
@@ -169,13 +213,20 @@ export default function AnalyticsView() {
       {/* Top concepts */}
       <div style={{ ...s.panel, background: t.cardBg, borderColor: t.panelBorder }}>
         <h3 style={{ ...s.panelTitle, color: t.textPrimary }}>Top Concepts</h3>
+        {/* M10: was a ragged flex wrap of chips 100-300px wide whose last row
+            left 445px dead, with no truncation. A grid gives one column
+            rhythm; the full value stays on `title`. H4 strips the Markdown
+            these concepts arrive wrapped in. */}
         <div style={s.conceptGrid}>
-          {data.topConcepts.map((c) => (
-            <div key={c.concept} style={{ ...s.conceptChip, background: t.inputBg, borderColor: t.panelBorder }}>
-              <span style={{ color: t.textPrimary, fontSize: '12px', fontWeight: 500 }}>{c.concept}</span>
-              <span style={{ color: t.textMuted, fontSize: '10px' }}>{c.count} memories</span>
-            </div>
-          ))}
+          {data.topConcepts.map((c) => {
+            const label = toPlainText(c.concept);
+            return (
+              <div key={c.concept} title={label} style={{ ...s.conceptChip, background: t.inputBg, borderColor: t.panelBorder }}>
+                <span style={{ ...s.conceptName, color: t.textPrimary }}>{label}</span>
+                <span className="ec-tabular" style={{ color: t.textMuted, fontSize: TYPE.xs }}>{c.count} memories</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -188,11 +239,17 @@ export default function AnalyticsView() {
   );
 }
 
-function StatCard({ label, value, color, t }: { label: string; value: string | number; color: string; t: ReturnType<typeof useTemplateStore.getState>['activeTemplate'] }) {
+/** Truncate at the END, with an ellipsis, so the label still starts on the
+ *  word the source is actually called (H5). */
+export function truncateSourceLabel(value: string): string {
+  return value.length > SOURCE_LABEL_MAX ? `${value.slice(0, SOURCE_LABEL_MAX - 1)}…` : value;
+}
+
+function StatCard({ label, value, color, t }: { label: string; value: string | number; color: string; t: UITemplate }) {
   return (
     <div style={{ ...s.statCard, background: t.cardBg, borderColor: t.panelBorder }}>
-      <div style={{ fontSize: '24px', fontWeight: 700, color, letterSpacing: '-0.02em' }}>{value}</div>
-      <div style={{ fontSize: '11px', color: t.textMuted, marginTop: '4px' }}>{label}</div>
+      <div className="ec-tabular" style={{ fontSize: TYPE.display, fontWeight: 700, color, letterSpacing: '-0.02em' }}>{value}</div>
+      <div style={{ fontSize: TYPE.sm, color: t.textMuted, marginTop: SPACE['2xs'] }}>{label}</div>
     </div>
   );
 }
@@ -209,36 +266,73 @@ function ActivityHeatmap({ data }: { data: Array<{ hour: number; dayOfWeek: numb
     })
   );
 
+  // M3: was a hardcoded rgba(99,102,241,…) — Neural's accent — so the one
+  // surface the theme switcher provably did not reach stayed indigo in Mono
+  // and Midnight.
+  const cellColor = (intensity: number) => withAlpha(t.accent, HEATMAP_MIN_ALPHA + intensity * HEATMAP_ALPHA_RANGE);
+
   return (
     <div style={{ overflowX: 'auto' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '500px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: `${HEATMAP_GAP}px`, minWidth: '500px' }}>
         {grid.map((row, dow) => (
-          <div key={dow} style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-            <span style={{ width: '28px', fontSize: '9px', color: t.textMuted, flexShrink: 0 }}>{days[dow]}</span>
-            {row.map((count, h) => {
-              const intensity = count / maxCount;
-              return (
-                <div
-                  key={h}
-                  title={`${days[dow]} ${h}:00 — ${count} memories`}
-                  style={{
-                    width: '16px',
-                    height: '16px',
-                    borderRadius: '3px',
-                    background: count === 0
-                      ? t.inputBg
-                      : `rgba(99, 102, 241, ${0.15 + intensity * 0.85})`,
-                  }}
-                />
-              );
-            })}
+          <div key={dow} style={{ display: 'flex', alignItems: 'center', gap: `${HEATMAP_GAP}px` }}>
+            <span style={{ width: `${HEATMAP_DAY_LABEL}px`, fontSize: TYPE.micro, color: t.textMuted, flexShrink: 0 }}>{days[dow]}</span>
+            {row.map((count, h) => (
+              <div
+                key={h}
+                title={`${days[dow]} ${h}:00 — ${count} memories`}
+                style={{
+                  width: `${HEATMAP_CELL}px`,
+                  height: `${HEATMAP_CELL}px`,
+                  borderRadius: RADIUS.tight,
+                  flexShrink: 0,
+                  background: count === 0 ? t.inputBg : cellColor(count / maxCount),
+                }}
+              />
+            ))}
           </div>
         ))}
+
+        {/* M4: the grid's only affordance was a `title`, which does not exist
+            on touch — there was no hour axis and no way to read an intensity.
+            The ticks sit on the same 18px cell pitch as the grid above. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: `${HEATMAP_GAP}px`, marginTop: SPACE['3xs'] }}>
+          <span style={{ width: `${HEATMAP_DAY_LABEL}px`, flexShrink: 0 }} />
+          {Array.from({ length: 24 }, (_, h) => (
+            <span
+              key={h}
+              className="ec-tabular"
+              style={{ width: `${HEATMAP_CELL}px`, flexShrink: 0, fontSize: TYPE.micro, color: t.textMuted, textAlign: 'center' as const }}
+            >
+              {HEATMAP_HOUR_TICKS.includes(h) ? h : ''}
+            </span>
+          ))}
+        </div>
+
+        <div style={s.heatmapKey}>
+          <span style={{ fontSize: TYPE.micro, color: t.textMuted }}>Less</span>
+          {HEATMAP_KEY_STEPS.map((step) => (
+            <span
+              key={step}
+              style={{
+                width: `${HEATMAP_CELL - 4}px`,
+                height: `${HEATMAP_CELL - 4}px`,
+                borderRadius: RADIUS.tight,
+                background: step === 0 ? t.inputBg : cellColor(step),
+              }}
+            />
+          ))}
+          <span style={{ fontSize: TYPE.micro, color: t.textMuted }}>More</span>
+        </div>
       </div>
     </div>
   );
 }
 
+// M7: this file imported TYPE_COLORS and STATUS from lib/tokens.ts and never
+// TYPE, SPACE or RADIUS — every size and space below was a raw literal, with
+// radius 12px and font sizes written as strings. Substituted to the nearest
+// scale step.
 const s = {
   root: {
     flex: 1,
@@ -249,35 +343,44 @@ const s = {
     padding: 'clamp(16px, 4vw, 28px) clamp(16px, 5vw, 36px)',
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '20px',
+    gap: SPACE.xl,
   },
   center: {
     flex: 1,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '14px',
+    fontSize: TYPE.lg,
   },
   statsRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-    gap: '12px',
+    gap: SPACE.md,
   },
   statCard: {
     border: '1px solid',
-    borderRadius: '12px',
-    padding: '18px 20px',
+    borderRadius: RADIUS.lg,
+    padding: `${SPACE.xl} ${SPACE.xl}`,
   },
   panel: {
     border: '1px solid',
-    borderRadius: '12px',
-    padding: '20px',
+    borderRadius: RADIUS.lg,
+    padding: SPACE.xl,
+    minWidth: 0,
+  },
+  panelHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: SPACE.sm,
   },
   panelTitle: {
-    fontSize: '13px',
+    fontSize: TYPE.md,
     fontWeight: 600,
-    marginBottom: '16px',
-    margin: '0 0 16px 0',
+    margin: `0 0 ${SPACE.lg} 0`,
+  },
+  panelCaption: {
+    fontSize: TYPE.sm,
   },
   row: {
     display: 'grid',
@@ -286,19 +389,19 @@ const s = {
     // give each at least 260px, instead of squeezing a pie chart into ~140px
     // at 320-375px (V3).
     gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-    gap: '16px',
+    gap: SPACE.lg,
   },
-  halfPanel: {},
   legend: {
     display: 'flex',
-    gap: '12px',
+    gap: SPACE.md,
     justifyContent: 'center',
-    marginTop: '8px',
+    marginTop: SPACE.sm,
+    flexWrap: 'wrap' as const,
   },
   legendItem: {
     display: 'flex',
     alignItems: 'center',
-    gap: '4px',
+    gap: SPACE['2xs'],
   },
   legendDot: {
     width: '8px',
@@ -307,15 +410,31 @@ const s = {
     display: 'inline-block',
   },
   conceptGrid: {
-    display: 'flex',
-    flexWrap: 'wrap' as const,
-    gap: '8px',
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+    gap: SPACE.sm,
   },
   conceptChip: {
     display: 'flex',
     flexDirection: 'column' as const,
-    padding: '8px 12px',
-    borderRadius: '8px',
+    gap: SPACE['3xs'],
+    padding: `${SPACE.sm} ${SPACE.md}`,
+    borderRadius: RADIUS.md,
     border: '1px solid',
+    minWidth: 0,
+  },
+  conceptName: {
+    fontSize: TYPE.base,
+    fontWeight: 500,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+  },
+  heatmapKey: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: SPACE['2xs'],
+    marginTop: SPACE.sm,
   },
 } as const;

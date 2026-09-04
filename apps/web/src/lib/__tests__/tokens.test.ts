@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { contrastRatio, hexToInt, relativeLuminance, TYPE_COLORS, withAlpha } from '../tokens.js';
+import {
+  contrastRatio, hexToInt, relativeLuminance,
+  GLYPH, ON_STATUS, REFLECTION_COLORS, STATUS, TYPE_COLORS, TYPE_ICONS, withAlpha,
+} from '../tokens.js';
+import { TEMPLATES } from '../../store/templateStore.js';
 
 describe('relativeLuminance / contrastRatio (V4 — the honest proof)', () => {
   it('black vs white is the maximum WCAG ratio, 21:1', () => {
@@ -63,5 +67,59 @@ describe('TYPE_COLORS (V5 — single source of truth)', () => {
     expect(TYPE_COLORS.episodic).toBe('#818cf8');
     expect(contrastRatio(TYPE_COLORS.episodic, '#020817')).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio('#6366f1', '#020817')).toBeLessThan(4.5);
+  });
+});
+
+// The same honest proof templateStore.contrast.test.ts runs for template text
+// roles, applied to the template-independent colour roles this module owns.
+// REFLECTION_COLORS and ON_STATUS are text; a reader has to be able to read
+// them on every surface they land on, in every skin.
+const SURFACES = ['rootBg', 'panelBg', 'cardBg', 'inputBg', 'statusBg', 'headerBg'] as const;
+
+describe('REFLECTION_COLORS (M8/H4 — four hex literals that lived inline in ReflectionView)', () => {
+  it('has exactly the four reflection types, each a valid 6-digit hex', () => {
+    expect(Object.keys(REFLECTION_COLORS).sort()).toEqual([
+      'contradiction_summary', 'knowledge_gap', 'pattern', 'trend',
+    ]);
+    for (const hex of Object.values(REFLECTION_COLORS)) {
+      expect(hex).toMatch(/^#[0-9a-f]{6}$/i);
+    }
+  });
+
+  it('every one clears 4.5:1 against every surface of every template', () => {
+    for (const t of TEMPLATES) {
+      for (const surface of SURFACES) {
+        for (const [name, hex] of Object.entries(REFLECTION_COLORS)) {
+          expect(contrastRatio(hex, t[surface]), `${name} on ${t.id}.${surface}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    }
+  });
+});
+
+describe('ON_STATUS (H8 — text on a solid STATUS fill)', () => {
+  it('danger text clears 4.5:1 against the danger fill it sits on', () => {
+    expect(contrastRatio(ON_STATUS.danger, STATUS.danger)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('GLYPH (L6 — one glyph per meaning, no colour emoji)', () => {
+  it('never reuses a glyph for two meanings', () => {
+    const values = Object.values(GLYPH);
+    expect(new Set(values).size).toBe(values.length);
+  });
+
+  it('contains no colour emoji or variation selectors — the app mixed 🕐/💡/⚙️ with monochrome line glyphs', () => {
+    for (const [name, glyph] of Object.entries(GLYPH)) {
+      expect(glyph, `${name} carries a VS16 emoji presentation selector`).not.toContain('️');
+      // Emoji live above U+1F000; every glyph here is a BMP symbol.
+      expect([...glyph].every((c) => c.codePointAt(0)! < 0x1f000), `${name} is an emoji`).toBe(true);
+    }
+  });
+
+  it('the memory-type icons are drawn from that registry rather than re-typed', () => {
+    expect(TYPE_ICONS.episodic).toBe(GLYPH.episodic);
+    expect(TYPE_ICONS.semantic).toBe(GLYPH.semantic);
+    expect(TYPE_ICONS.procedural).toBe(GLYPH.procedural);
   });
 });

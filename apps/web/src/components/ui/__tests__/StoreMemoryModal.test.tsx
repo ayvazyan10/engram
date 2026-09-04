@@ -81,3 +81,39 @@ describe('StoreMemoryModal accessibility (W7)', () => {
     expect(document.activeElement).toBe(last);
   });
 });
+
+describe('StoreMemoryModal fields (M5, M9)', () => {
+  it('shows importance as a percentage, like every other surface (M9)', () => {
+    render(<StoreMemoryModal onClose={vi.fn()} onStored={vi.fn()} />);
+    expect(screen.getByText('70%')).toBeInTheDocument();
+    expect(screen.queryByText('0.7')).not.toBeInTheDocument();
+  });
+
+  it('steps the importance slider finely enough to express the values the API returns', () => {
+    render(<StoreMemoryModal onClose={vi.fn()} onStored={vi.fn()} />);
+    expect(screen.getByLabelText(/importance/i)).toHaveAttribute('step', '0.05');
+  });
+
+  it('makes every form control inherit the body font — the select and both inputs did not (M5)', () => {
+    render(<StoreMemoryModal onClose={vi.fn()} onStored={vi.fn()} />);
+    for (const field of [
+      screen.getByLabelText(/type/i),
+      screen.getByLabelText(/concept/i),
+      screen.getByLabelText(/tags/i),
+      screen.getByPlaceholderText(/what do you want to remember/i),
+    ]) {
+      expect((field as HTMLElement).style.fontFamily).toBe('inherit');
+    }
+  });
+
+  it('strips the native chrome off the select, which stayed light inside a dark panel (M5)', () => {
+    render(<StoreMemoryModal onClose={vi.fn()} onStored={vi.fn()} />);
+    const select = screen.getByLabelText(/type/i);
+    expect(select.className).toContain('ec-select');
+    // The caret is painted by that class — an inline `background` shorthand
+    // here would reset its background-image and silently erase it, so the
+    // surface colour has to come through the longhand.
+    expect(select.getAttribute('style')).toContain('background-color');
+    expect(select.style.backgroundImage).toBe('');
+  });
+});

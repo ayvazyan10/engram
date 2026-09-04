@@ -25,12 +25,77 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
 }
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
+/* ─── Scrollbars (L4) ────────────────────────────────────────────────────────
+ * Were 4px wide with a hardcoded '#1e293b' thumb — slate, in all three
+ * templates, and effectively invisible on a surface that is 1.5 viewports
+ * tall (Analytics) with no other scroll cue. Now 10px, and tinted from the
+ * live '--ec-accent' mirror (kept in sync with the active template by
+ * useThemeVars), so the cue is both findable and themed. The flat rgba
+ * declaration is the fallback for engines without color-mix. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #334155; }
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.38);
+  background: color-mix(in srgb, var(--ec-accent, #6366f1) 38%, transparent);
+  border-radius: var(--ec-radius-pill, 999px);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.62);
+  background: color-mix(in srgb, var(--ec-accent, #6366f1) 62%, transparent);
+  background-clip: padding-box;
+}
+/* Firefox has no ::-webkit-scrollbar; this is the whole treatment there.
+ * Both properties inherit, so the root element is enough. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
+  scrollbar-color: color-mix(in srgb, var(--ec-accent, #6366f1) 38%, transparent) transparent;
+}
 
 @keyframes ec-spin { to { transform: rotate(360deg); } }
+
+/* ─── Numerals (M13) ─────────────────────────────────────────────────────────
+ * Nothing in the app set this, so the live recall-latency readout and every
+ * right-aligned timestamp reflowed as their digits changed (proportional '1'
+ * is narrower than '0' in Inter). Applied to the readouts and timestamps that
+ * sit in a column or update in place. */
+.ec-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Long, unbroken tokens (H10) ────────────────────────────────────────────
+ * Memory bodies contain version strings, absolute paths and hashes with no
+ * break opportunity, which overflowed the inspector's 210px text column. */
+.ec-wrap-anywhere {
+  overflow-wrap: anywhere;
+}
+
+/* Line-clamped body text with a "Show all" toggle beneath it (H10). The
+ * clamp count is set per-element via --ec-clamp-lines. */
+.ec-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--ec-clamp-lines, 10);
+  line-clamp: var(--ec-clamp-lines, 10);
+  overflow: hidden;
+}
+
+/* ─── Select (M5) ────────────────────────────────────────────────────────────
+ * A native select keeps the OS's own chrome — a light-grey caret well on a
+ * white strip inside an otherwise dark panel. `appearance: none` plus a caret
+ * drawn from the current text colour puts it back inside the theme. */
+.ec-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+                    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
 
 input::placeholder { color: #64748b; }
 input:focus::placeholder { color: #94a3b8; }
@@ -130,7 +195,14 @@ select:focus-visible,
 
 /* Mode-tab / view-switcher text labels collapse to icon-only first — the
  * icons plus each button's `title` tooltip keep every control usable, they
- * just stop demanding horizontal space. */
+ * just stop demanding horizontal space.
+ *
+ * M12: the template switcher deliberately does NOT use this class. Its
+ * "icon" is an 8px dot of the template's accent colour, which names nothing
+ * — hiding its label turned the theme control into three anonymous dots
+ * whose only label was a `title`, and `title` never appears on touch. It
+ * uses `.ec-template-label` and collapses to a single *named* button below
+ * 640px instead (see TemplateSwitcher.tsx). */
 @media (max-width: 860px) {
   .ec-switcher-label {
     display: none;

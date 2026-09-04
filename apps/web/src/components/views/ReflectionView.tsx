@@ -1,23 +1,36 @@
-import { useEffect, useRef } from 'react';
-import { format } from 'date-fns';
+import { useEffect, useRef, useState } from 'react';
 import { useReflectionStore, type ReflectionInsight } from '../../store/reflectionStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
-import { STATUS, withAlpha } from '../../lib/tokens.js';
-import { safeParseISO } from '../../lib/dates.js';
+import {
+  GLYPH, MEASURE, RADIUS, REFLECTION_COLORS, SPACE, STATUS, TYPE, withAlpha,
+} from '../../lib/tokens.js';
+import { formatDateTime } from '../../lib/dates.js';
+import { toPlainText } from '../../lib/plainText.js';
 
 const REFLECTION_TYPES = ['pattern', 'knowledge_gap', 'trend', 'contradiction_summary'] as const;
 
 const TYPE_META: Record<string, { icon: string; label: string; color: string }> = {
-  pattern: { icon: '◈', label: 'Pattern', color: '#818cf8' },
-  knowledge_gap: { icon: '◇', label: 'Knowledge Gap', color: '#f472b6' },
-  trend: { icon: '◆', label: 'Trend', color: '#22d3ee' },
-  contradiction_summary: { icon: '⬡', label: 'Contradiction', color: '#fbbf24' },
+  pattern: { icon: GLYPH.pattern, label: 'Pattern', color: REFLECTION_COLORS.pattern },
+  knowledge_gap: { icon: GLYPH.knowledgeGap, label: 'Knowledge Gap', color: REFLECTION_COLORS.knowledge_gap },
+  trend: { icon: GLYPH.trend, label: 'Trend', color: REFLECTION_COLORS.trend },
+  contradiction_summary: { icon: GLYPH.contradiction, label: 'Contradiction', color: REFLECTION_COLORS.contradiction_summary },
 };
 
-export default function ReflectionView() {
+interface Props {
+  /** The app-level memory load state AppLayout threads to every view. This
+   *  view owns its own reflections request; these stand in when it has
+   *  nothing of its own to say, and `onRetry` is wired into the banner's
+   *  Retry alongside a refetch of the reflections themselves. */
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+}
+
+export default function ReflectionView({ loading: appLoading, error: appError, onRetry }: Props) {
   const { insights, status, loading, filterType, error, setInsights, setStatus, setLoading, setFilterType, setError } = useReflectionStore();
   const t = useTemplateStore((s) => s.activeTemplate);
+  const [reloadToken, setReloadToken] = useState(0);
 
   // W6: bumped per load, captured per-call, so a stale response (the
   // "Pattern" tab's request resolving after the user has already switched to
@@ -49,9 +62,10 @@ export default function ReflectionView() {
       .finally(() => {
         if (requestId === latestRequestId.current) setLoading(false);
       });
-  }, [filterType, setInsights, setStatus, setLoading, setError]);
+  }, [filterType, reloadToken, setInsights, setStatus, setLoading, setError]);
 
   const remaining = status ? Math.max(0, status.threshold - status.counter) : null;
+  const failure = error ?? appError ?? null;
 
   return (
     <div style={{ ...s.root, background: t.rootBg }}>
@@ -67,15 +81,16 @@ export default function ReflectionView() {
           {status && (
             <div style={{ ...s.statusPill, background: t.cardBg, borderColor: t.panelBorder }}>
               <span
+                aria-hidden="true"
                 style={{
                   width: 6,
                   height: 6,
                   borderRadius: '50%',
-                  background: !status.enabled ? '#6b7280' : status.due ? '#fbbf24' : '#22c55e',
+                  background: !status.enabled ? t.textMuted : status.due ? STATUS.warning : STATUS.success,
                   display: 'inline-block',
                 }}
               />
-              <span style={{ color: t.textSecondary, fontSize: '11px' }}>
+              <span style={{ color: t.textSecondary, fontSize: TYPE.sm }}>
                 {!status.enabled
                   ? 'Reflection off'
                   : status.due
@@ -87,10 +102,12 @@ export default function ReflectionView() {
         </div>
       </div>
 
-      {/* Due hint — reflection is AI-driven, not server-generated */}
+      {/* Due hint — reflection is AI-driven, not server-generated. M8: the
+          banner concatenated alpha onto a hex string ('#fbbf2415'), the exact
+          pattern withAlpha exists to replace. */}
       {status?.due && (
-        <div style={{ ...s.dueBanner, background: '#fbbf2415', borderColor: '#fbbf24' }}>
-          <span style={{ color: '#f59e0b', fontSize: '13px' }}>
+        <div style={{ ...s.dueBanner, background: withAlpha(STATUS.warning, 0.08), borderColor: STATUS.warning }}>
+          <span style={{ color: STATUS.warning, fontSize: TYPE.md }}>
             A reflection cycle is due. Ask the AI connected to Engram to run <code style={s.code}>request_reflection</code>, then <code style={s.code}>store_reflection</code> for each insight it finds.
           </span>
         </div>
@@ -115,34 +132,48 @@ export default function ReflectionView() {
               style={{ ...s.filterBtn, ...(active ? { background: withAlpha(meta.color, 0.13), color: meta.color } : { color: t.textSecondary }) }}
               onClick={() => setFilterType(type)}
             >
-              {meta.icon} {meta.label}
+              <span aria-hidden="true">{meta.icon}</span> {meta.label}
             </button>
           );
         })}
       </div>
 
       {/* Error */}
-      {error && (
+      {failure && (
         <div style={{ ...s.errorBanner, background: withAlpha(STATUS.danger, 0.08), borderColor: STATUS.danger }}>
-          <span style={{ color: STATUS.danger, fontSize: '13px' }}>{error}</span>
-          <button
-            className="ec-hover-bright"
-            style={{ background: 'none', border: 'none', color: STATUS.danger, fontSize: '16px', padding: 0, lineHeight: 1 }}
-            onClick={() => setError(null)}
-          >
-            ×
-          </button>
+          <span style={{ color: STATUS.danger, fontSize: TYPE.md }}>{failure}</span>
+          <div style={s.errorActions}>
+            <button
+              className="ec-hover-tint"
+              style={{ ...s.retryBtn, color: STATUS.danger, borderColor: withAlpha(STATUS.danger, 0.35) }}
+              onClick={() => {
+                setError(null);
+                onRetry?.();
+                setReloadToken((n) => n + 1);
+              }}
+            >
+              Retry
+            </button>
+            <button
+              className="ec-hover-bright"
+              style={{ background: 'none', border: 'none', color: STATUS.danger, fontSize: TYPE.xl, padding: 0, lineHeight: 1 }}
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
 
       {/* Content */}
-      {loading ? (
+      {loading || appLoading ? (
         <div style={{ ...s.center, color: t.textMuted }}>Loading reflections…</div>
       ) : insights.length === 0 ? (
         <div style={{ ...s.emptyState, borderColor: t.panelBorder }}>
-          <div style={{ fontSize: '32px', marginBottom: '12px' }}>◈</div>
-          <div style={{ color: t.textSecondary, fontSize: '14px' }}>No reflections yet</div>
-          <div style={{ color: t.textMuted, fontSize: '12px', marginTop: '4px', maxWidth: 380, textAlign: 'center' }}>
+          <div aria-hidden="true" style={{ fontSize: TYPE.glyph, marginBottom: SPACE.md }}>◈</div>
+          <div style={{ color: t.textSecondary, fontSize: TYPE.lg }}>No reflections yet</div>
+          <div style={{ color: t.textMuted, fontSize: TYPE.base, marginTop: SPACE['2xs'], maxWidth: 380, textAlign: 'center' }}>
             Reflections are generated by the AI connected to Engram via MCP
             (<code style={s.code}>request_reflection</code> → <code style={s.code}>store_reflection</code>).
             They appear here once stored.
@@ -166,34 +197,39 @@ function InsightCard({ insight }: { insight: ReflectionInsight }) {
   return (
     <div style={{ ...s.card, background: t.cardBg, borderColor: t.panelBorder }}>
       <div style={s.cardTop}>
-        <span style={{ ...s.cardType, background: meta.color + '15', color: meta.color }}>
-          {meta.icon} {meta.label}
+        {/* M8: was `meta.color + '15'`. */}
+        <span style={{ ...s.cardType, background: withAlpha(meta.color, 0.08), color: meta.color }}>
+          <span aria-hidden="true">{meta.icon}</span> {meta.label}
         </span>
-        <span style={{ color: t.textMuted, fontSize: '10px' }}>
-          {/* W10: an unparsable createdAt must not throw — there is no
-              error boundary anywhere, so one bad row used to blank the
-              whole app permanently. */}
-          {(() => {
-            const parsed = safeParseISO(insight.createdAt);
-            return parsed ? format(parsed, 'MMM d, HH:mm') : 'Unknown date';
-          })()}
+        {/* W10: an unparsable createdAt must not throw — there is no error
+            boundary anywhere, so one bad row used to blank the whole app
+            permanently. M13: one named format, not a fourth ad-hoc one. */}
+        <span className="ec-tabular" style={{ color: t.textMuted, fontSize: TYPE.xs }}>
+          {formatDateTime(insight.createdAt)}
         </span>
       </div>
-      <div style={{ ...s.cardContent, color: t.textPrimary }}>
-        {insight.content}
+      {/* H3: this box measured 1330px at 13px — about 205 characters per
+          line, where readable measure is 45-75. The card stays full width so
+          the badge/date row and the footer still span it; only the running
+          text is capped. H4: and it printed raw Markdown. */}
+      <div className="ec-wrap-anywhere" style={{ ...s.cardContent, color: t.textPrimary }}>
+        {toPlainText(insight.content)}
       </div>
       <div style={s.cardBottom}>
-        <span style={{ color: t.textMuted, fontSize: '10px' }}>
-          Confidence: {(insight.confidence * 100).toFixed(0)}%
+        <span className="ec-tabular" style={{ color: t.textMuted, fontSize: TYPE.xs }}>
+          {GLYPH.confidence} Confidence: {(insight.confidence * 100).toFixed(0)}%
         </span>
-        <span style={{ color: t.textMuted, fontSize: '10px' }}>
-          Importance: {(insight.importance * 100).toFixed(0)}%
+        <span className="ec-tabular" style={{ color: t.textMuted, fontSize: TYPE.xs }}>
+          {GLYPH.importance} Importance: {(insight.importance * 100).toFixed(0)}%
         </span>
       </div>
     </div>
   );
 }
 
+// M7: every size and space here was a raw literal — radius 12px, spacing
+// 5/10/14/16/18/48px, font sizes as strings. Substituted to the nearest
+// scale step.
 const s = {
   root: {
     flex: 1,
@@ -201,79 +237,98 @@ const s = {
     padding: 'clamp(16px, 4vw, 28px) clamp(16px, 5vw, 36px)',
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '20px',
+    gap: SPACE.xl,
   },
   header: {
     display: 'flex',
     flexWrap: 'wrap' as const,
-    gap: '12px',
+    gap: SPACE.md,
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
   title: {
-    fontSize: '18px',
+    fontSize: TYPE['2xl'],
     fontWeight: 700,
     margin: 0,
     letterSpacing: '-0.02em',
   },
   subtitle: {
-    fontSize: '12px',
-    margin: '4px 0 0',
+    fontSize: TYPE.base,
+    margin: `${SPACE['2xs']} 0 0`,
   },
   headerRight: {
     display: 'flex',
     alignItems: 'center',
-    gap: '10px',
+    gap: SPACE.md,
   },
   statusPill: {
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    padding: '5px 10px',
-    borderRadius: '6px',
+    gap: SPACE.xs,
+    padding: `${SPACE.xs} ${SPACE.md}`,
+    borderRadius: RADIUS.sm,
     border: '1px solid',
   },
   dueBanner: {
-    padding: '10px 14px',
-    borderRadius: '8px',
+    padding: `${SPACE.md} ${SPACE.lg}`,
+    borderRadius: RADIUS.md,
     border: '1px solid',
   },
   code: {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: '12px',
-    padding: '1px 4px',
-    borderRadius: '4px',
+    fontSize: TYPE.base,
+    padding: `1px ${SPACE['2xs']}`,
+    borderRadius: RADIUS.tight,
     background: 'rgba(148,163,184,0.16)',
   } as React.CSSProperties,
   filters: {
     display: 'flex',
-    gap: '6px',
+    gap: SPACE.xs,
     flexWrap: 'wrap' as const,
   },
   filterBtn: {
     background: 'transparent',
     border: 'none',
-    borderRadius: '6px',
-    padding: '5px 12px',
-    fontSize: '11px',
+    borderRadius: RADIUS.sm,
+    padding: `${SPACE.xs} ${SPACE.md}`,
+    fontSize: TYPE.sm,
     fontWeight: 500,
     cursor: 'pointer',
+    fontFamily: 'inherit',
+    minHeight: 24,
     transition: 'background 0.15s',
   },
   errorBanner: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '10px 14px',
-    borderRadius: '8px',
+    gap: SPACE.md,
+    padding: `${SPACE.md} ${SPACE.lg}`,
+    borderRadius: RADIUS.md,
     border: '1px solid',
+  },
+  errorActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: SPACE.md,
+    flexShrink: 0,
+  },
+  retryBtn: {
+    background: 'transparent',
+    border: '1px solid',
+    borderRadius: RADIUS.tight,
+    padding: `${SPACE['3xs']} ${SPACE.sm}`,
+    fontSize: TYPE.sm,
+    fontWeight: 600,
+    fontFamily: 'inherit',
+    minHeight: 24,
   },
   center: {
     flex: 1,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '14px',
+    fontSize: TYPE.lg,
   },
   emptyState: {
     flex: 1,
@@ -282,40 +337,44 @@ const s = {
     alignItems: 'center',
     justifyContent: 'center',
     border: '1px dashed',
-    borderRadius: '12px',
-    padding: '48px',
+    borderRadius: RADIUS.lg,
+    padding: SPACE['3xl'],
   },
   grid: {
     display: 'flex',
     flexDirection: 'column' as const,
-    gap: '12px',
+    gap: SPACE.md,
   },
   card: {
     border: '1px solid',
-    borderRadius: '10px',
-    padding: '16px 18px',
+    borderRadius: RADIUS.lg,
+    padding: `${SPACE.lg} ${SPACE.xl}`,
     transition: 'transform 0.12s',
   },
   cardTop: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: '10px',
+    gap: SPACE.sm,
+    marginBottom: SPACE.md,
   },
   cardType: {
-    fontSize: '10px',
+    fontSize: TYPE.xs,
     fontWeight: 600,
-    padding: '3px 8px',
-    borderRadius: '4px',
+    padding: `${SPACE['3xs']} ${SPACE.sm}`,
+    borderRadius: RADIUS.tight,
     letterSpacing: '0.02em',
+    whiteSpace: 'nowrap' as const,
   },
   cardContent: {
-    fontSize: '13px',
-    lineHeight: '1.6',
-    marginBottom: '10px',
+    fontSize: TYPE.md,
+    lineHeight: 1.6,
+    marginBottom: SPACE.md,
+    maxWidth: MEASURE.readable,
   },
   cardBottom: {
     display: 'flex',
-    gap: '16px',
+    gap: SPACE.lg,
+    flexWrap: 'wrap' as const,
   },
 } as const;

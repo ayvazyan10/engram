@@ -35,6 +35,16 @@ describe('UITemplate text contrast (V4) — every template, every surface', () =
         expect(mutedOnRoot).toBeLessThan(secondaryOnRoot);
       });
 
+      it('both halves of an inspector tag chip clear 4.5:1 against its inputBg surface', () => {
+        // The chip splits one tag into an emphasised half (textSecondary)
+        // and a receding half (textMuted) — see lib/tagLabel.ts. Neither is
+        // a new colour role, but the chip is the one place they sit side by
+        // side at 11px on inputBg, so it gets named here rather than being
+        // covered only incidentally by the sweeps above.
+        expect(contrastRatio(t.textSecondary, t.inputBg)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(t.textMuted, t.inputBg)).toBeGreaterThanOrEqual(4.5);
+      });
+
       it('onAccent clears 4.5:1 against accentStrong — the solid CTA button fill (Save/Unlock/Store)', () => {
         expect(contrastRatio(t.onAccent, t.accentStrong)).toBeGreaterThanOrEqual(4.5);
       });

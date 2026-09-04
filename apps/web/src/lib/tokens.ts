@@ -26,10 +26,45 @@ export const TYPE_COLORS = {
 
 export type MemoryType = keyof typeof TYPE_COLORS;
 
+// ─── Glyphs (L6) ────────────────────────────────────────────────────────────
+//
+// The app drew its icons from six Unicode repertoires at once — colour emoji
+// (🕐 💡 ⚙️ 🔒) sitting beside monochrome line glyphs — and reused the same
+// glyph for unrelated meanings: '⬡' meant "contradiction summary" in
+// ReflectionView, "concept" on a timeline card, AND "nothing selected" in the
+// inspector; '◆' meant both "semantic memory" and "trend".
+//
+// The real fix is one drawn icon set, but that costs bundle the app doesn't
+// have (two components already hand-roll ~100-byte inline SVG paths instead —
+// see NeuronInspector's archive/close buttons and SearchBar's magnifier).
+// The zero-cost interim rule, applied here: ONE glyph per meaning, no glyph
+// reused for two meanings, and no colour emoji anywhere — so a glyph is at
+// least never actively misleading.
+export const GLYPH = {
+  // Memory types
+  episodic: '◷',
+  semantic: '◆',
+  procedural: '⚙',
+  // Reflection insight types
+  pattern: '◈',
+  knowledgeGap: '◇',
+  trend: '↗',
+  contradiction: '⊗',
+  // Record fields
+  concept: '⬡',
+  importance: '◉',
+  confidence: '◎',
+  // States
+  empty: '⊘',
+  nothingSelected: '◌',
+  warning: '⚠',
+  contextLoaded: '⧉',
+} as const;
+
 export const TYPE_ICONS: Record<MemoryType, string> = {
-  episodic: '🕐',
-  semantic: '💡',
-  procedural: '⚙️',
+  episodic: GLYPH.episodic,
+  semantic: GLYPH.semantic,
+  procedural: GLYPH.procedural,
 };
 
 export const TYPE_LABELS: Record<MemoryType, string> = {
@@ -49,6 +84,29 @@ export const STATUS = {
   warning: '#f59e0b',
   info: '#38bdf8',
   contradiction: '#fb923c',
+} as const;
+
+/** Text/icon colour to place on top of a *solid* STATUS fill — the archive
+ *  confirmation's destructive button is the only one so far. STATUS colours
+ *  are all light, so this is the dark side of the pair; asserted at 4.5:1
+ *  against its fill in tokens.test.ts, the same way template text roles are
+ *  asserted against their surfaces. */
+export const ON_STATUS = {
+  danger: '#1c0606',
+} as const;
+
+// ─── Reflection insight colour ──────────────────────────────────────────────
+//
+// Four hex literals lived inline in ReflectionView's TYPE_META. Same
+// reasoning as TYPE_COLORS and STATUS: constant across templates (a
+// contradiction is a contradiction whichever skin is on), and named here so
+// they are covered by the contrast sweep in tokens.test.ts rather than being
+// four values nobody ever checked.
+export const REFLECTION_COLORS = {
+  pattern: '#818cf8',
+  knowledge_gap: '#f472b6',
+  trend: '#22d3ee',
+  contradiction_summary: '#fbbf24',
 } as const;
 
 // ─── Spacing scale ──────────────────────────────────────────────────────────
@@ -93,6 +151,21 @@ export const TYPE = {
   xl: '16px',
   '2xl': '18px',
   display: '24px',
+  /** Decorative glyph in an empty state — not text, and the only step above
+   *  `display`. Named so it stops being a one-off literal. */
+  glyph: '32px',
+} as const;
+
+// ─── Measure ────────────────────────────────────────────────────────────────
+//
+// H3: ReflectionView's body ran the full width of the card — 1330px at 13px,
+// about 205 characters per line, where readable measure is 45-75. The card
+// itself stays full width (its badge/date row and footer still span); only
+// the running text is capped.
+export const MEASURE = {
+  /** ~68 characters — inside the 45-75 band, and wide enough that a short
+   *  reflection still fills its line rather than looking orphaned. */
+  readable: '68ch',
 } as const;
 
 export const WEIGHT = {

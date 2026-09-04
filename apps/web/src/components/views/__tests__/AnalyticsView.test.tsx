@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import AnalyticsView from '../AnalyticsView.js';
+import AnalyticsView, { truncateSourceLabel, SOURCE_AXIS_WIDTH, SOURCE_LABEL_MAX } from '../AnalyticsView.js';
 import { useAnalyticsStore, type AnalyticsData } from '../../../store/analyticsStore.js';
+import { useTemplateStore, TEMPLATES } from '../../../store/templateStore.js';
 import { api } from '../../../lib/api.js';
 
 vi.mock('../../../lib/api.js', () => ({
@@ -63,5 +64,116 @@ describe('AnalyticsView', () => {
     render(<AnalyticsView />);
 
     await waitFor(() => expect(screen.getByText(/no analytics data available/i)).toBeInTheDocument());
+  });
+});
+
+describe('AnalyticsView source axis (H5 — labels were clipped from the LEFT, inventing words)', () => {
+  it('gives the axis room for a real source name at fontSize 10', () => {
+    // 'claude-code-research-agent' is 26 characters; 80px held about 14.
+    expect(SOURCE_AXIS_WIDTH).toBeGreaterThanOrEqual(130);
+  });
+
+  it('truncates at the END, so the label still starts on the word the source is called', () => {
+    const truncated = truncateSourceLabel('claude-code-research-agent');
+    expect(truncated.startsWith('claude-code')).toBe(true);
+    expect(truncated.endsWith('…')).toBe(true);
+    expect(truncated.length).toBeLessThanOrEqual(SOURCE_LABEL_MAX);
+  });
+
+  it('leaves the real source names that fit completely alone', () => {
+    expect(truncateSourceLabel('autopilot-learning')).toBe('autopilot-learning');
+    expect(truncateSourceLabel('claude-code')).toBe('claude-code');
+  });
+});
+
+describe('AnalyticsView panel honesty (M1, M2)', () => {
+  beforeEach(() => {
+    useAnalyticsStore.setState({ data: null, loading: false, error: null, days: 30 });
+    vi.mocked(api.getAnalytics).mockReset();
+  });
+
+  it('no longer shows a "Concepts" tile whose value is the API page size', async () => {
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(analyticsData());
+    render(<AnalyticsView />);
+    await waitFor(() => expect(screen.getByText('42')).toBeInTheDocument());
+
+    expect(screen.queryByText('Concepts')).not.toBeInTheDocument();
+  });
+
+  it('titles the source chart "Top Sources" and says how many of how many it plots', async () => {
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(
+      analyticsData({ bySource: Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`source-${i}`, 15 - i])) })
+    );
+    render(<AnalyticsView />);
+    await waitFor(() => expect(screen.getByText('42')).toBeInTheDocument());
+
+    expect(screen.getByText('Top Sources')).toBeInTheDocument();
+    expect(screen.getByText('8 of 15')).toBeInTheDocument();
+    expect(screen.queryByText('By Source')).not.toBeInTheDocument();
+  });
+});
+
+describe('AnalyticsView heatmap (M3, M4)', () => {
+  beforeEach(() => {
+    useAnalyticsStore.setState({ data: null, loading: false, error: null, days: 30 });
+    vi.mocked(api.getAnalytics).mockReset();
+  });
+
+  it('tints cells from the active template accent, not a hardcoded indigo', async () => {
+    useTemplateStore.setState({ activeTemplate: TEMPLATES[1]! }); // Mono — accent #ffffff
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(analyticsData());
+    render(<AnalyticsView />);
+
+    const cell = await screen.findByTitle(/Mon 9:00 — 5 memories/);
+    expect(cell.style.background).toContain('255, 255, 255');
+    expect(cell.style.background).not.toContain('99, 102, 241');
+    useTemplateStore.setState({ activeTemplate: TEMPLATES[0]! });
+  });
+
+  it('labels the hour axis, which did not exist — the only affordance was a title', async () => {
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(analyticsData());
+    render(<AnalyticsView />);
+    await waitFor(() => expect(screen.getByText('42')).toBeInTheDocument());
+
+    for (const tick of ['0', '6', '12', '18']) {
+      expect(screen.getAllByText(tick).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('gives the intensity ramp a key, which touch users had no way to read', async () => {
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(analyticsData());
+    render(<AnalyticsView />);
+    await waitFor(() => expect(screen.getByText('42')).toBeInTheDocument());
+
+    expect(screen.getByText('Less')).toBeInTheDocument();
+    expect(screen.getByText('More')).toBeInTheDocument();
+  });
+});
+
+describe('AnalyticsView top concepts (M10, H4)', () => {
+  beforeEach(() => {
+    useAnalyticsStore.setState({ data: null, loading: false, error: null, days: 30 });
+    vi.mocked(api.getAnalytics).mockReset();
+  });
+
+  it('lays the chips out on a grid and truncates instead of running ragged', async () => {
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(analyticsData());
+    render(<AnalyticsView />);
+    await waitFor(() => expect(screen.getByText('TypeScript')).toBeInTheDocument());
+
+    const chip = screen.getByText('TypeScript');
+    expect(chip.style.textOverflow).toBe('ellipsis');
+    const grid = chip.closest('div')!.parentElement!;
+    expect(grid.style.display).toBe('grid');
+    expect(grid.style.gridTemplateColumns).toContain('minmax(200px');
+  });
+
+  it('keeps the full value reachable on the chip and strips its Markdown', async () => {
+    vi.mocked(api.getAnalytics).mockResolvedValueOnce(
+      analyticsData({ topConcepts: [{ concept: '**Retrieval Augmented Generation**', count: 9, avgImportance: 0.8 }] })
+    );
+    render(<AnalyticsView />);
+
+    expect(await screen.findByTitle('Retrieval Augmented Generation')).toBeInTheDocument();
   });
 });

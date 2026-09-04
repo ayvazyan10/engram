@@ -40,7 +40,20 @@ export default function UnlockGate() {
   return (
     <div style={styles.overlay}>
       <div style={{ ...styles.card, background: t.cardBg, borderColor: t.panelBorder, boxShadow: `0 0 0 1px ${withAlpha(t.accent, 0.15)}, 0 20px 60px rgba(0,0,0,0.6)` }}>
-        <div style={styles.icon}>🔒</div>
+        {/* L6: was a 🔒 colour emoji — the one piece of colour art in an
+            otherwise monochrome, line-drawn interface. Hand-rolled inline
+            path, the same ~100-byte approach NeuronInspector's archive/close
+            buttons and SearchBar's magnifier already use, rather than adding
+            an icon font the bundle cannot afford. */}
+        <svg viewBox="0 0 24 24" fill="none" style={styles.icon} aria-hidden="true">
+          <path
+            d="M7 10V7a5 5 0 0110 0v3M5.5 10h13a1 1 0 011 1v8a1 1 0 01-1 1h-13a1 1 0 01-1-1v-8a1 1 0 011-1zM12 14v3"
+            stroke={t.accent}
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
         <div style={{ ...styles.title, color: t.textPrimary }}>{hadKey ? 'Wrong key — try again' : 'API key required'}</div>
         <p style={{ ...styles.subtitle, color: t.textSecondary }}>
           {hadKey
@@ -101,7 +114,7 @@ const styles = {
     border: '1px solid', borderRadius: RADIUS.xl,
     padding: '28px 26px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center',
   },
-  icon: { fontSize: '30px', marginBottom: SPACE.sm },
+  icon: { width: 30, height: 30, marginBottom: SPACE.sm },
   title: { fontSize: TYPE.xl, fontWeight: 700, textAlign: 'center' as const },
   subtitle: {
     fontSize: TYPE.base, textAlign: 'center' as const,

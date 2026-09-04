@@ -235,8 +235,12 @@ const styles = {
     flex: 1,
     background: 'transparent',
     border: 'none',
-    padding: '8px 6px',
+    padding: `${SPACE.sm} ${SPACE.xs}`,
     fontSize: TYPE.md,
+    // M5: form controls do not inherit font-family. Without this the search
+    // field — the most prominent input in the app — computed to Arial while
+    // everything around it was Inter.
+    fontFamily: 'inherit',
     outline: 'none',
     minWidth: 0,
     letterSpacing: '0.01em',
@@ -245,8 +249,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 22,
-    height: 22,
+    // M6: was 22x22, under the 24x24 WCAG 2.2 target minimum.
+    width: 24,
+    height: 24,
     border: 'none',
     borderRadius: RADIUS.sm,
     flexShrink: 0,

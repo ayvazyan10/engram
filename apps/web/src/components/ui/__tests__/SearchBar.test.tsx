@@ -132,3 +132,19 @@ describe('SearchBar race conditions and error handling (W4)', () => {
     expect(useMemoryStore.getState().searchQuery).toBe('');
   });
 });
+
+describe('SearchBar controls (M5, M6)', () => {
+  it('makes the search input inherit the body font — it computed to Arial while the body was Inter', () => {
+    render(<SearchBar />);
+    expect(screen.getByPlaceholderText(/ask your memory anything/i).style.fontFamily).toBe('inherit');
+  });
+
+  it('keeps the clear button at the 24px minimum target', () => {
+    render(<SearchBar />);
+    fireEvent.change(screen.getByPlaceholderText(/ask your memory anything/i), { target: { value: 'auth' } });
+
+    const clear = screen.getByTitle(/clear/i);
+    expect(clear.style.width).toBe('24px');
+    expect(clear.style.height).toBe('24px');
+  });
+});
