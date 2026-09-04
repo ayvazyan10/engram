@@ -28,10 +28,23 @@ import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 process.env['ENGRAM_WEBHOOK_ALLOW_PRIVATE'] = 'true';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATION_SQL = fs.readFileSync(
-  path.join(__dirname, '../../db/migrations/0000_cynical_marauders.sql'),
-  'utf-8'
-);
+
+/**
+ * Every migration in order, concatenated.
+ *
+ * Read from the directory rather than by filename: drizzle-kit names its
+ * output with a random word pair, so regenerating the schema renames the file
+ * and a hardcoded path stops the whole suite from even collecting. Reading
+ * every *.sql in sorted order also picks up a second migration when one is
+ * added, instead of silently building the table set from the first alone.
+ */
+const MIGRATIONS_DIR = path.join(__dirname, '../../db/migrations');
+const MIGRATION_SQL = fs
+  .readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql'))
+  .sort()
+  .map((f) => fs.readFileSync(path.join(MIGRATIONS_DIR, f), 'utf-8'))
+  .join('\n--> statement-breakpoint\n');
 
 function createTestDb(): string {
   const dbPath = path.join(__dirname, `test-wh-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
@@ -41,8 +54,23 @@ function createTestDb(): string {
     const sql = stmt.trim();
     if (sql) sqlite.exec(sql);
   }
-  sqlite.exec('ALTER TABLE memories ADD COLUMN namespace text');
-  sqlite.exec('ALTER TABLE memories ADD COLUMN embedding_model text');
+  // Add-if-missing, not unconditional ALTER: whether `namespace` and
+  // `embedding_model` come from the checked-in migration or have to be added
+  // on top of it depends on when the schema was last regenerated, and a
+  // straight ALTER fails with "duplicate column name" the moment they arrive
+  // in the migration itself. Mirrors addColumnIfMissing() in db/adapter.ts.
+  const hasColumn = (table: string, column: string): boolean => {
+    const row = sqlite
+      .prepare('SELECT COUNT(*) as cnt FROM pragma_table_info(?) WHERE name = ?')
+      .get(table, column) as { cnt: number };
+    return row.cnt > 0;
+  };
+  if (!hasColumn('memories', 'namespace')) {
+    sqlite.exec('ALTER TABLE memories ADD COLUMN namespace text');
+  }
+  if (!hasColumn('memories', 'embedding_model')) {
+    sqlite.exec('ALTER TABLE memories ADD COLUMN embedding_model text');
+  }
   sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
   // Webhooks table auto-created by getDb(), but we need it now for direct WebhookManager tests
   sqlite.exec(`

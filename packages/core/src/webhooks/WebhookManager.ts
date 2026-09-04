@@ -16,9 +16,18 @@
 import { eq, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { createHmac } from 'crypto';
+import dns from 'dns';
+import http from 'http';
+import https from 'https';
+import net from 'net';
 import { getDb, schema } from '../db/index.js';
 import type { Webhook } from '../db/schema.js';
-import { assertSafeWebhookUrl } from './urlGuard.js';
+import {
+  assertSafeWebhookTarget,
+  assertSafeWebhookUrl,
+  type HostResolver,
+  type SafeWebhookTarget,
+} from './urlGuard.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -46,7 +55,16 @@ export interface WebhookSubscription {
   events: WebhookEvent[];
   active: boolean;
   description: string | null;
-  secret: string | null;
+  /**
+   * Whether an HMAC secret is configured — never the secret itself.
+   *
+   * The value is what a receiver uses to verify `X-Engram-Signature`, so
+   * handing it back on a read lets anyone with API read access forge
+   * deliveries the receiver will accept. It is write-only: supplied on
+   * subscribe, kept in the row for the signer, and never serialized out
+   * again. A caller that has lost it rotates it by re-subscribing.
+   */
+  hasSecret: boolean;
   createdAt: string;
   lastTriggeredAt: string | null;
   failCount: number;
@@ -76,6 +94,16 @@ const MAX_CONCURRENT_DISPATCH = parseInt(
 /** Base delay for exponential backoff (ms). */
 const RETRY_BASE_MS = 500;
 
+/** Default per-attempt request timeout (ms). */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+export interface WebhookManagerOptions {
+  /** Injectable DNS resolver for the SSRF guard (tests). */
+  readonly lookup?: HostResolver;
+  /** Per-attempt request timeout in ms. Defaults to REQUEST_TIMEOUT_MS. */
+  readonly requestTimeoutMs?: number;
+}
+
 // ─── Manager ─────────────────────────────────────────────────────────────────
 
 export class WebhookManager {
@@ -83,6 +111,13 @@ export class WebhookManager {
   private inFlight = 0;
   /** Events dropped because the dispatch queue was saturated. */
   private dropped = 0;
+
+  constructor(private readonly options: WebhookManagerOptions = {}) {}
+
+  /** Guard options for this manager (resolver injection point). */
+  private guardOptions(): { lookup?: HostResolver } {
+    return this.options.lookup ? { lookup: this.options.lookup } : {};
+  }
 
   /**
    * Subscribe a new webhook.
@@ -96,7 +131,7 @@ export class WebhookManager {
     const db = getDb();
     // Reject SSRF targets (loopback, link-local metadata, RFC1918) before the
     // subscription is ever persisted.
-    await assertSafeWebhookUrl(opts.url);
+    await assertSafeWebhookUrl(opts.url, this.guardOptions());
 
     const id = uuidv4();
     const now = new Date().toISOString();
@@ -119,7 +154,9 @@ export class WebhookManager {
       events: opts.events,
       active: true,
       description: opts.description ?? null,
-      secret: opts.secret ?? null,
+      // Deliberately not echoing `opts.secret`: the caller supplied it, so
+      // returning it adds nothing and puts it in one more log/response body.
+      hasSecret: Boolean(opts.secret),
       createdAt: now,
       lastTriggeredAt: null,
       failCount: 0,
@@ -280,29 +317,30 @@ export class WebhookManager {
 
     // Re-validate at delivery time, not just at subscribe time: DNS can be
     // repointed at a private address after the subscription was created.
+    //
+    // The validated addresses come back with the URL and are pinned into the
+    // socket below. Checking an address and then letting the transport resolve
+    // the hostname a second time is not a check at all: an attacker-controlled
+    // nameserver only has to answer "public" here and "169.254.169.254" a
+    // millisecond later, and deliveries fire often enough to keep trying.
+    let target: SafeWebhookTarget;
     try {
-      await assertSafeWebhookUrl(wh.url);
+      target = await assertSafeWebhookTarget(wh.url, this.guardOptions());
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       await this.recordFailure(wh.id);
       return { webhookId: wh.id, url: wh.url, success: false, error: message, attempts: 0 };
     }
 
+    const timeoutMs = this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        const res = await fetch(wh.url, {
-          method: 'POST',
-          headers,
-          body,
-          // Never follow redirects — a 302 to 169.254.169.254 would bypass the
-          // pre-flight address check.
-          redirect: 'manual',
-          signal: AbortSignal.timeout(10000), // 10s timeout
-        });
+        const res = await postJson(target, body, headers, timeoutMs);
 
         statusCode = res.status;
 
-        if (res.ok) {
+        if (res.status >= 200 && res.status < 300) {
           // Success — reset fail count
           await this.recordSuccess(wh.id);
           return {
@@ -371,6 +409,134 @@ export class WebhookManager {
   }
 }
 
+// ─── Transport ───────────────────────────────────────────────────────────────
+
+interface DeliveryResponse {
+  readonly status: number;
+  readonly statusText: string;
+}
+
+type LookupCallback = (
+  err: NodeJS.ErrnoException | null,
+  address: string | dns.LookupAddress[],
+  family?: number
+) => void;
+
+/**
+ * A `dns.lookup` replacement that answers with the addresses the SSRF guard
+ * already cleared, whatever hostname it is handed.
+ *
+ * This is the piece that actually closes the DNS-rebinding window. Everything
+ * else — validating at subscribe time, re-validating at delivery time — only
+ * inspects an answer; this makes the inspected answer the one the socket uses.
+ */
+function createPinnedLookup(addresses: readonly string[]): net.LookupFunction {
+  const pinned: dns.LookupAddress[] = addresses.map((address) => ({
+    address,
+    family: net.isIPv6(address) ? 6 : 4,
+  }));
+
+  return (hostname: string, options: dns.LookupOptions, callback: LookupCallback): void => {
+    // Node asks for every address when Happy Eyeballs is on (the default since
+    // Node 20) and for a single one otherwise — answer in the shape requested.
+    if (options.all === true) {
+      callback(null, [...pinned]);
+      return;
+    }
+
+    const first = pinned[0];
+    if (first === undefined) {
+      callback(new Error(`No validated address to connect to for ${hostname}`), '');
+      return;
+    }
+    callback(null, first.address, first.family);
+  };
+}
+
+function buildRequestOptions(
+  target: SafeWebhookTarget,
+  body: string,
+  headers: Readonly<Record<string, string>>
+): https.RequestOptions {
+  const { url, addresses } = target;
+  const isHttps = url.protocol === 'https:';
+  // `url.hostname` keeps the brackets on an IPv6 literal; node wants it bare
+  // and re-brackets it itself when building the Host header. Passing the
+  // hostname (not the pinned IP) also keeps Host and TLS SNI correct.
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+
+  return {
+    protocol: url.protocol,
+    hostname,
+    port: url.port !== '' ? Number(url.port) : isHttps ? 443 : 80,
+    path: `${url.pathname}${url.search}`,
+    method: 'POST',
+    headers: { ...headers, 'Content-Length': String(Buffer.byteLength(body)) },
+    // A fresh, unpooled connection per delivery. The global agent keys its
+    // socket pool on host:port and knows nothing about `lookup`, so a pooled
+    // socket could outlive the address check that authorised it.
+    agent: false,
+    // Empty only when ENGRAM_WEBHOOK_ALLOW_PRIVATE short-circuited the guard,
+    // in which case no address was validated and there is nothing to pin.
+    ...(addresses.length > 0 ? { lookup: createPinnedLookup(addresses) } : {}),
+  };
+}
+
+/**
+ * POST a JSON body to a target the guard has cleared.
+ *
+ * Uses node:http(s) rather than `fetch`: the socket must go to the address the
+ * guard validated, and the global fetch offers no way to override its own DNS
+ * resolution without pulling in undici directly.
+ *
+ * Redirects are never followed — node's client does not follow them at all, so
+ * a 302 to 169.254.169.254 surfaces as an ordinary non-2xx status and is
+ * reported as a delivery failure.
+ */
+function postJson(
+  target: SafeWebhookTarget,
+  body: string,
+  headers: Readonly<Record<string, string>>,
+  timeoutMs: number
+): Promise<DeliveryResponse> {
+  const transport = target.url.protocol === 'https:' ? https : http;
+
+  return new Promise<DeliveryResponse>((resolve, reject) => {
+    let settled = false;
+    let deadline: NodeJS.Timeout | undefined;
+
+    const finish = (act: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (deadline !== undefined) clearTimeout(deadline);
+      act();
+    };
+
+    const req = transport.request(buildRequestOptions(target, body, headers), (res) => {
+      // The response body is unused, but it must be drained or the socket and
+      // its buffers stay pinned until the process exits.
+      res.resume();
+      res.on('end', () =>
+        finish(() =>
+          resolve({ status: res.statusCode ?? 0, statusText: res.statusMessage ?? '' })
+        )
+      );
+      res.on('error', (err: Error) => finish(() => reject(err)));
+    });
+
+    const timedOut = (): void => {
+      req.destroy(new Error(`Webhook request timed out after ${timeoutMs}ms`));
+    };
+
+    // setTimeout() on the request is a socket-inactivity timeout, which a
+    // slow-drip server can reset forever; the timer is the hard deadline.
+    req.setTimeout(timeoutMs, timedOut);
+    deadline = setTimeout(timedOut, timeoutMs);
+    req.on('error', (err: Error) => finish(() => reject(err)));
+    req.end(body);
+  });
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function toSubscription(row: Webhook): WebhookSubscription {
@@ -380,7 +546,9 @@ function toSubscription(row: Webhook): WebhookSubscription {
     events: JSON.parse(row.events) as WebhookEvent[],
     active: Boolean(row.active),
     description: row.description,
-    secret: row.secret,
+    // Mirrors the signer's own `if (wh.secret)` test in deliver(), so
+    // hasSecret is true exactly when a delivery would actually be signed.
+    hasSecret: Boolean(row.secret),
     createdAt: row.createdAt,
     lastTriggeredAt: row.lastTriggeredAt,
     failCount: row.failCount,
