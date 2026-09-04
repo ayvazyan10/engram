@@ -10,7 +10,9 @@
  *   hue         memory type          the canonical palette in lib/tokens.ts,
  *                                    invariant across every view
  *   core size   importance           four discrete steps, not a ramp
- *   brightness  recency              30-day half-life on createdAt
+ *   brightness  recency              the SERVER's decay half-life on createdAt
+ *                                    (lib/decayPolicy.ts) — never a constant
+ *                                    this module picked
  *   halo size   retrieval count      log-scaled accessCount
  *
  * Importance is banded rather than continuous on purpose. The previous encoding
@@ -46,22 +48,43 @@ export function importanceRadius(importance: number): number {
   return IMPORTANCE_BANDS[IMPORTANCE_BANDS.length - 1]!.radius;
 }
 
-/** Half-life, in days, of the brightness that encodes recency. */
-export const RECENCY_HALF_LIFE_DAYS = 30;
-
 /** Floor, so an old memory is dim but never invisible and never off-hue. */
-const MIN_BRIGHTNESS = 0.42;
+export const MIN_BRIGHTNESS = 0.42;
+/** What the channel draws when there is no policy to draw it from — flat. */
+export const BRIGHTNESS_UNENCODED = 1;
 const DAY_MS = 86_400_000;
 
 /**
- * Brightness in [MIN_BRIGHTNESS, 1] from age. Multiplying the type colour
- * rather than shifting it keeps hue — and therefore type — readable at every
- * age, which is the whole reason recency got brightness and not colour.
+ * Brightness in [MIN_BRIGHTNESS, 1] from age, on the SERVER's half-life (F3).
+ *
+ * `halfLifeDays` used to be a module constant of 30, and the scene key printed
+ * "30-day half-life" as the definition of this channel. The server's policy is
+ * 7 (`GET /api/decay/policy`), which the client never asked for — so a 30-day-
+ * old memory drew at 0.71, reading as "still fresh", while the server put its
+ * strength at 2^(-30/7) = 0.051, sitting on its archive threshold. The legend
+ * inverted the reading of every dim node.
+ *
+ * There is no default parameter here on purpose. A fallback is precisely how
+ * that bug worked; `null` means "no policy yet", and the honest thing to draw
+ * for a variable you cannot compute is nothing — the channel goes flat and the
+ * scene key says so, the same way it already says when positions are
+ * unavailable.
+ *
+ * Multiplying the type colour rather than shifting it keeps hue — and therefore
+ * type — readable at every age, which is the whole reason recency got
+ * brightness and not colour.
  */
-export function recencyBrightness(createdAtMs: number, nowMs: number): number {
+export function recencyBrightness(
+  createdAtMs: number,
+  nowMs: number,
+  halfLifeDays: number | null
+): number {
+  if (halfLifeDays === null || !Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
+    return BRIGHTNESS_UNENCODED;
+  }
   if (!Number.isFinite(createdAtMs)) return MIN_BRIGHTNESS;
   const ageDays = Math.max(0, (nowMs - createdAtMs) / DAY_MS);
-  const decay = Math.pow(2, -ageDays / RECENCY_HALF_LIFE_DAYS);
+  const decay = Math.pow(2, -ageDays / halfLifeDays);
   return MIN_BRIGHTNESS + (1 - MIN_BRIGHTNESS) * decay;
 }
 

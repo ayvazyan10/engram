@@ -9,19 +9,40 @@
  * are the same regardless of which template is active.
  */
 
-// ─── Memory-type colour (V5 consolidation) ─────────────────────────────────
+// ─── Memory-type colour — the categorical palette (F1) ─────────────────────
 //
-// Previously duplicated across MemoryPanel.tsx, NeuronInspector.tsx (both
-// '#6366f1' for episodic) and AnalyticsView.tsx / TimelineView.tsx (both
-// '#818cf8') — the same memory rendered a different colour depending which
-// panel you looked at. '#818cf8' (indigo-400) wins: it's what the default 3D
-// view (viewStore.ts 'cosmos') already used, and it's the one that actually
-// clears 4.5:1 against the app's near-black surfaces — '#6366f1' (indigo-500)
-// only reaches ~4.0-4.3:1 on panelBg/cardBg, see tokens.contrast.test.ts.
+// Memory type is the app's one categorical variable, so these three are the
+// only slots that encode identity. They are constant across templates on
+// purpose: an episodic memory is episodic whichever skin is on.
+//
+// V5 consolidated four disagreeing copies of this map onto one; the values it
+// settled on ('#818cf8' / '#22d3ee' / '#fbbf24') were picked for WCAG contrast
+// alone and failed the data-viz lightness band outright — OKLCH L 0.680 /
+// 0.797 / 0.837 against a dark-mode band of L ∈ [0.48, 0.67]. All three sat
+// ABOVE the band and spanned 0.157 of lightness, so amber outranked indigo on
+// brightness whatever the two meant; on a graph where brightness separately
+// encodes recency, that is the identity channel leaking into the magnitude one.
+//
+// These three were derived by the data-viz skill's snap-to-passing procedure —
+// same three hue families, re-stepped into the band:
+//
+//   episodic   #7e6cf8  L 0.621  C 0.201  H 284.7   (violet)
+//   semantic   #22a5b0  L 0.661  C 0.106  H 203.8   (teal)
+//   procedural #be861d  L 0.660  C 0.130  H  77.0   (amber)
+//
+// Lightness span 0.157 → 0.041. `validate_palette.js --mode dark --pairs all`
+// passes every check on all five distinct surfaces the app paints them on
+// (worst all-pairs CVD ΔE 16.3 deutan, normal-vision ΔE 21.1). `--pairs all`
+// rather than the adjacent pairlist because the 3D scene is a scatter: any two
+// nodes can end up side by side.
+//
+// The WCAG invariant V5 bought is kept in substance, not just in name: the
+// minimum contrast across every surface of every template is 4.60:1 (episodic
+// on Mono's cardBg), so all three still clear 4.5:1 — see tokens.test.ts.
 export const TYPE_COLORS = {
-  episodic: '#818cf8',
-  semantic: '#22d3ee',
-  procedural: '#fbbf24',
+  episodic: '#7e6cf8',
+  semantic: '#22a5b0',
+  procedural: '#be861d',
 } as const;
 
 export type MemoryType = keyof typeof TYPE_COLORS;
@@ -54,6 +75,16 @@ export const GLYPH = {
   concept: '⬡',
   importance: '◉',
   confidence: '◎',
+  // Compact-viewport panes (the mobile tab bar)
+  //
+  // Own entries rather than borrowed ones: the tab bar used to hard-code
+  // '⬡' for Graph and '◈' for Inspect, which are this registry's
+  // `concept` and `pattern` — exactly the one-glyph-two-meanings collision
+  // it exists to prevent. '☰' (stacked rules → the record list) was already
+  // unclaimed and is kept.
+  paneMemories: '☰',
+  paneGraph: '⊛',
+  paneInspect: '⊡',
   // States
   empty: '⊘',
   nothingSelected: '◌',
@@ -95,19 +126,113 @@ export const ON_STATUS = {
   danger: '#1c0606',
 } as const;
 
-// ─── Reflection insight colour ──────────────────────────────────────────────
+// ─── Reflection insight colour — deliberately absent (F5) ───────────────────
 //
-// Four hex literals lived inline in ReflectionView's TYPE_META. Same
-// reasoning as TYPE_COLORS and STATUS: constant across templates (a
-// contradiction is a contradiction whichever skin is on), and named here so
-// they are covered by the contrast sweep in tokens.test.ts rather than being
-// four values nobody ever checked.
-export const REFLECTION_COLORS = {
-  pattern: '#818cf8',
-  knowledge_gap: '#f472b6',
-  trend: '#22d3ee',
-  contradiction_summary: '#fbbf24',
+// There used to be a REFLECTION_COLORS map here, and three of its four slots
+// were BYTE-IDENTICAL to TYPE_COLORS: pattern === episodic ('#818cf8'), trend
+// === semantic ('#22d3ee'), contradiction_summary === procedural ('#fbbf24'),
+// ΔE 0.0. One categorical slot cannot own two identities, and these two sets
+// genuinely co-occur — a stored reflection is also a memory, so it carries a
+// type badge in the timeline and a type hue in the 3D scene at the same time
+// as its insight chip. A violet "Pattern" chip beside a violet "episodic"
+// badge is not a near miss; it is the same colour meaning two things.
+//
+// Resolved by dropping the colour rather than re-slotting it. Reasons:
+//
+//   1. A second four-slot categorical set puts seven meaning-carrying colour
+//      classes on one app, which is past the point where adjacent classes
+//      blur (dataviz `choosing-a-form.md`).
+//   2. Reflections are never plotted. ReflectionView is a card list, and every
+//      card already spells the type out in words next to a distinct glyph
+//      (GLYPH.pattern / knowledgeGap / trend / contradiction). Colour was
+//      restating a label that was already there.
+//   3. Those hexes were being used as TEXT colour on the chip and the filter
+//      button, which the mark rules forbid outright.
+//
+// The type filter buttons and the card chip now use the same neutral
+// (textPrimary / textSecondary on a template surface) treatment as every other
+// non-data chip in the app, with the glyph carrying identity. See
+// tokens.test.ts, which now asserts no two data-colour sets collide.
+
+// ─── Data-mark colour (F4/F5) ───────────────────────────────────────────────
+//
+// The analytics charts had no data colour of their own: the growth area, the
+// source bars and the heatmap all painted with `t.accent` — the *chrome*
+// token that also draws focus rings, timeline date headings and scrollbars.
+// With TYPE_COLORS in play on the same page, Neural's indigo meant "episodic",
+// "source volume", "growth" and "activity magnitude" at once.
+//
+// One measure runs through all three of those charts: the number of memories.
+// So it gets one hue, distinct from every type slot and every status role, and
+// used two ways — a flat slot for single-series charts and a sequential ramp
+// for magnitude. Both are template-independent for the same reason TYPE_COLORS
+// and STATUS are: what a mark means must not change when the skin does.
+//
+// Hue was chosen by search, not by taste: with the three type hues at 284.7 /
+// 203.8 / 77.0 and the status roles occupying red, amber, green and sky, the
+// only families left clearing ΔE >= 15 (normal vision) from all of them are
+// magenta/rose. H ~340 is the pick.
+export const SERIES = {
+  /**
+   * Slot 1 — the colour of "a memory was stored". Used for every single-series
+   * chart (growth area, source bars), which is what the data-viz form rules
+   * prescribe for nominal categories: one series, one hue, no legend box (the
+   * panel title names it).
+   *
+   * `#b04592` — OKLCH L 0.559 C 0.166 H 340, inside the dark categorical band,
+   * >= 3:1 on every template surface (3.51:1 worst, Mono cardBg), ΔE 18.3
+   * normal / 9.4 CVD from the nearest TYPE_COLOR. It is ACTIVITY_RAMP's second
+   * step, so the flat series and the ramp read as one family.
+   */
+  primary: '#b04592',
 } as const;
+
+/**
+ * Sequential ramp for activity magnitude — one hue, monotone lightness (F4).
+ *
+ * Replaces `withAlpha(t.accent, 0.15 + intensity * 0.85)`, which was an opacity
+ * ramp over whichever accent the active template supplied, with no lightness
+ * discipline at all. Composited on Neural's cardBg the count-1 cell landed at
+ * 1.41:1 and count 0 at 1.05:1 — invisible; Midnight measured 1.45:1 / 1.02:1.
+ * Mono passed only because its accent is white, so legibility was an accident
+ * of which template was active.
+ *
+ * Dark mode inverts the ramp's anchor: more is LIGHTER, away from the surface.
+ * `validate_palette.js --ordinal --mode dark` passes on all three card
+ * surfaces — monotone L (0.469 / 0.559 / 0.649 / 0.739), every adjacent ΔL
+ * 0.09 (floor 0.06), hue spread 0°, and a low end at 2.43:1 against the worst
+ * surface (floor 2.0:1).
+ */
+export const ACTIVITY_RAMP = ['#883871', '#b04592', '#d35bb1', '#e882c8'] as const;
+
+/**
+ * Neutral sequential ramp for edge strength in the 3D scene (F5).
+ *
+ * ConnectionLine used a blue ramp whose mid step sat ΔE 9.3 from the episodic
+ * hue — under the normal-vision floor of 15, i.e. a magnitude scale wearing a
+ * near-miss of a categorical slot. Edge strength is magnitude, so it belongs on
+ * a neutral ramp that cannot be mistaken for anyone's identity.
+ *
+ * H 250 at C 0.012 — grey enough to carry no identity, chromatic enough that the
+ * hue stays stable across the three steps (the ordinal single-hue check needs a
+ * defined hue). `--ordinal --mode dark` passes on all three scene backgrounds:
+ * monotone L 0.405 / 0.475 / 0.545, ΔL 0.070, hue spread 5°, low end 2.23:1.
+ *
+ * It sits low in the range on purpose. A grey and the semantic teal (the lowest-
+ * chroma type slot, OKLCH C 0.106) collide on ΔE when their LIGHTNESS is close —
+ * a brighter ramp measured 10.2 from it, under the same normal-vision floor of
+ * 15 the blue ramp failed. Holding every step under L 0.55 clears it at 15.1,
+ * and it is the right hierarchy anyway: 3,099 edges are context for 651 nodes,
+ * so they recede.
+ *
+ * The material this draws with is now OPAQUE. At `opacity: 0.7` no ramp could
+ * satisfy both that ΔE floor and the ordinal low-end floor once composited —
+ * and the transparency was carrying an unstated fourth channel besides, since
+ * overlapping edges accumulated alpha and a dense region read brighter than a
+ * sparse one with nothing in the key saying so. Opaque means the step a reader
+ * sees is the step the key defines.
+ */
+export const EDGE_RAMP = ['#444a4f', '#575d63', '#6b7177'] as const;
 
 // ─── Spacing scale ──────────────────────────────────────────────────────────
 export const SPACE = {
@@ -221,6 +346,78 @@ export function relativeLuminance(hex: string): number {
   const b = channel(parseInt(full.slice(4, 6), 16));
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
+
+/** '#rrggbb' -> linear-light sRGB channels in 0-1. */
+function linearChannels(hex: string): [number, number, number] {
+  const clean = hex.replace('#', '');
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
+  const toLinear = (v: number) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  return [
+    toLinear(parseInt(full.slice(0, 2), 16)),
+    toLinear(parseInt(full.slice(2, 4), 16)),
+    toLinear(parseInt(full.slice(4, 6), 16)),
+  ];
+}
+
+export interface Oklab {
+  L: number;
+  a: number;
+  b: number;
+}
+
+/**
+ * OKLab coordinates of a '#rrggbb' colour (Björn Ottosson's matrices).
+ *
+ * WCAG contrast answers "can this be read"; it does not answer "do these two
+ * colours read as the same thing", and it does not answer "is this slot inside
+ * the perceptual lightness band". Both of those were live defects — three
+ * memory-type hues spanning 0.157 of OKLCH lightness, and a reflection palette
+ * byte-identical to the memory-type one — so the repo owns the measure rather
+ * than asserting the audit's numbers by hand. Same role `contrastRatio` plays
+ * for the template text roles.
+ */
+export function oklab(hex: string): Oklab {
+  const [r, g, b] = linearChannels(hex);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return {
+    L: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    a: 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    b: 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  };
+}
+
+/** OKLCH lightness — the axis the dark-mode band is defined on. */
+export function oklchLightness(hex: string): number {
+  return oklab(hex).L;
+}
+
+/** OKLCH chroma. Below ~0.10 a hue reads as grey and stops doing identity work. */
+export function oklchChroma(hex: string): number {
+  const { a, b } = oklab(hex);
+  return Math.hypot(a, b);
+}
+
+/** Euclidean distance in OKLab, ×100 — the ΔE this project's colour rules use. */
+export function deltaE(hexA: string, hexB: string): number {
+  const A = oklab(hexA);
+  const B = oklab(hexB);
+  return 100 * Math.hypot(A.L - B.L, A.a - B.a, A.b - B.b);
+}
+
+/** The dark-mode lightness band a categorical slot has to sit inside. */
+export const DARK_LIGHTNESS_BAND = { min: 0.48, max: 0.67 } as const;
+
+/** Chroma floor for a categorical slot. */
+export const CHROMA_FLOOR = 0.1;
+
+/** Below this ΔE, full-colour readers cannot reliably tell two data colours
+ *  apart — so no two colours that mean different things may sit under it. */
+export const NORMAL_VISION_DELTA_E_FLOOR = 15;
 
 /** WCAG 2.x contrast ratio between two '#rrggbb' colours, 1-21. This is the
  *  function the honest V4 proof runs against the template tokens — see

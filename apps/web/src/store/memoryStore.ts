@@ -17,7 +17,20 @@ interface MemoryState {
   searchResults: MemoryRecord[];
   searchQuery: string;
   isSearching: boolean;
-  totalCount: number;
+  /**
+   * How many records are LOADED, not how many the store holds. The dashboard
+   * fetches one page (`api.listMemories({ limit: 200 })`) and the server caps
+   * that page at 200, so on a 651-memory store this reads 200 — which is why
+   * the field is no longer named for a total: the status bar read it as one
+   * and reported 200 memories out of 651.
+   *
+   * The real census is `lib/serverStats.ts` (GET /stats). This number stays
+   * because the increment on add and the decrement on remove are meaningful
+   * for it — a record arriving over the socket really does join the loaded
+   * page — and they would be wrong for a store-wide total the client never
+   * fetched.
+   */
+  loadedCount: number;
   currentContext: string;
   recallLatencyMs: number | null;
   highlightedIds: Set<string>;
@@ -39,12 +52,12 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   searchResults: [],
   searchQuery: '',
   isSearching: false,
-  totalCount: 0,
+  loadedCount: 0,
   currentContext: '',
   recallLatencyMs: null,
   highlightedIds: new Set(),
 
-  setRecords: (records) => set({ records, totalCount: records.length }),
+  setRecords: (records) => set({ records, loadedCount: records.length }),
   setSearchResults: (results) => set({ searchResults: results }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setSearching: (searching) => set({ isSearching: searching }),
@@ -65,13 +78,13 @@ export const useMemoryStore = create<MemoryState>((set) => ({
       }
       return {
         records: [record, ...state.records],
-        totalCount: state.totalCount + 1,
+        loadedCount: state.loadedCount + 1,
       };
     }),
   removeRecord: (id) =>
     set((state) => ({
       records: state.records.filter((r) => r.id !== id),
-      totalCount: Math.max(0, state.totalCount - 1),
+      loadedCount: Math.max(0, state.loadedCount - 1),
     })),
   updateRecordTags: (id, tags) =>
     set((state) => ({

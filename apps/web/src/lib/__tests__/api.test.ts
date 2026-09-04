@@ -199,6 +199,26 @@ describe('lib/api endpoint coverage', () => {
     expect(String(url)).toContain('/graph/mem-1?depth=1');
   });
 
+  it('getGraphLayout() hits GET /graph/layout', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { method: 'pca3', nodes: [] }));
+    await api.getGraphLayout();
+    const [url] = vi.mocked(fetch).mock.calls[0]!;
+    expect(String(url)).toBe('/api/graph/layout');
+  });
+
+  it('getGraphEdges() asks for every edge by default, and states the filter when one is given', async () => {
+    // A fresh Response per call: a body can only be read once.
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(jsonResponse(200, { edges: [] }))
+      .mockResolvedValueOnce(jsonResponse(200, { edges: [] }));
+
+    await api.getGraphEdges();
+    expect(String(vi.mocked(fetch).mock.calls[0]![0])).toBe('/api/graph/edges?minStrength=0');
+
+    await api.getGraphEdges(0.9);
+    expect(String(vi.mocked(fetch).mock.calls[1]![0])).toBe('/api/graph/edges?minStrength=0.9');
+  });
+
   it('addTag() POSTs to the tags route', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { id: 'mem-1', tags: ['a'] }));
     await api.addTag('mem-1', 'a');
@@ -277,5 +297,65 @@ describe('lib/api endpoint coverage', () => {
     const [url, init] = vi.mocked(fetch).mock.calls[0]!;
     expect(String(url)).toContain('/memory/bulk/archive');
     expect(JSON.parse(init?.body as string)).toEqual({ ids: ['a', 'b'] });
+  });
+});
+
+/**
+ * The 3D scene's two calls used to live in components/canvas/graphSource.ts
+ * with their own ~15-line copy of the request helper — key header, abort
+ * timeout, and a hand-rolled 401 branch. These assert that they now go through
+ * the shared helper for real, rather than merely pointing at the right URL:
+ * the copy is only gone if the scene inherits the same auth contract.
+ */
+describe('lib/api scene calls share the request contract', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    sessionStorage.clear();
+    useAuthStore.setState({ locked: false, hadKey: false });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    sessionStorage.clear();
+  });
+
+  it('sends the stored API key on the scene fetches too', async () => {
+    sessionStorage.setItem('engram_api_key', 'secret-123');
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { method: 'pca3', nodes: [] }));
+
+    await api.getGraphLayout();
+
+    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(new Headers(init?.headers).get('X-API-Key')).toBe('secret-123');
+  });
+
+  it('raises the unlock gate when the projection comes back 401, instead of leaving the scene to guess', async () => {
+    sessionStorage.setItem('engram_api_key', 'wrong-key');
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(401, { error: 'Unauthorized' }));
+
+    await expect(api.getGraphLayout()).rejects.toBeInstanceOf(ApiError);
+    expect(useAuthStore.getState()).toMatchObject({ locked: true, hadKey: true });
+  });
+
+  it('does not raise the gate when the edge fetch fails for some other reason', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(500, { error: 'boom' }));
+
+    await expect(api.getGraphEdges()).rejects.toMatchObject({ status: 500 });
+    expect(useAuthStore.getState().locked).toBe(false);
+  });
+
+  it('clears a stale gate on a successful scene fetch — the canvas-local copy never did', async () => {
+    useAuthStore.setState({ locked: true, hadKey: true });
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { method: 'pca3', nodes: [] }));
+
+    await api.getGraphLayout();
+
+    expect(useAuthStore.getState().locked).toBe(false);
+  });
+
+  it('surfaces a network failure as an ApiError rather than a raw TypeError', async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    await expect(api.getGraphEdges()).rejects.toMatchObject({ status: 0 });
   });
 });

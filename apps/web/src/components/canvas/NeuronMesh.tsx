@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useNeuralStore } from '../../store/neuralStore.js';
+import { useDecayPolicy } from '../../lib/decayPolicy.js';
 import { useMemoryStore } from '../../store/memoryStore.js';
 import type { ViewTheme } from '../../store/viewStore.js';
 import { DIMMED_FACTOR, haloScale, importanceRadius, recencyBrightness, tint } from './encoding.js';
@@ -96,6 +97,10 @@ export default function NeuronField({ theme, positions, reducedMotion }: Props) 
   const highlightedIds = useMemoryStore((s) => s.highlightedIds);
   const searchQuery = useMemoryStore((s) => s.searchQuery);
   const invalidate = useThree((s) => s.invalidate);
+  // F3: the recency channel decays on the server's half-life, not a constant
+  // this client invented. Null until the policy lands — see encoding.ts.
+  const decay = useDecayPolicy();
+  const halfLifeDays = decay?.halfLifeDays ?? null;
 
   const coreRef = useRef<THREE.InstancedMesh>(null);
   const haloRef = useRef<THREE.InstancedMesh>(null);
@@ -119,11 +124,11 @@ export default function NeuronField({ theme, positions, reducedMotion }: Props) 
     return neurons.map((n) => ({
       radius: importanceRadius(n.importance),
       halo: haloScale(n.accessCount),
-      brightness: recencyBrightness(n.createdAtMs, now),
+      brightness: recencyBrightness(n.createdAtMs, now, halfLifeDays),
       color: theme.colors[n.type] ?? 0x94a3b8,
       projected: n.projected,
     }));
-  }, [neurons, theme.colors]);
+  }, [neurons, theme.colors, halfLifeDays]);
 
   /** Write every instance matrix and colour for the current tween position. */
   const writeInstances = useCallback(() => {
@@ -265,13 +270,24 @@ export default function NeuronField({ theme, positions, reducedMotion }: Props) 
   return (
     <group>
       {/* Halo — retrieval count. Additive and unlit so overlapping coronas read
-          as density rather than as a grey wash; never a click target, so it
-          cannot steal a hit from the core it surrounds. */}
+          as density rather than as a grey wash.
+
+          F7: it used to carry `raycast={() => null}`, so it contributed nothing
+          to the hit area. The median node projects to 17px in Cosmos and 12px
+          in Neural Net at 375px, against a 24px minimum — and the halo is the
+          1.45x–2.35x-wider ring already drawn around it. Taking the ray is the
+          cheapest way to reach the minimum without changing what anything
+          means. It cannot steal a hit from its own core: the material is
+          BackSide, so the ray intersects the FAR side of the halo sphere, which
+          is always farther than the core, and r3f dispatches nearest-first with
+          the core's handler stopping propagation. */}
       <instancedMesh
         ref={haloRef}
         args={instanceArgs}
         frustumCulled={false}
-        raycast={() => null}
+        onClick={onClick}
+        onPointerMove={onPointerMove}
+        onPointerOut={onPointerOut}
         renderOrder={0}
       >
         <sphereGeometry args={[1, 10, 8]} />

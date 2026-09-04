@@ -10,14 +10,13 @@ import StoreMemoryModal from '../ui/StoreMemoryModal.js';
 import UnlockGate from '../ui/UnlockGate.js';
 import MobileTabBar, { type MobilePane } from './MobileTabBar.js';
 import SceneKey, { type SceneStats } from '../canvas/SceneKey.js';
-import { fetchEdges, fetchLayout, type EdgeSummary, type LayoutResponse } from '../canvas/graphSource.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useViewStore, fallbackSceneNodes, type SceneNodeInput } from '../../store/viewStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { useDashboardStore } from '../../store/dashboardStore.js';
 import { useAuthStore } from '../../store/authStore.js';
-import { api, ApiError } from '../../lib/api.js';
+import { api, ApiError, type EdgeSummary, type LayoutResponse } from '../../lib/api.js';
 import { useWebSocket, asMemoryRecord } from '../../hooks/useWebSocket.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { useThemeVars } from '../../hooks/useThemeVars.js';
@@ -130,7 +129,7 @@ export default function AppLayout() {
     sceneFetchedForCountRef.current = records.length;
 
     let cancelled = false;
-    fetchLayout()
+    api.getGraphLayout()
       .then((res) => {
         if (cancelled) return;
         setLayout(res);
@@ -142,7 +141,7 @@ export default function AppLayout() {
         if (!cancelled) setLayoutFailed(true);
       });
 
-    fetchEdges()
+    api.getGraphEdges()
       .then((res) => {
         if (cancelled) return;
         setEdgeSummary(res);

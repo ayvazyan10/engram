@@ -6,17 +6,12 @@ import { useNeuralStore } from '../../../store/neuralStore.js';
 import { useDashboardStore } from '../../../store/dashboardStore.js';
 import { useAuthStore } from '../../../store/authStore.js';
 import { api } from '../../../lib/api.js';
-import { fetchEdges, fetchLayout } from '../../canvas/graphSource.js';
-import type { LayoutResponse, EdgeSummary } from '../../canvas/graphSource.js';
+import type { LayoutResponse, EdgeSummary } from '../../../lib/api.js';
 
 vi.mock('../../canvas/NeuralCanvas.js', () => ({ default: () => <div data-testid="neural-canvas" /> }));
 vi.mock('../../../hooks/useWebSocket.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../hooks/useWebSocket.js')>()),
   useWebSocket: () => {},
-}));
-vi.mock('../../canvas/graphSource.js', () => ({
-  fetchLayout: vi.fn(),
-  fetchEdges: vi.fn(),
 }));
 // The three non-3D views belong to a different change; stub them so this file
 // asserts what AppLayout PASSES rather than what they happen to render.
@@ -34,6 +29,12 @@ vi.mock('../../../lib/api.js', () => ({
     listMemories: vi.fn(),
     getContradictions: vi.fn(),
     stats: vi.fn().mockResolvedValue({ total: 0, byType: {}, bySource: {} }),
+    // The scene's two fetches had their own copy of the request helper in a
+    // canvas-local module, and were mocked as a separate module here. They are
+    // `api` methods now, so they are stubbed alongside every other call the
+    // layout makes.
+    getGraphLayout: vi.fn(),
+    getGraphEdges: vi.fn(),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -43,6 +44,9 @@ vi.mock('../../../lib/api.js', () => ({
     }
   },
 }));
+
+const getGraphLayout = vi.mocked(api.getGraphLayout);
+const getGraphEdges = vi.mocked(api.getGraphEdges);
 
 interface ViewProps {
   loading: boolean;
@@ -116,7 +120,7 @@ function edgeResponse(overrides: Partial<EdgeSummary> = {}): EdgeSummary {
 }
 
 function resetAll() {
-  useMemoryStore.setState({ records: [], totalCount: 0 });
+  useMemoryStore.setState({ records: [], loadedCount: 0 });
   useNeuralStore.setState({
     neurons: [], connections: [], contradictionPairs: [], contradictionIds: new Set(),
     selectedNeuronId: null, hoveredNeuronId: null, isConnected: false,
@@ -125,11 +129,11 @@ function resetAll() {
   useAuthStore.setState({ locked: false, hadKey: false });
   vi.mocked(api.listMemories).mockReset();
   vi.mocked(api.getContradictions).mockReset();
-  vi.mocked(fetchLayout).mockReset();
-  vi.mocked(fetchEdges).mockReset();
+  getGraphLayout.mockReset();
+  getGraphEdges.mockReset();
   vi.mocked(api.getContradictions).mockResolvedValue({ count: 0, contradictions: [] });
-  vi.mocked(fetchLayout).mockResolvedValue(layoutResponse(['a']));
-  vi.mocked(fetchEdges).mockResolvedValue(edgeResponse());
+  getGraphLayout.mockResolvedValue(layoutResponse(['a']));
+  getGraphEdges.mockResolvedValue(edgeResponse());
 }
 
 describe('AppLayout effect wiring (W12)', () => {
@@ -140,10 +144,10 @@ describe('AppLayout effect wiring (W12)', () => {
 
     render(<AppLayout />);
     await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(fetchLayout).toHaveBeenCalled());
+    await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalled());
 
-    const layoutCalls = vi.mocked(fetchLayout).mock.calls.length;
-    const edgeCalls = vi.mocked(fetchEdges).mock.calls.length;
+    const layoutCalls = getGraphLayout.mock.calls.length;
+    const edgeCalls = getGraphEdges.mock.calls.length;
 
     // Simulates a socket 'memory:stored' broadcast adding a new record.
     act(() => {
@@ -151,8 +155,8 @@ describe('AppLayout effect wiring (W12)', () => {
     });
 
     await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(fetchLayout).toHaveBeenCalledTimes(layoutCalls + 1));
-    await waitFor(() => expect(fetchEdges).toHaveBeenCalledTimes(edgeCalls + 1));
+    await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalledTimes(layoutCalls + 1));
+    await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalledTimes(edgeCalls + 1));
   });
 
   it('asks for the whole edge set once, not one graph request per important memory', async () => {
@@ -162,19 +166,19 @@ describe('AppLayout effect wiring (W12)', () => {
     });
 
     render(<AppLayout />);
-    await waitFor(() => expect(fetchEdges).toHaveBeenCalled());
+    await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // The old implementation fired thirty GET /graph/:id requests here.
-    expect(vi.mocked(fetchEdges).mock.calls.length).toBeLessThanOrEqual(2);
+    expect(getGraphEdges.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it('does not refire the scene fetches on every return to the 3D view when nothing changed', async () => {
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<AppLayout />);
-    await waitFor(() => expect(fetchEdges).toHaveBeenCalled());
-    const before = vi.mocked(fetchEdges).mock.calls.length;
+    await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalled());
+    const before = getGraphEdges.mock.calls.length;
 
     for (let i = 0; i < 5; i++) {
       act(() => useDashboardStore.getState().setViewMode('timeline'));
@@ -182,7 +186,7 @@ describe('AppLayout effect wiring (W12)', () => {
     }
 
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(vi.mocked(fetchEdges).mock.calls.length).toBe(before);
+    expect(getGraphEdges.mock.calls.length).toBe(before);
   });
 
   it('does not refetch contradictions merely because an existing record was edited', async () => {
@@ -205,7 +209,7 @@ describe('AppLayout scene sourcing', () => {
 
   it('builds the node set from the projection, not from the 200-row memory page', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    vi.mocked(fetchLayout).mockResolvedValue(layoutResponse(['a', 'b', 'c', 'd', 'e']));
+    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c', 'd', 'e']));
 
     render(<AppLayout />);
     await waitFor(() => expect(useNeuralStore.getState().neurons).toHaveLength(5));
@@ -214,8 +218,8 @@ describe('AppLayout scene sourcing', () => {
 
   it('states what it is showing and what it is not', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    vi.mocked(fetchLayout).mockResolvedValue(layoutResponse(['a', 'b', 'c']));
-    vi.mocked(fetchEdges).mockResolvedValue(
+    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c']));
+    getGraphEdges.mockResolvedValue(
       edgeResponse({ total: 3102, stored: 8495, matching: 3102, returned: 3102 })
     );
 
@@ -228,7 +232,7 @@ describe('AppLayout scene sourcing', () => {
 
   it('says so when the projection is unavailable instead of pretending the sphere means something', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 2, memories: [record({ id: 'a' }), record({ id: 'b' })] });
-    vi.mocked(fetchLayout).mockRejectedValue(new Error('offline'));
+    getGraphLayout.mockRejectedValue(new Error('offline'));
 
     render(<AppLayout />);
     await waitFor(() => expect(screen.getByText(/positions unavailable/i)).toBeInTheDocument());
@@ -238,7 +242,7 @@ describe('AppLayout scene sourcing', () => {
 
   it('passes the server\'s own "fallback" verdict through to the key', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    vi.mocked(fetchLayout).mockResolvedValue(
+    getGraphLayout.mockResolvedValue(
       layoutResponse(['a'], { method: 'fallback', projected: 0, unprojected: 1 })
     );
 
@@ -270,7 +274,7 @@ describe('AppLayout loading spinner animates (W13)', () => {
     // The spinner now covers the projection fetch too — an empty canvas while
     // /api/graph/layout is in flight looked identical to an empty store.
     let resolveLayout!: (v: LayoutResponse) => void;
-    vi.mocked(fetchLayout).mockReturnValueOnce(new Promise((resolve) => { resolveLayout = resolve; }));
+    getGraphLayout.mockReturnValueOnce(new Promise((resolve) => { resolveLayout = resolve; }));
 
     render(<AppLayout />);
     const spinner = screen.getByText(/loading neural graph/i).previousSibling as HTMLElement;

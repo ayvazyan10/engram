@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { startOfDay } from 'date-fns';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, withAlpha } from '../../lib/tokens.js';
+import { GLYPH, RADIUS, SPACE, STATUS, TYPE } from '../../lib/tokens.js';
+import { TypeTag } from '../ui/DataMark.js';
 import { safeParseISO, formatDayHeading, formatTimeOfDay, UNKNOWN_DATE_LABEL } from '../../lib/dates.js';
 import { toPlainText } from '../../lib/plainText.js';
 import { useServerStats } from '../../lib/serverStats.js';
@@ -123,7 +124,6 @@ export default function TimelineView({ loading, error, onRetry }: Props) {
 
 function TimelineCard({ memory }: { memory: MemoryRecord }) {
   const t = useTemplateStore((s) => s.activeTemplate);
-  const typeColor = TYPE_COLORS[memory.type] ?? t.accent;
   // H4: the card printed raw Markdown, so most of them opened with a literal
   // '# Memory Analysis:' or '**Most Significant Contradiction:**'.
   const body = toPlainText(memory.content);
@@ -131,12 +131,11 @@ function TimelineCard({ memory }: { memory: MemoryRecord }) {
   return (
     <div style={{ ...s.card, background: t.cardBg, borderColor: t.panelBorder }}>
       <div style={s.cardHeader}>
-        {/* M8: was `typeColor + '20'` — the hex-concat trick withAlpha exists
-            to replace. Mono's accent is '#ffffff'; any future short or rgb()
-            token silently yields an invalid colour. */}
-        <span style={{ ...s.typeBadge, background: withAlpha(typeColor, 0.125), color: typeColor }}>
-          {memory.type}
-        </span>
+        {/* F2: this badge used to set `color: typeColor` on its own label over
+            a 12.5% tint of itself — text wearing the data colour, which the
+            mark rules forbid and which the re-stepped palette would have
+            dropped to 4.03:1. The dot carries identity now; see ui/DataMark. */}
+        <TypeTag type={memory.type} />
         <span className="ec-tabular" style={{ ...s.time, color: t.textMuted }}>
           {formatTimeOfDay(memory.createdAt)}
         </span>
@@ -157,8 +156,8 @@ function TimelineCard({ memory }: { memory: MemoryRecord }) {
 }
 
 // M7: every size and space here was a raw literal — the file imported
-// TYPE_COLORS from lib/tokens.ts and nothing else. Substituted to the
-// nearest scale step (ties resolved upward), which is what makes the token
+// the memory-type palette from lib/tokens.ts and nothing else. Substituted to
+// the nearest scale step (ties resolved upward), which is what makes the token
 // layer real rather than aspirational.
 const s = {
   root: {
@@ -226,14 +225,6 @@ const s = {
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: SPACE.sm,
-  },
-  typeBadge: {
-    fontSize: TYPE.xs,
-    fontWeight: 600,
-    padding: `${SPACE['3xs']} ${SPACE.sm}`,
-    borderRadius: RADIUS.tight,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.03em',
   },
   time: {
     fontSize: TYPE.sm,

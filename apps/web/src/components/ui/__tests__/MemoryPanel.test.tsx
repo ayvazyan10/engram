@@ -31,7 +31,7 @@ describe('MemoryPanel auth-error vs empty-store (F2)', () => {
       searchResults: [],
       searchQuery: '',
       isSearching: false,
-      totalCount: 0,
+      loadedCount: 0,
     });
   });
 
@@ -63,7 +63,7 @@ describe('MemoryPanel auth-error vs empty-store (F2)', () => {
 
 describe('MemoryPanel rows (H1 — 30% of 200 rendered rows were byte-identical)', () => {
   beforeEach(() => {
-    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, totalCount: 0 });
+    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, loadedCount: 0 });
   });
 
   it('distinguishes two rows that share a concept AND a date', () => {
@@ -105,7 +105,7 @@ describe('MemoryPanel rows (H1 — 30% of 200 rendered rows were byte-identical)
 
 describe('MemoryPanel count (H6 — "MEMORY GRAPH 200" beside "653 memories")', () => {
   beforeEach(() => {
-    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, totalCount: 0 });
+    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, loadedCount: 0 });
   });
 
   it('says how many of the store the loaded page actually is', () => {
@@ -119,7 +119,7 @@ describe('MemoryPanel count (H6 — "MEMORY GRAPH 200" beside "653 memories")', 
 
 describe('MemoryPanel type pills (L1 — they looked like filters and did nothing)', () => {
   beforeEach(() => {
-    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, totalCount: 0 });
+    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, loadedCount: 0 });
     useMemoryStore.setState({
       records: [
         record({ id: 'a', type: 'semantic', concept: 'Semantic one' }),
@@ -157,7 +157,7 @@ describe('MemoryPanel type pills (L1 — they looked like filters and did nothin
 
 describe('MemoryPanel loading indicator (L2)', () => {
   it('animates — it was a static dot that read as a bullet', () => {
-    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, totalCount: 0 });
+    useMemoryStore.setState({ records: [], searchResults: [], searchQuery: '', isSearching: false, loadedCount: 0 });
     const { container } = render(<MemoryPanel loading />);
     const spinner = container.querySelector('svg');
     expect(spinner).not.toBeNull();

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import TimelineView from '../TimelineView.js';
 import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js';
+import { TEMPLATES } from '../../../store/templateStore.js';
 
 // H6: the timeline's "N of M" caption reads the server census.
 vi.mock('../../../lib/serverStats.js', () => ({
@@ -117,7 +118,27 @@ describe('TimelineView card content', () => {
     useMemoryStore.setState({ records: [makeRecord({ id: 'a', type: 'semantic' })] });
     render(<TimelineView />);
 
-    const badge = screen.getByText('semantic');
+    const badge = screen.getByText('Semantic');
     expect(badge.style.background).toMatch(/^rgba\(/);
+  });
+
+  // F2: the badge used to paint its own label in the type hue over a 12.5%
+  // tint of itself — 5.08:1 with the old palette, and 4.03:1 under the
+  // re-stepped one. Identity moved onto a dot; the label wears ink.
+  it('does not paint the type label in the type colour — a dot beside it carries the hue', () => {
+    useMemoryStore.setState({ records: [makeRecord({ id: 'a', type: 'semantic' })] });
+    render(<TimelineView />);
+
+    const badge = screen.getByText('Semantic');
+    const semantic = 'rgb(34, 165, 176)';
+    const ink = TEMPLATES[0]!.textPrimary.replace('#', '');
+    const inkRgb = `rgb(${parseInt(ink.slice(0, 2), 16)}, ${parseInt(ink.slice(2, 4), 16)}, ${parseInt(ink.slice(4, 6), 16)})`;
+    expect(badge.style.color).not.toBe(semantic);
+    expect(badge.style.color).toBe(inkRgb);
+
+    const dot = badge.querySelector('span[aria-hidden="true"]') as HTMLElement | null;
+    expect(dot).not.toBeNull();
+    expect(dot!.style.background).toBe(semantic);
+    expect(dot!.style.borderRadius).toBe('50%');
   });
 });

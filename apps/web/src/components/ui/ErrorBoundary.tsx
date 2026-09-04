@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { RADIUS, SPACE, STATUS, TYPE } from '../../lib/tokens.js';
+import { GLYPH, RADIUS, SPACE, STATUS, TYPE } from '../../lib/tokens.js';
 
 interface Props {
   children: ReactNode;
@@ -45,7 +45,7 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <div style={styles.wrap} role="alert">
-          <div style={styles.icon}>⚠</div>
+          <div style={styles.icon}>{GLYPH.warning}</div>
           <div style={styles.title}>Something went wrong</div>
           <div style={styles.message}>{this.state.error.message}</div>
           <button className="ec-hover-bright" style={styles.button} onClick={this.handleRetry}>

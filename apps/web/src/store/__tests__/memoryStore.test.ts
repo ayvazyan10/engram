@@ -18,13 +18,13 @@ function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
 
 describe('memoryStore addRecord (F1)', () => {
   beforeEach(() => {
-    useMemoryStore.setState({ records: [], totalCount: 0 });
+    useMemoryStore.setState({ records: [], loadedCount: 0 });
   });
 
-  it('inserts a brand-new record and bumps totalCount', () => {
+  it('inserts a brand-new record and bumps the loaded-page count', () => {
     useMemoryStore.getState().addRecord(makeRecord());
     expect(useMemoryStore.getState().records).toHaveLength(1);
-    expect(useMemoryStore.getState().totalCount).toBe(1);
+    expect(useMemoryStore.getState().loadedCount).toBe(1);
   });
 
   it('is idempotent by id — the same record arriving twice (modal callback + socket broadcast) does not duplicate it', () => {
@@ -35,9 +35,9 @@ describe('memoryStore addRecord (F1)', () => {
     // ...and the server's `memory:stored` broadcast for the same POST arriving via the socket.
     useMemoryStore.getState().addRecord(record);
 
-    const { records, totalCount } = useMemoryStore.getState();
+    const { records, loadedCount } = useMemoryStore.getState();
     expect(records).toHaveLength(1);
-    expect(totalCount).toBe(1);
+    expect(loadedCount).toBe(1);
     expect(records.filter((r) => r.id === record.id)).toHaveLength(1);
   });
 
@@ -49,9 +49,9 @@ describe('memoryStore addRecord (F1)', () => {
     useMemoryStore.getState().addRecord(record);
     useMemoryStore.getState().addRecord({ ...record, summary: 'now summarized' });
 
-    const { records, totalCount } = useMemoryStore.getState();
+    const { records, loadedCount } = useMemoryStore.getState();
     expect(records).toHaveLength(1);
-    expect(totalCount).toBe(1);
+    expect(loadedCount).toBe(1);
     expect(records[0]?.summary).toBe('now summarized');
   });
 
@@ -59,8 +59,8 @@ describe('memoryStore addRecord (F1)', () => {
     useMemoryStore.getState().addRecord(makeRecord({ id: 'a' }));
     useMemoryStore.getState().addRecord(makeRecord({ id: 'b' }));
 
-    const { records, totalCount } = useMemoryStore.getState();
+    const { records, loadedCount } = useMemoryStore.getState();
     expect(records.map((r) => r.id)).toEqual(['b', 'a']);
-    expect(totalCount).toBe(2);
+    expect(loadedCount).toBe(2);
   });
 });

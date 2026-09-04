@@ -1,18 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useAnalyticsStore, type AnalyticsData } from '../analyticsStore.js';
+import { isAnalyticsData, useAnalyticsStore } from '../analyticsStore.js';
+import { analyticsPayload } from '../../test/analyticsFixture.js';
 
-function makeData(overrides: Partial<AnalyticsData> = {}): AnalyticsData {
-  return {
-    total: 10,
-    avgImportance: 0.5,
-    byType: { semantic: 10 },
-    bySource: {},
-    dailyGrowth: [],
-    hourlyActivity: [],
-    topConcepts: [],
-    ...overrides,
-  };
-}
+const makeData = analyticsPayload;
 
 describe('analyticsStore', () => {
   beforeEach(() => {
@@ -22,7 +12,7 @@ describe('analyticsStore', () => {
   it('setData replaces data and clears a stale error', () => {
     useAnalyticsStore.setState({ error: 'boom' });
     useAnalyticsStore.getState().setData(makeData());
-    expect(useAnalyticsStore.getState().data?.total).toBe(10);
+    expect(useAnalyticsStore.getState().data?.windowed.total).toBe(42);
     expect(useAnalyticsStore.getState().error).toBeNull();
   });
 
@@ -52,5 +42,33 @@ describe('analyticsStore', () => {
     useAnalyticsStore.getState().setLoading(true);
     useAnalyticsStore.getState().setError(null);
     expect(useAnalyticsStore.getState().loading).toBe(true);
+  });
+});
+
+describe('isAnalyticsData (boundary guard)', () => {
+  it('accepts the shape the server serves', () => {
+    expect(isAnalyticsData(analyticsPayload())).toBe(true);
+  });
+
+  it('rejects the previous flat, scope-mixed shape rather than rendering it as undefined', () => {
+    const legacy = {
+      total: 651,
+      avgImportance: 0.81,
+      byType: { semantic: 54 },
+      bySource: { 'claude-code': 62 },
+      dailyGrowth: [{ date: '2026-09-04', count: 7 }],
+      hourlyActivity: [],
+      topConcepts: [],
+    };
+    expect(isAnalyticsData(legacy)).toBe(false);
+  });
+
+  it('rejects anything that is not an object, and any payload missing a scope', () => {
+    for (const bad of [null, undefined, 'ok', 42, {}, { window: {}, windowed: {}, allTime: {} }]) {
+      expect(isAnalyticsData(bad)).toBe(false);
+    }
+    const noAllTime = { ...analyticsPayload() } as unknown as Record<string, unknown>;
+    delete noAllTime['allTime'];
+    expect(isAnalyticsData(noAllTime)).toBe(false);
   });
 });

@@ -1,12 +1,15 @@
 import type { UITemplate } from '../../store/templateStore.js';
-import { TYPE, withAlpha } from '../../lib/tokens.js';
+import { GLYPH, TYPE, withAlpha } from '../../lib/tokens.js';
 
 export type MobilePane = 'list' | 'canvas' | 'inspector';
 
+// L6: from the registry, not hand-picked here. The previous '⬡'/'◈' pair
+// was `GLYPH.concept` and `GLYPH.pattern` — the same two glyphs a timeline card
+// and a reflection badge use for something else entirely.
 const TABS: { id: MobilePane; label: string; icon: string }[] = [
-  { id: 'list', label: 'Memories', icon: '☰' },
-  { id: 'canvas', label: 'Graph', icon: '⬡' },
-  { id: 'inspector', label: 'Inspect', icon: '◈' },
+  { id: 'list', label: 'Memories', icon: GLYPH.paneMemories },
+  { id: 'canvas', label: 'Graph', icon: GLYPH.paneGraph },
+  { id: 'inspector', label: 'Inspect', icon: GLYPH.paneInspect },
 ];
 
 interface Props {

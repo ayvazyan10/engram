@@ -3,18 +3,28 @@ import { useReflectionStore, type ReflectionInsight } from '../../store/reflecti
 import { useTemplateStore } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
 import {
-  GLYPH, MEASURE, RADIUS, REFLECTION_COLORS, SPACE, STATUS, TYPE, withAlpha,
+  GLYPH, MEASURE, RADIUS, SPACE, STATUS, TYPE, withAlpha,
 } from '../../lib/tokens.js';
 import { formatDateTime } from '../../lib/dates.js';
 import { toPlainText } from '../../lib/plainText.js';
 
 const REFLECTION_TYPES = ['pattern', 'knowledge_gap', 'trend', 'contradiction_summary'] as const;
 
-const TYPE_META: Record<string, { icon: string; label: string; color: string }> = {
-  pattern: { icon: GLYPH.pattern, label: 'Pattern', color: REFLECTION_COLORS.pattern },
-  knowledge_gap: { icon: GLYPH.knowledgeGap, label: 'Knowledge Gap', color: REFLECTION_COLORS.knowledge_gap },
-  trend: { icon: GLYPH.trend, label: 'Trend', color: REFLECTION_COLORS.trend },
-  contradiction_summary: { icon: GLYPH.contradiction, label: 'Contradiction', color: REFLECTION_COLORS.contradiction_summary },
+/**
+ * F5: these four used to carry a `color` each, and three of them were
+ * byte-identical to a memory-type slot — pattern === episodic, trend ===
+ * semantic, contradiction === procedural, ΔE 0.0. A stored reflection IS a
+ * memory, so its insight chip and its type badge can sit on screen together;
+ * one categorical slot cannot own two identities. The colour is gone rather
+ * than re-slotted (see lib/tokens.ts for the full reasoning) — the glyph and
+ * the spelled-out label were always carrying the identity anyway, and the
+ * colour was additionally being used as TEXT, which the mark rules forbid.
+ */
+const TYPE_META: Record<string, { icon: string; label: string }> = {
+  pattern: { icon: GLYPH.pattern, label: 'Pattern' },
+  knowledge_gap: { icon: GLYPH.knowledgeGap, label: 'Knowledge Gap' },
+  trend: { icon: GLYPH.trend, label: 'Trend' },
+  contradiction_summary: { icon: GLYPH.contradiction, label: 'Contradiction' },
 };
 
 interface Props {
@@ -129,7 +139,7 @@ export default function ReflectionView({ loading: appLoading, error: appError, o
             <button
               key={type}
               className="ec-hover-tint"
-              style={{ ...s.filterBtn, ...(active ? { background: withAlpha(meta.color, 0.13), color: meta.color } : { color: t.textSecondary }) }}
+              style={{ ...s.filterBtn, ...(active ? { background: withAlpha(t.accent, 0.13), color: t.accent } : { color: t.textSecondary }) }}
               onClick={() => setFilterType(type)}
             >
               <span aria-hidden="true">{meta.icon}</span> {meta.label}
@@ -192,13 +202,14 @@ export default function ReflectionView({ loading: appLoading, error: appError, o
 
 function InsightCard({ insight }: { insight: ReflectionInsight }) {
   const t = useTemplateStore((s) => s.activeTemplate);
-  const meta = TYPE_META[insight.type] ?? { icon: '•', label: insight.type, color: t.accent };
+  const meta = TYPE_META[insight.type] ?? { icon: '•', label: insight.type };
 
   return (
     <div style={{ ...s.card, background: t.cardBg, borderColor: t.panelBorder }}>
       <div style={s.cardTop}>
-        {/* M8: was `meta.color + '15'`. */}
-        <span style={{ ...s.cardType, background: withAlpha(meta.color, 0.08), color: meta.color }}>
+        {/* F5: was a tint of this insight type's own colour, with the label
+            painted in it. Neutral chip, ink label, glyph carries the type. */}
+        <span style={{ ...s.cardType, background: t.inputBg, color: t.textSecondary }}>
           <span aria-hidden="true">{meta.icon}</span> {meta.label}
         </span>
         {/* W10: an unparsable createdAt must not throw — there is no error

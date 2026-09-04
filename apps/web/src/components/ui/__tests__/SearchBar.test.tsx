@@ -33,7 +33,7 @@ function resetStore() {
     searchResults: [],
     searchQuery: '',
     isSearching: false,
-    totalCount: 0,
+    loadedCount: 0,
     currentContext: '',
     recallLatencyMs: null,
     highlightedIds: new Set(),

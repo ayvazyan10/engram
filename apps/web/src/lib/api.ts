@@ -1,8 +1,17 @@
 import { getStoredApiKey } from './apiKey.js';
 import { useAuthStore } from '../store/authStore.js';
+import type { SceneNodeInput } from '../store/viewStore.js';
+import type { AnalyticsData } from '../store/analyticsStore.js';
 
 const BASE = '/api';
 
+// One timeout for every call in the app. The 3D scene's own copy of this
+// helper used to run on 20s; /graph/layout is the slowest route here and
+// measures ~160ms warm and under a second cold against a 651-memory store, so
+// 15s is already ~15x the cold figure and the 20s was never measured against
+// anything. Kept as one constant rather than a per-call option: a second
+// timeout is a second behaviour to reason about, and no caller is asking for
+// one.
 const REQUEST_TIMEOUT_MS = 15000;
 
 export class ApiError extends Error {
@@ -79,6 +88,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+/**
+ * GET /api/graph/layout — every memory's 3D coordinate, projected from its
+ * embedding server-side.
+ */
+export interface LayoutResponse {
+  method: 'pca3' | 'fallback';
+  fingerprint: string;
+  generatedAt: string;
+  halfExtent: number;
+  count: number;
+  projected: number;
+  unprojected: number;
+  explainedVariance: number[];
+  embeddingModel: string | null;
+  computeMs: number;
+  nodes: SceneNodeInput[];
+}
+
+/** GET /api/graph/edges — the edge set plus the counts the scene key needs to
+ *  state what is on screen and what is not. */
+export interface EdgeSummary {
+  /** Edges whose endpoints are both on screen — the honest denominator. */
+  total: number;
+  /** Connection rows in the store, including ones onto archived memories. */
+  stored: number;
+  matching: number;
+  returned: number;
+  truncated: boolean;
+  minStrength: number;
+  limit: number;
+  edges: Array<{
+    id: string;
+    sourceId: string;
+    targetId: string;
+    relationship: string;
+    strength: number;
+  }>;
+}
+
 export const api = {
   // W15: no UI calls this today (it's the request()-helper test suite's
   // stand-in endpoint), but it mirrors a real server route and is exactly
@@ -130,6 +178,30 @@ export const api = {
   getGraph: (id: string, depth = 1) =>
     request<{ node: unknown; connections: Array<{ id: string; sourceId: string; targetId: string; relationship: string; strength: number }>; neighbors: unknown[] }>(`/graph/${id}?depth=${depth}`),
 
+  /**
+   * The scene's own two calls. They live in this object rather than beside the
+   * canvas so there is one place that owns the request contract — key header,
+   * timeout, 401 -> unlock gate, error-body parsing. The canvas had its own
+   * copy of all four while this file was being rewritten; a second entry point
+   * is a second thing to keep in step, which is why `request` stays private
+   * instead of being exported for callers to wrap themselves.
+   */
+  getGraphLayout: () => request<LayoutResponse>('/graph/layout'),
+
+  /**
+   * Every renderable edge.
+   *
+   * No filter by default: the live store has ~3,100 edges whose endpoints are
+   * both visible (3,099 measured against 651 memories), which is one
+   * `LineSegments` draw call and perfectly legible.
+   * The response reports `total`/`stored` regardless, so the scene key can
+   * state what is on screen and what is not — the previous client asked for the
+   * top 30 memories' neighbourhoods and rendered 67 edges out of thousands with
+   * no hint that anything was missing.
+   */
+  getGraphEdges: (minStrength = 0) =>
+    request<EdgeSummary>(`/graph/edges?minStrength=${minStrength}`),
+
   // Tags
   addTag: (memoryId: string, tag: string) =>
     request<{ id: string; tags: string[] }>(`/memory/${memoryId}/tags`, {
@@ -160,17 +232,25 @@ export const api = {
       body: JSON.stringify({ sourceId, targetId, strategy }),
     }),
 
-  // Analytics
-  getAnalytics: (days = 30) =>
-    request<{
-      total: number;
-      avgImportance: number;
-      byType: Record<string, number>;
-      bySource: Record<string, number>;
-      dailyGrowth: Array<{ date: string; count: number }>;
-      hourlyActivity: Array<{ hour: number; dayOfWeek: number; count: number }>;
-      topConcepts: Array<{ concept: string; count: number; avgImportance: number }>;
-    }>(`/analytics?days=${days}`),
+  /**
+   * GET /api/decay/policy — the server's own decay configuration.
+   *
+   * The 3D scene encodes recency as brightness, and the half-life it decays on
+   * has to be the server's, not a constant the client picked. See
+   * lib/decayPolicy.ts for why there is no client-side default.
+   */
+  getDecayPolicy: () =>
+    request<{ halfLifeDays: number; archiveThreshold: number }>('/decay/policy'),
+
+  /**
+   * GET /api/analytics — windowed and all-time figures, with the window stated.
+   *
+   * `days` (1-365) is the ONLY accepted query parameter; anything else is a
+   * 400, so no cache-buster may be appended here. The response shape lives in
+   * store/analyticsStore.ts, which also owns the boundary guard the view runs
+   * before trusting it.
+   */
+  getAnalytics: (days = 30) => request<AnalyticsData>(`/analytics?days=${days}`),
 
   // Reflections
   getReflections: (limit = 20, type?: string) => {

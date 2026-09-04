@@ -48,6 +48,20 @@ export function toPlainText(value: string): string {
     .trim();
 }
 
+/**
+ * Truncate to at most `max` characters, ALWAYS marking that it happened (F7).
+ *
+ * The ellipsis is the whole point: NeuronLabels used a bare `slice(0, 34)` and
+ * drew "Codex must use Engram as" and "CORRECTION: AI Cartoon Studio no l" as
+ * if those were the labels. A cut with no mark is not a truncation, it is a
+ * different string presented as the real one. The `…` counts against `max`, so
+ * the result never exceeds the caller's budget.
+ */
+export function truncateLabel(value: string, max: number): string {
+  if (max <= 0) return '';
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
 /** Characters of `content` kept on a row that has no concept of its own.
  *  Unchanged from what the sidebar row always showed. */
 export const CONTENT_SLICE_LENGTH = 40;

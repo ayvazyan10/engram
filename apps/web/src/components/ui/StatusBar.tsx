@@ -3,6 +3,7 @@ import { useNeuralStore } from '../../store/neuralStore.js';
 import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { GLYPH, SPACE, STATUS, TYPE, TYPE_COLORS } from '../../lib/tokens.js';
+import { DataDot } from './DataMark.js';
 import { useServerStats } from '../../lib/serverStats.js';
 
 /** H9: below this the bar keeps only what it can render on one 26px line —
@@ -13,12 +14,23 @@ const COMPACT_QUERY = '(max-width: 640px)';
 
 export default function StatusBar() {
   const { neurons } = useNeuralStore();
-  const { totalCount, recallLatencyMs, currentContext } = useMemoryStore();
+  const { loadedCount, recallLatencyMs, currentContext } = useMemoryStore();
   const t = useTemplateStore((s) => s.activeTemplate);
   const stats = useServerStats();
   const compact = useMediaQuery(COMPACT_QUERY);
 
-  const total = stats?.total ?? totalCount;
+  // H6: two different quantities, and the bar no longer substitutes one for
+  // the other. `stats.total` is every memory the server holds; `loadedCount`
+  // is the page the sidebar has in hand, which the server caps at 200. The old
+  // `stats?.total ?? totalCount` relabelled 200 loaded records as the store's
+  // total for as long as the first census was in flight. Until it lands, say
+  // what we actually know.
+  const census = stats?.total ?? null;
+  const countLabel = census !== null ? `${census} memories` : `${loadedCount} loaded`;
+  const countTitle =
+    census !== null
+      ? `${census} stored memories`
+      : `${loadedCount} memories loaded — the server's total is not in yet`;
 
   return (
     <div style={{ ...styles.bar, background: t.statusBg, borderTopColor: t.panelBorder, color: t.textMuted }}>
@@ -31,7 +43,7 @@ export default function StatusBar() {
             <div style={{ ...styles.sep, background: t.panelBorder }} />
           </>
         )}
-        <span className="ec-tabular">{total} memories</span>
+        <span className="ec-tabular" title={countTitle}>{countLabel}</span>
         {!compact && (
           <>
             <div style={{ ...styles.sep, background: t.panelBorder }} />
@@ -64,10 +76,17 @@ export default function StatusBar() {
   );
 }
 
+/**
+ * F2: the E/S/P letter used to BE the swatch — `style={{ color }}` on the
+ * letter itself, which is exactly what the mark rules rule out. A 6px dot
+ * carries the hue and the letter drops to ink, so the pair reads the same way
+ * the donut legend and the scene key already do.
+ */
 function Chip({ label, value, color, title, t }: { label: string; value: number; color: string; title: string; t: UITemplate }) {
   return (
     <div style={styles.chip} title={title}>
-      <span style={{ color, fontSize: TYPE.xs, fontWeight: 700 }}>{label}</span>
+      <DataDot color={color} size={6} />
+      <span style={{ color: t.textSecondary, fontSize: TYPE.xs, fontWeight: 700 }}>{label}</span>
       <span className="ec-tabular" style={{ color: t.textSecondary, fontWeight: 500 }}>{value}</span>
     </div>
   );
@@ -93,7 +112,7 @@ const styles = {
   left: { display: 'flex', alignItems: 'center', gap: SPACE.sm, minWidth: 0, flexShrink: 0 },
   center: { flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0, overflow: 'hidden' },
   right: { display: 'flex', alignItems: 'center', gap: SPACE.sm, flexShrink: 0 },
-  chip: { display: 'flex', alignItems: 'center', gap: SPACE['2xs'] },
+  chip: { display: 'flex', alignItems: 'center', gap: SPACE['3xs'] },
   sep: { width: '1px', height: '12px', flexShrink: 0 },
   latency: { fontWeight: 600, fontSize: TYPE.sm },
   contextHint: { fontSize: TYPE.xs, cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis' },

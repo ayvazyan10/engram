@@ -6,6 +6,7 @@ import {
   GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_ICONS, TYPE_LABELS, withAlpha,
   type MemoryType,
 } from '../../lib/tokens.js';
+import { DataDot } from './DataMark.js';
 import { memoryRowText } from '../../lib/plainText.js';
 import { formatShortDate } from '../../lib/dates.js';
 import { useServerStats } from '../../lib/serverStats.js';
@@ -68,8 +69,11 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
 
   // H6: "MEMORY GRAPH 200" sat on the same screen as "653 memories" with
   // nothing saying that 200 is the server's page cap rather than the whole
-  // store. `useMemoryStore.totalCount` tracks the loaded page, not the
-  // store, so the real figure comes from the shared /stats census.
+  // store. Resolved: the real figure comes from the shared /stats census, and
+  // the panel labels the two quantities apart ("200 of 651") instead of
+  // showing one and calling it the other. The store's own count is named
+  // `loadedCount` for the page it counts; this panel reads `records.length`
+  // directly, because that is the list it is rendering.
   const loaded = records.length;
   const total = stats?.total ?? loaded;
   const capped = !searchQuery && total > loaded;
@@ -121,16 +125,21 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
               onClick={() => toggleType(type)}
               style={{
                 ...styles.typePill,
-                borderColor: dimmed ? t.panelBorder : TYPE_COLORS[type],
+                // F2: the type-coloured border is this pill's mark, and it is
+                // now unconditional — `opacity` already says "filtered out",
+                // so swapping the border to a neutral was throwing away the
+                // only non-text carrier of the hue.
+                borderColor: TYPE_COLORS[type],
                 background: active ? withAlpha(TYPE_COLORS[type], 0.14) : withAlpha(t.textPrimary, 0.02),
                 opacity: dimmed ? 0.55 : 1,
               }}
             >
               {/* Glyph + count only: the sidebar is too narrow for three
                   labelled pills. The group header directly below spells the
-                  type out in the same colour and glyph, so the legend is on
-                  screen rather than hidden in a tooltip. */}
-              <span aria-hidden="true" style={{ color: TYPE_COLORS[type], fontSize: TYPE.sm }}>{TYPE_ICONS[type]}</span>
+                  type out, so the legend is on screen rather than hidden in a
+                  tooltip. F2: the glyph is ink — the pill's border is the
+                  mark that wears the data colour. */}
+              <span aria-hidden="true" style={{ color: active ? t.textPrimary : t.textSecondary, fontSize: TYPE.sm }}>{TYPE_ICONS[type]}</span>
               <span aria-hidden="true" className="ec-tabular" style={{ color: active ? t.textPrimary : t.textMuted, fontSize: TYPE.xs }}>{grouped[type]?.length ?? 0}</span>
             </button>
           );
@@ -172,7 +181,10 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
               (activeTypes.size === 0 || activeTypes.has(type)) && grouped[type] && grouped[type]!.length > 0 ? (
                 <div key={type}>
                   <div style={{ ...styles.groupLabel, color: t.textMuted }}>
-                    <span aria-hidden="true" style={{ color: TYPE_COLORS[type] }}>{TYPE_ICONS[type]}</span>
+                    {/* F2: was the glyph painted in the type colour at 11px.
+                        The dot is the mark; the glyph and the word are ink. */}
+                    <DataDot color={TYPE_COLORS[type]} size={7} />
+                    <span aria-hidden="true">{TYPE_ICONS[type]}</span>
                     {TYPE_LABELS[type]}
                     <span className="ec-tabular" style={{ ...styles.groupCount, background: t.inputBg, color: t.textMuted }}>{grouped[type]!.length}</span>
                   </div>

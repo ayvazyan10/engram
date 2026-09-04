@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_LABELS, WEIGHT, withAlpha } from '../../lib/tokens.js';
-import { IMPORTANCE_BANDS, RECENCY_HALF_LIFE_DAYS } from './encoding.js';
+import { useDecayPolicy } from '../../lib/decayPolicy.js';
+import { IMPORTANCE_BANDS } from './encoding.js';
 
 /**
  * The scene's key, and its confession.
@@ -110,7 +111,7 @@ export default function SceneKey({ stats, compact }: Props) {
           </Row>
 
           <Row label="Brightness" hint="recency">
-            <span style={{ color: t.textMuted }}>{RECENCY_HALF_LIFE_DAYS}-day half-life</span>
+            <RecencyValue muted={t.textMuted} />
           </Row>
 
           <Row label="Halo" hint="times recalled">
@@ -126,6 +127,31 @@ export default function SceneKey({ stats, compact }: Props) {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * What the brightness channel actually encodes — read off the server (F3).
+ *
+ * This row used to print "30-day half-life" from a constant in encoding.ts,
+ * while the server's policy has been 7 days all along. It is the same class of
+ * defect as claiming a PCA when the positions are id-derived, so it gets the
+ * same treatment the Provenance block already gives that case: when the number
+ * isn't known, say the channel is off rather than name a number.
+ */
+function RecencyValue({ muted }: { muted: string }) {
+  const policy = useDecayPolicy();
+  if (!policy) {
+    return (
+      <span style={{ color: STATUS.warning }}>
+        Decay policy unreachable — brightness is off, every node is drawn at full strength.
+      </span>
+    );
+  }
+  return (
+    <span style={{ color: muted }}>
+      {policy.halfLifeDays}-day half-life, the server&apos;s own decay policy
+    </span>
   );
 }
 

@@ -159,6 +159,35 @@ select:focus-visible,
   filter: brightness(0.9);
 }
 
+/* ─── Heat cell (F6) ────────────────────────────────────────────────────────
+ * The hovered or focused mark lifts. recharts' default hover cursor — a
+ * full-width pale band behind the row — was the brightest thing in the panel
+ * and read as another data mark; the heatmap had no hover affordance at all
+ * and 0 of its 168 cells were focusable. Scale rather than a colour change so
+ * it works identically on a filled cell and on an empty one, and so the cell's
+ * own colour keeps meaning exactly what the key says it means. Keyboard focus
+ * gets the same lift plus the global focus ring (see the `[tabindex]` rule
+ * above, which these cells match). */
+.ec-cell {
+  position: relative;
+}
+
+.ec-cell:hover,
+.ec-cell:focus-visible {
+  transform: scale(1.3);
+  z-index: 1;
+}
+
+.ec-cell:focus-visible {
+  outline-offset: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ec-cell {
+    transition: transform var(--ec-duration-fast) var(--ec-ease-out);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .ec-hover-tint, .ec-hover-bright, .ec-press, .ec-row-transition {
     transition:

@@ -8,8 +8,13 @@ import { api } from './api.js';
  * sidebar said "MEMORY GRAPH 200" and the status bar said "653 memories · 200
  * nodes visible". 200 is the server's `listMemories` page cap, not a total —
  * but only the status bar knew the real figure, because it was the only
- * component that called `/stats`, and `useMemoryStore.totalCount` tracks the
- * loaded page (`setRecords` sets it to `records.length`), not the store.
+ * component that called `/stats`.
+ *
+ * Resolved: this module is the one place that asks for the census, and the
+ * store field that tracks the loaded page is now named `loadedCount` for what
+ * it is (`setRecords` sets it to `records.length`). The two numbers are never
+ * substituted for one another — a surface with no census yet says "N loaded"
+ * rather than passing N off as the total.
  *
  * A module-level snapshot with one poll shared across subscribers, rather
  * than a `useEffect` + `setInterval` per component: three panels asking the

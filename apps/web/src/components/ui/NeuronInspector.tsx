@@ -4,11 +4,12 @@ import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
 import { asMemoryRecord } from '../../hooks/useWebSocket.js';
-import { GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_LABELS, WEIGHT, withAlpha } from '../../lib/tokens.js';
+import { GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import { parseTagLabel } from '../../lib/tagLabel.js';
 import { toPlainText } from '../../lib/plainText.js';
 import { formatDateTime } from '../../lib/dates.js';
 import ConfirmDialog from './ConfirmDialog.js';
+import { TypeTag } from './DataMark.js';
 
 type GraphConn = { id: string; targetId: string; relationship: string; strength: number };
 
@@ -183,8 +184,8 @@ export default function NeuronInspector() {
     );
   }
 
+  // Bars and fills wear this; text never does (F2).
   const color = TYPE_COLORS[memory.type] ?? t.textSecondary;
-  const label = TYPE_LABELS[memory.type] ?? memory.type;
   // H4: memory bodies are Markdown written by an LLM, and this panel printed
   // the source verbatim — records opened with a literal '# Memory Analysis:'.
   const conceptText = memory.concept ? toPlainText(memory.concept) : '';
@@ -196,7 +197,7 @@ export default function NeuronInspector() {
       {/* Header */}
       <div style={styles.header}>
         <div style={styles.headerMeta}>
-          <span style={{ ...styles.badge, background: withAlpha(color, 0.15), color }}>{label}</span>
+          <TypeTag type={memory.type} style={styles.badge} />
           {memory.source && <span style={{ ...styles.source, color: t.textMuted }}>{memory.source}</span>}
         </div>
         <div style={{ display: 'flex', gap: SPACE['2xs'] }}>
@@ -231,7 +232,9 @@ export default function NeuronInspector() {
         <div style={{ ...styles.importanceTrack, background: t.inputBg }}>
           <div style={{ ...styles.importanceFill, width: `${Math.round(memory.importance * 100)}%`, background: color }} />
         </div>
-        <span className="ec-tabular" style={{ color, fontSize: TYPE.sm, fontWeight: 600, minWidth: '32px', textAlign: 'right' as const }}>{Math.round(memory.importance * 100)}%</span>
+        {/* F2: this read-out used to wear the type colour. The bar beside it
+            is the mark; the number is ink. */}
+        <span className="ec-tabular" style={{ color: t.textSecondary, fontSize: TYPE.sm, fontWeight: 600, minWidth: '32px', textAlign: 'right' as const }}>{Math.round(memory.importance * 100)}%</span>
       </div>
 
       <div style={{ ...styles.divider, background: t.panelBorder }} />
@@ -262,7 +265,7 @@ export default function NeuronInspector() {
             above it uses, which reads as a label rather than a control. */}
         {conceptText && (
           <Section label="Concept" t={t}>
-            <div className="ec-wrap-anywhere" style={{ ...styles.conceptChip, background: withAlpha(color, 0.13), color }}>{conceptText}</div>
+            <div className="ec-wrap-anywhere" style={{ ...styles.conceptChip, background: withAlpha(color, 0.13), color: t.textPrimary }}>{conceptText}</div>
           </Section>
         )}
 
@@ -336,7 +339,7 @@ export default function NeuronInspector() {
           message="This memory is archived on the server, not deleted — but it leaves the graph, the timeline and search results."
           subject={
             <>
-              {conceptText && <span style={{ ...styles.confirmConcept, color }}>{conceptText}</span>}
+              {conceptText && <span style={{ ...styles.confirmConcept, color: t.textPrimary }}>{conceptText}</span>}
               <span className="ec-wrap-anywhere" style={{ ...styles.confirmExcerpt, color: t.textSecondary }}>
                 {contentText.slice(0, CONFIRM_EXCERPT_LENGTH)}{contentText.length > CONFIRM_EXCERPT_LENGTH ? '…' : ''}
               </span>
@@ -515,7 +518,7 @@ const styles = {
   emptyText: { fontSize: TYPE.base, textAlign: 'center' as const, lineHeight: 1.6 },
   header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: `${SPACE.lg} ${SPACE.lg} ${SPACE.sm}` },
   headerMeta: { display: 'flex', flexDirection: 'column' as const, gap: SPACE['2xs'] },
-  badge: { display: 'inline-block', fontSize: TYPE.xs, fontWeight: 700, padding: '3px 8px', borderRadius: RADIUS.sm, textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
+  badge: { padding: '3px 8px', borderRadius: RADIUS.sm, letterSpacing: '0.06em' },
   source: { fontSize: TYPE.xs },
   iconBtn: {
     width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { hexToInt, STATUS } from '../../lib/tokens.js';
+import { EDGE_RAMP, hexToInt, STATUS } from '../../lib/tokens.js';
 import type { RenderableConnection } from './NeuralCanvas.js';
 import type { ScenePositions } from './scenePositions.js';
 
@@ -27,26 +27,46 @@ interface Props {
 
 const CONTRADICTION = hexToInt(STATUS.contradiction);
 
-/** Cool ramp for ordinary relations; strength picks the step. */
-const RELATION_RAMP = [0x2b3d7d, 0x4a63d6, 0x8fa8ff] as const;
+/**
+ * Edge strength is magnitude, so it takes a NEUTRAL sequential ramp (F5).
+ *
+ * This was `[0x2b3d7d, 0x4a63d6, 0x8fa8ff]` — a blue ramp sitting on the
+ * episodic hue family, whose mid step measured ΔE 9.3 from the episodic slot
+ * under normal vision, well under the 15 floor. A magnitude scale was wearing a
+ * near-miss of a categorical identity. `EDGE_RAMP` is grey (lib/tokens.ts), so
+ * it cannot be mistaken for anyone's identity, and it validates `--ordinal` on
+ * all three scene backgrounds (low end 2.23:1, floor 2.0:1). The material is
+ * opaque now, so what is drawn IS what was validated — see tokens.ts.
+ *
+ * The old code ALSO multiplied every edge by a continuous `0.45 + strength *
+ * 0.55` weight, so strength was encoded twice on the same channel — once as a
+ * ramp step, once as a brightness scale on top of it, which put the weakest
+ * edges below the ramp's validated low end. The discrete step is the encoding
+ * now, for the same reason IMPORTANCE_BANDS is discrete: a step you can name in
+ * a key beats a ramp nobody can read off the screen.
+ */
+const STRENGTH_STEPS = EDGE_RAMP.map(hexToInt);
+/** Boundaries between the ramp steps, weakest first. */
+const STRENGTH_THRESHOLDS = [0.45, 0.7] as const;
 
 function relationColor(strength: number): number {
-  if (strength > 0.7) return RELATION_RAMP[2];
-  if (strength > 0.45) return RELATION_RAMP[1];
-  return RELATION_RAMP[0];
+  if (strength > STRENGTH_THRESHOLDS[1]) return STRENGTH_STEPS[2]!;
+  if (strength > STRENGTH_THRESHOLDS[0]) return STRENGTH_STEPS[1]!;
+  return STRENGTH_STEPS[0]!;
 }
 
 const scratchColor = new THREE.Color();
 
-/** Colour and brightness for one edge, folded into the vertex colour. */
+/** How far an edge touching the selection is lifted above the rest. */
+const SELECTION_LIFT = 1.9;
+
+/** Colour for one edge, folded into the vertex colour. */
 function edgeColor(edge: RenderableConnection, incidentToSelection: boolean): THREE.Color {
   const isContradiction = edge.relationship === 'contradicts';
   scratchColor.setHex(isContradiction ? CONTRADICTION : relationColor(edge.strength));
-  // Opacity is a single material-wide value for a LineSegments, so per-edge
-  // weight has to live in the colour: strong edges read brighter, weak ones
-  // recede, and anything touching the selection is lifted above both.
-  const weight = 0.45 + edge.strength * 0.55;
-  scratchColor.multiplyScalar(incidentToSelection ? 1.9 : isContradiction ? weight * 0.85 : weight);
+  // Opacity is a single material-wide value for a LineSegments, so the one
+  // thing that still has to live in the colour is the selection lift.
+  if (incidentToSelection) scratchColor.multiplyScalar(SELECTION_LIFT);
   return scratchColor;
 }
 
@@ -115,10 +135,12 @@ export default function ConnectionLines({ connections, positions, selectedId }: 
         <bufferAttribute attach="attributes-position" args={[buffers.position, 3]} />
         <bufferAttribute attach="attributes-color" args={[buffers.color, 3]} />
       </bufferGeometry>
+      {/* Opaque: at 0.7 the overlap of 3,099 edges accumulated alpha, so a
+          dense region read brighter than a sparse one — a density channel
+          nothing in the scene key mentions, layered on top of the strength
+          ramp. depthWrite stays off so edges never occlude the nodes. */}
       <lineBasicMaterial
         vertexColors
-        transparent
-        opacity={0.7}
         depthWrite={false}
         toneMapped={false}
       />

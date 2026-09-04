@@ -3,7 +3,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import { useNeuralStore } from '../../store/neuralStore.js';
-import { TYPE_COLORS } from '../../lib/tokens.js';
+import { truncateLabel } from '../../lib/plainText.js';
 import { importanceRadius } from './encoding.js';
 import type { ScenePositions } from './scenePositions.js';
 
@@ -48,7 +48,6 @@ interface Candidate {
   text: string;
   importance: number;
   radius: number;
-  type: keyof typeof TYPE_COLORS;
   focus: boolean;
 }
 
@@ -63,8 +62,23 @@ function overlaps(a: Rect, b: Rect): boolean {
   return Math.abs(a.x - b.x) * 2 < a.w + b.w && Math.abs(a.y - b.y) * 2 < a.h + b.h;
 }
 
-/** Longest label drawn; the text is sliced to this so a rect is always one line. */
+/** Longest label drawn; the text is truncated to this so a rect is always one
+ *  line. F7: the cut used to be a bare `slice(0, MAX_CHARS)` with no ellipsis,
+ *  which drew "Codex must use Engram as" and "CORRECTION: AI Cartoon Studio no
+ *  l" as though those were the whole label. `truncateLabel` marks the cut, the
+ *  way AnalyticsView's `truncateSourceLabel` always did. */
 const MAX_CHARS = 34;
+
+/**
+ * Ink for the 3D labels (F2).
+ *
+ * Every ambient label used to be painted in its node's type colour — text
+ * wearing the data colour, and at a distance the outline and the fill fought
+ * each other. The label sits directly above the node it names, so the node IS
+ * the coloured mark beside the text; the label only has to be legible. Focus
+ * labels stay a step brighter than ambient ones so the hierarchy survives.
+ */
+const LABEL_INK = { focus: '#f8fafc', ambient: '#cbd5e1' } as const;
 
 /** Rough screen box for a label of `length` characters at TARGET_PX. */
 export function labelRect(x: number, y: number, length: number): Rect {
@@ -145,7 +159,6 @@ export default function NeuronLabels({ positions }: Props) {
           text: entry.count > 1 ? `${text} ×${entry.count}` : text,
           importance: node.importance,
           radius: importanceRadius(node.importance),
-          type: node.type,
           focus: false,
         };
       })
@@ -161,7 +174,6 @@ export default function NeuronLabels({ positions }: Props) {
         text: n.label.trim() || n.id.slice(0, 8),
         importance: n.importance,
         radius: importanceRadius(n.importance),
-        type: n.type,
         focus: true,
       }));
 
@@ -268,7 +280,7 @@ function LabelSprite({ candidate, positions }: LabelSpriteProps) {
           outlineOpacity={0.9}
           renderOrder={10}
         >
-          {candidate.text.slice(0, MAX_CHARS)}
+          {truncateLabel(candidate.text, MAX_CHARS)}
           {/* Always on top. With 118 labels and depthOffset={-1} the old scene
               had back-hemisphere text punching through front geometry; with a
               decluttered dozen, drawing them over the graph is what keeps them
@@ -276,7 +288,7 @@ function LabelSprite({ candidate, positions }: LabelSpriteProps) {
               rendering fault, not as depth. */}
           <meshBasicMaterial
             attach="material"
-            color={candidate.focus ? '#f8fafc' : TYPE_COLORS[candidate.type]}
+            color={candidate.focus ? LABEL_INK.focus : LABEL_INK.ambient}
             transparent
             depthTest={false}
             depthWrite={false}
