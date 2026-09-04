@@ -1,7 +1,7 @@
 {
   "name": "@engram-ai-memory/web",
   "version": "0.4.1",
-  "description": "Engram visualization dashboard \u2014 3D neural graph with React Three Fiber",
+  "description": "Engram visualization dashboard — 3D neural graph with React Three Fiber",
   "private": true,
   "scripts": {
     "dev": "vite",
@@ -9,11 +9,12 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "@engram-ai-memory/core": "workspace:*",
-    "@engram-ai-memory/vis": "workspace:*",
     "@react-three/drei": "^10.0.6",
     "@react-three/fiber": "^9.1.2",
     "@react-three/postprocessing": "^3.0.4",
@@ -27,12 +28,21 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@engram-ai-memory/eslint-config": "workspace:*",
     "@engram-ai-memory/tsconfig": "workspace:*",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
     "@types/react": "^19.1.5",
     "@types/react-dom": "^19.1.5",
     "@types/three": "^0.177.0",
     "@vitejs/plugin-react": "^4.5.2",
+    "@vitest/coverage-v8": "^3.1.1",
+    "eslint": "^9.39.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^26.0.0",
     "typescript": "5.7.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^3.1.1"
   }
 }

@@ -2,16 +2,92 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Stars, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import { BlendFunction } from 'postprocessing';
-import { Suspense } from 'react';
-import { useNeuralStore } from '../../store/neuralStore.js';
+import { Suspense, useMemo } from 'react';
+import { useNeuralStore, type NeuronNode, type NeuronConnection } from '../../store/neuralStore.js';
 import { useViewStore } from '../../store/viewStore.js';
+import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import NeuronMesh from './NeuronMesh.js';
 import ConnectionLine from './ConnectionLine.js';
 
+export interface RenderableConnection {
+  id: string;
+  sourcePos: [number, number, number];
+  targetPos: [number, number, number];
+  strength: number;
+  relationship: string;
+}
+
+/**
+ * Map connections onto the endpoints ConnectionLine needs to render.
+ *
+ * Pulled out as a plain, testable function (F5, "one level up" from
+ * NeuronMesh): an O(1) id → neuron lookup instead of the previous
+ * O(connections x neurons) `neurons.find` per line, and its result is meant
+ * to be wrapped in `useMemo` by the caller so ConnectionLine's own useMemo
+ * (keyed on sourcePos/targetPos) isn't defeated by fresh position arrays on
+ * every NeuralCanvas render that has nothing to do with connections.
+ */
+export function buildRenderableConnections(
+  neurons: NeuronNode[],
+  connections: NeuronConnection[]
+): RenderableConnection[] {
+  const byId = new Map(neurons.map((n) => [n.id, n] as const));
+  const result: RenderableConnection[] = [];
+  for (const conn of connections) {
+    const src = byId.get(conn.sourceId);
+    const tgt = byId.get(conn.targetId);
+    if (!src || !tgt || !conn.targetId) continue;
+    result.push({
+      id: conn.id,
+      sourcePos: [src.tx ?? src.x, src.ty ?? src.y, src.tz ?? src.z],
+      targetPos: [tgt.tx ?? tgt.x, tgt.ty ?? tgt.y, tgt.tz ?? tgt.z],
+      strength: conn.strength,
+      relationship: conn.relationship,
+    });
+  }
+  return result;
+}
+
+/** Non-null Suspense fallback (W3) — a dim placeholder sphere plus a light,
+ *  rendered with plain three.js primitives so it can never itself suspend.
+ *  Visible for at most a frame or two in practice now that NeuronMesh's
+ *  labels each carry their own boundary, but a placeholder still beats a
+ *  black canvas for whatever ends up hitting this one. */
+function CanvasLoadingFallback({ background }: { background: string }) {
+  return (
+    <>
+      <color attach="background" args={[background]} />
+      <ambientLight intensity={0.4} />
+      <mesh>
+        <icosahedronGeometry args={[12, 1]} />
+        <meshBasicMaterial color="#334155" wireframe />
+      </mesh>
+    </>
+  );
+}
+
 export default function NeuralCanvas() {
-  const { neurons, connections } = useNeuralStore();
-  const { activeView } = useViewStore();
+  // Narrow selectors (F5): NeuralCanvas used to pull the whole neural store,
+  // so it (and every child it re-renders) re-ran on state this component
+  // never uses, like selectedNeuronId or isConnected.
+  const neurons = useNeuralStore((s) => s.neurons);
+  const connections = useNeuralStore((s) => s.connections);
+  const activeView = useViewStore((s) => s.activeView);
   const { theme } = activeView;
+  // W11: no prior handling of prefers-reduced-motion, and the render loop
+  // never idled — auto-rotate, per-neuron/per-line pulsing, animated Stars
+  // and Bloom all ran on a continuous rAF loop regardless, burning GPU in an
+  // idle background tab. `frameloop="demand"` (r3f only renders on an actual
+  // state/prop change, or an explicit invalidate() — which OrbitControls'
+  // damping already calls) is the load-bearing fix; autoRotate and the
+  // Stars twinkle are turned off outright since a control loop can't un-spin
+  // a rotation that's still being requested every frame.
+  const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
+
+  const renderableConnections = useMemo(
+    () => buildRenderableConnections(neurons, connections),
+    [neurons, connections]
+  );
 
   return (
     <Canvas
@@ -19,8 +95,16 @@ export default function NeuralCanvas() {
       camera={{ position: [0, 0, 120], fov: 55, near: 0.1, far: 2000 }}
       gl={{ antialias: true, powerPreference: 'high-performance', alpha: false }}
       dpr={[1, 1.5]}
+      frameloop={reducedMotion ? 'demand' : 'always'}
     >
-      <Suspense fallback={null}>
+      {/* W3: this boundary is defense-in-depth, not the primary fix — every
+          <Text> in NeuronMesh now suspends behind its own local Suspense
+          (fallback=null) so a font fetch never blanks the shared scene below
+          it. This one keeps a non-null fallback (rather than the previous
+          `null`) so that IF some future suspending drei/r3f addition (a
+          loader, a texture) ever bubbles up here, the canvas shows a visible
+          placeholder instead of going black. */}
+      <Suspense fallback={<CanvasLoadingFallback background={theme.background} />}>
         <color attach="background" args={[theme.background]} />
 
         {/* Lighting varies by style */}
@@ -57,7 +141,7 @@ export default function NeuralCanvas() {
           count={theme.style === 'stars' ? 6000 : theme.style === 'neon' ? 500 : 3500}
           factor={theme.style === 'stars' ? 4 : 2.5}
           saturation={theme.style === 'neon' ? 0 : 0.15}
-          fade speed={theme.style === 'stars' ? 0.6 : 0.2}
+          fade speed={reducedMotion ? 0 : theme.style === 'stars' ? 0.6 : 0.2}
         />
 
         {/* Neural Net style gets a subtle grid */}
@@ -77,25 +161,21 @@ export default function NeuralCanvas() {
         )}
 
         {/* Connections */}
-        {connections.map((conn) => {
-          const src = neurons.find((n) => n.id === conn.sourceId);
-          const tgt = neurons.find((n) => n.id === conn.targetId);
-          if (!src || !tgt || !conn.targetId) return null;
-          return (
-            <ConnectionLine
-              key={conn.id}
-              sourcePos={[src.tx ?? src.x, src.ty ?? src.y, src.tz ?? src.z]}
-              targetPos={[tgt.tx ?? tgt.x, tgt.ty ?? tgt.y, tgt.tz ?? tgt.z]}
-              strength={conn.strength}
-              relationship={conn.relationship}
-              style={theme.style}
-            />
-          );
-        })}
+        {renderableConnections.map((c) => (
+          <ConnectionLine
+            key={c.id}
+            sourcePos={c.sourcePos}
+            targetPos={c.targetPos}
+            strength={c.strength}
+            relationship={c.relationship}
+            style={theme.style}
+            reducedMotion={reducedMotion}
+          />
+        ))}
 
         {/* Neurons */}
         {neurons.map((neuron) => (
-          <NeuronMesh key={neuron.id} neuron={neuron} theme={theme} />
+          <NeuronMesh key={neuron.id} neuron={neuron} theme={theme} reducedMotion={reducedMotion} />
         ))}
 
         <OrbitControls
@@ -106,7 +186,7 @@ export default function NeuralCanvas() {
           minDistance={10}
           maxDistance={700}
           makeDefault
-          autoRotate={theme.autoRotateSpeed > 0}
+          autoRotate={theme.autoRotateSpeed > 0 && !reducedMotion}
           autoRotateSpeed={theme.autoRotateSpeed}
         />
 

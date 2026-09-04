@@ -1,0 +1,42 @@
+/**
+ * Static design tokens — spacing, radius, type scale, motion. Template
+ * colour tokens (accent, surfaces, text) are also mirrored here as CSS
+ * custom properties so real `:hover` / `:focus-visible` rules in global.css
+ * can reference them; `useThemeVars` (src/hooks/useThemeVars.ts) keeps the
+ * `--ec-*` colour variables in sync with the active template on every
+ * template switch. The values below are just the initial paint (Neural) so
+ * there's no flash of unstyled interaction state before that effect runs.
+ */
+:root {
+  /* Spacing */
+  --ec-space-3xs: 2px;
+  --ec-space-2xs: 4px;
+  --ec-space-xs: 6px;
+  --ec-space-sm: 8px;
+  --ec-space-md: 12px;
+  --ec-space-lg: 16px;
+  --ec-space-xl: 20px;
+  --ec-space-2xl: 28px;
+  --ec-space-3xl: 40px;
+
+  /* Radius */
+  --ec-radius-tight: 4px;
+  --ec-radius-sm: 6px;
+  --ec-radius-md: 8px;
+  --ec-radius-lg: 10px;
+  --ec-radius-xl: 14px;
+  --ec-radius-pill: 999px;
+
+  /* Motion */
+  --ec-duration-fast: 120ms;
+  --ec-duration-normal: 200ms;
+  --ec-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Template colour mirror — kept live by useThemeVars() */
+  --ec-accent: #6366f1;
+  --ec-accent-strong: #4f46e5;
+  --ec-on-accent: #ffffff;
+  --ec-focus: #6366f1;
+  --ec-hover-overlay: rgba(255, 255, 255, 0.06);
+  --ec-active-overlay: rgba(0, 0, 0, 0.18);
+}

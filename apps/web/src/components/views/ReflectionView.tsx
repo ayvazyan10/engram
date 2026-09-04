@@ -1,8 +1,10 @@
-import { useEffect } from 'react';
-import { format, parseISO } from 'date-fns';
+import { useEffect, useRef } from 'react';
+import { format } from 'date-fns';
 import { useReflectionStore, type ReflectionInsight } from '../../store/reflectionStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
+import { STATUS, withAlpha } from '../../lib/tokens.js';
+import { safeParseISO } from '../../lib/dates.js';
 
 const REFLECTION_TYPES = ['pattern', 'knowledge_gap', 'trend', 'contradiction_summary'] as const;
 
@@ -17,18 +19,36 @@ export default function ReflectionView() {
   const { insights, status, loading, filterType, error, setInsights, setStatus, setLoading, setFilterType, setError } = useReflectionStore();
   const t = useTemplateStore((s) => s.activeTemplate);
 
+  // W6: bumped per load, captured per-call, so a stale response (the
+  // "Pattern" tab's request resolving after the user has already switched to
+  // "Trend") can be told apart from the current one instead of unconditionally
+  // overwriting whatever is on screen.
+  const latestRequestId = useRef(0);
+
   useEffect(() => {
+    const requestId = ++latestRequestId.current;
     setLoading(true);
     Promise.all([
       api.getReflections(50, filterType ?? undefined),
       api.getReflectionStatus(),
     ])
       .then(([reflRes, statusRes]) => {
+        if (requestId !== latestRequestId.current) return; // superseded — drop it
         setInsights(reflRes.reflections);
         setStatus(statusRes);
+        // A prior failed load must not go on shadowing a reload that has
+        // since succeeded — only the user dismissing it cleared this before,
+        // so a transient failure permanently read as "Could not reach
+        // Engram API" even once the API was reachable again.
+        setError(null);
       })
-      .catch(() => setError('Could not reach Engram API'))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (requestId !== latestRequestId.current) return; // superseded — drop it
+        setError('Could not reach Engram API');
+      })
+      .finally(() => {
+        if (requestId === latestRequestId.current) setLoading(false);
+      });
   }, [filterType, setInsights, setStatus, setLoading, setError]);
 
   const remaining = status ? Math.max(0, status.threshold - status.counter) : null;
@@ -79,7 +99,8 @@ export default function ReflectionView() {
       {/* Filters */}
       <div style={s.filters}>
         <button
-          style={{ ...s.filterBtn, ...(filterType === null ? { background: t.accent + '20', color: t.accent } : { color: t.textSecondary }) }}
+          className="ec-hover-tint"
+          style={{ ...s.filterBtn, ...(filterType === null ? { background: withAlpha(t.accent, 0.13), color: t.accent } : { color: t.textSecondary }) }}
           onClick={() => setFilterType(null)}
         >
           All
@@ -90,7 +111,8 @@ export default function ReflectionView() {
           return (
             <button
               key={type}
-              style={{ ...s.filterBtn, ...(active ? { background: meta.color + '20', color: meta.color } : { color: t.textSecondary }) }}
+              className="ec-hover-tint"
+              style={{ ...s.filterBtn, ...(active ? { background: withAlpha(meta.color, 0.13), color: meta.color } : { color: t.textSecondary }) }}
               onClick={() => setFilterType(type)}
             >
               {meta.icon} {meta.label}
@@ -101,10 +123,11 @@ export default function ReflectionView() {
 
       {/* Error */}
       {error && (
-        <div style={{ ...s.errorBanner, background: '#ef444415', borderColor: '#ef4444' }}>
-          <span style={{ color: '#ef4444', fontSize: '13px' }}>{error}</span>
+        <div style={{ ...s.errorBanner, background: withAlpha(STATUS.danger, 0.08), borderColor: STATUS.danger }}>
+          <span style={{ color: STATUS.danger, fontSize: '13px' }}>{error}</span>
           <button
-            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '16px', padding: 0, lineHeight: 1 }}
+            className="ec-hover-bright"
+            style={{ background: 'none', border: 'none', color: STATUS.danger, fontSize: '16px', padding: 0, lineHeight: 1 }}
             onClick={() => setError(null)}
           >
             ×
@@ -147,7 +170,13 @@ function InsightCard({ insight }: { insight: ReflectionInsight }) {
           {meta.icon} {meta.label}
         </span>
         <span style={{ color: t.textMuted, fontSize: '10px' }}>
-          {format(parseISO(insight.createdAt), 'MMM d, HH:mm')}
+          {/* W10: an unparsable createdAt must not throw — there is no
+              error boundary anywhere, so one bad row used to blank the
+              whole app permanently. */}
+          {(() => {
+            const parsed = safeParseISO(insight.createdAt);
+            return parsed ? format(parsed, 'MMM d, HH:mm') : 'Unknown date';
+          })()}
         </span>
       </div>
       <div style={{ ...s.cardContent, color: t.textPrimary }}>
@@ -169,13 +198,15 @@ const s = {
   root: {
     flex: 1,
     overflow: 'auto',
-    padding: '28px 36px',
+    padding: 'clamp(16px, 4vw, 28px) clamp(16px, 5vw, 36px)',
     display: 'flex',
     flexDirection: 'column' as const,
     gap: '20px',
   },
   header: {
     display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '12px',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },

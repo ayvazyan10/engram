@@ -1,32 +1,24 @@
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
+import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
+import { RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_ICONS, TYPE_LABELS, withAlpha } from '../../lib/tokens.js';
 
-const TYPE_COLORS: Record<string, string> = {
-  episodic: '#6366f1',
-  semantic: '#06b6d4',
-  procedural: '#f59e0b',
-};
-
-const TYPE_ICONS: Record<string, string> = {
-  episodic: '🕐',
-  semantic: '💡',
-  procedural: '⚙️',
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  episodic: 'Episodic',
-  semantic: 'Semantic',
-  procedural: 'Procedural',
-};
+const TYPES = ['episodic', 'semantic', 'procedural'] as const;
 
 interface Props {
   loading?: boolean;
+  /** Set when the initial load failed (e.g. a 401 from a missing/invalid API
+   * key). Distinct from an empty store — F2: without this, an auth failure
+   * silently cleared to "No memories yet". */
+  error?: string | null;
+  onRetry?: () => void;
   onStore?: () => void;
 }
 
-export default function MemoryPanel({ loading, onStore }: Props) {
+export default function MemoryPanel({ loading, error, onRetry, onStore }: Props) {
   const { records, searchResults, searchQuery, isSearching } = useMemoryStore();
   const { selectNeuron, selectedNeuronId } = useNeuralStore();
+  const t = useTemplateStore((s) => s.activeTemplate);
 
   const displayList = searchQuery ? searchResults : records;
 
@@ -40,58 +32,80 @@ export default function MemoryPanel({ loading, onStore }: Props) {
   return (
     <div style={styles.panel}>
       <div style={styles.header}>
-        <span style={styles.title}>Memory Graph</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={styles.count}>{displayList.length}</span>
+        <span style={{ ...styles.title, color: t.textMuted }}>Memory Graph</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SPACE.xs }}>
+          <span style={{ ...styles.count, color: t.textMuted, background: t.inputBg }}>{displayList.length}</span>
           {onStore && (
-            <button onClick={onStore} title="Store new memory" style={{
-              width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', borderRadius: '5px',
-              color: '#fff', fontSize: '14px', fontWeight: 700, cursor: 'pointer', lineHeight: 1,
-            }}>+</button>
+            <button
+              className="ec-hover-bright"
+              onClick={onStore}
+              title="Store new memory"
+              style={{
+                ...styles.storeBtn,
+                background: `linear-gradient(135deg, ${t.accent}, ${t.accentStrong})`,
+                color: t.onAccent,
+              }}
+            >
+              +
+            </button>
           )}
         </div>
       </div>
 
       {/* Type filter pills */}
       <div style={styles.typeSummary}>
-        {(['episodic', 'semantic', 'procedural'] as const).map((t) => (
-          <div key={t} style={{ ...styles.typePill, borderColor: TYPE_COLORS[t] }}>
-            <span style={{ color: TYPE_COLORS[t], fontSize: '11px' }}>{TYPE_ICONS[t]}</span>
-            <span style={{ color: '#64748b', fontSize: '10px' }}>{grouped[t]?.length ?? 0}</span>
+        {TYPES.map((type) => (
+          <div key={type} style={{ ...styles.typePill, borderColor: TYPE_COLORS[type], background: withAlpha(t.textPrimary, 0.02) }}>
+            <span style={{ color: TYPE_COLORS[type], fontSize: TYPE.sm }}>{TYPE_ICONS[type]}</span>
+            <span style={{ color: t.textMuted, fontSize: TYPE.xs }}>{grouped[type]?.length ?? 0}</span>
           </div>
         ))}
       </div>
 
       {(isSearching || loading) && (
-        <div style={styles.loadingRow}>
-          <span style={styles.loadingDot} />
+        <div style={{ ...styles.loadingRow, color: t.textMuted }}>
+          <span style={{ ...styles.loadingDot, background: t.accent }} />
           {isSearching ? 'Searching…' : 'Loading…'}
+        </div>
+      )}
+
+      {error && !loading && (
+        <div style={{ ...styles.errorBanner, border: `1px solid ${withAlpha(STATUS.danger, 0.3)}`, background: withAlpha(STATUS.danger, 0.07) }}>
+          <span style={{ ...styles.errorText, color: STATUS.danger }}>⚠ {error}</span>
+          {onRetry && (
+            <button
+              className="ec-hover-tint"
+              style={{ ...styles.retryBtn, color: STATUS.danger, borderColor: withAlpha(STATUS.danger, 0.3) }}
+              onClick={onRetry}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
       <div style={styles.list}>
         {searchQuery
           ? displayList.map((r) => (
-              <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} />
+              <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
             ))
-          : (['episodic', 'semantic', 'procedural'] as const).map((type) =>
+          : TYPES.map((type) =>
               grouped[type] && grouped[type]!.length > 0 ? (
                 <div key={type}>
-                  <div style={styles.groupLabel}>
+                  <div style={{ ...styles.groupLabel, color: t.textMuted }}>
                     <span style={{ color: TYPE_COLORS[type] }}>{TYPE_ICONS[type]}</span>
                     {TYPE_LABELS[type]}
-                    <span style={styles.groupCount}>{grouped[type]!.length}</span>
+                    <span style={{ ...styles.groupCount, background: t.inputBg, color: t.textMuted }}>{grouped[type]!.length}</span>
                   </div>
                   {grouped[type]!.map((r) => (
-                    <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} />
+                    <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
                   ))}
                 </div>
               ) : null
             )}
 
-        {displayList.length === 0 && !isSearching && !loading && (
-          <div style={styles.empty}>
+        {displayList.length === 0 && !isSearching && !loading && !error && (
+          <div style={{ ...styles.empty, color: t.textMuted }}>
             {searchQuery ? '⊘ No results found' : '⊘ No memories yet'}
           </div>
         )}
@@ -100,23 +114,27 @@ export default function MemoryPanel({ loading, onStore }: Props) {
   );
 }
 
-function MemoryItem({ record, selected, onClick }: { record: MemoryRecord; selected: boolean; onClick: () => void }) {
-  const color = TYPE_COLORS[record.type] ?? '#94a3b8';
+function MemoryItem({ record, selected, onClick, t }: { record: MemoryRecord; selected: boolean; onClick: () => void; t: UITemplate }) {
+  const color = TYPE_COLORS[record.type] ?? t.textSecondary;
   const date = new Date(record.createdAt).toLocaleDateString('en', { month: 'short', day: 'numeric' });
   const label = record.concept ?? record.content.slice(0, 40);
   const importancePct = Math.round(record.importance * 100);
 
   return (
     <button
-      style={{ ...styles.item, ...(selected ? styles.itemSelected : {}) }}
+      className="ec-hover-tint"
+      style={{
+        ...styles.item,
+        ...(selected ? { background: withAlpha(t.accent, 0.08) } : {}),
+      }}
       onClick={onClick}
     >
       <div style={{ ...styles.typeBar, background: color }} />
       <div style={styles.itemBody}>
-        <div style={styles.itemLabel}>{label}{label.length >= 40 ? '…' : ''}</div>
+        <div style={{ ...styles.itemLabel, color: t.textPrimary }}>{label}{label.length >= 40 ? '…' : ''}</div>
         <div style={styles.itemFooter}>
-          <span style={{ color: '#334155' }}>{date}</span>
-          <div style={styles.importanceBar}>
+          <span style={{ color: t.textMuted }}>{date}</span>
+          <div style={{ ...styles.importanceBar, background: t.inputBg }}>
             <div style={{ ...styles.importanceFill, width: `${importancePct}%`, background: color }} />
           </div>
         </div>
@@ -136,62 +154,82 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '14px 16px 10px',
+    padding: `${SPACE.lg} ${SPACE.lg} ${SPACE.sm}`,
   },
-  title: { fontSize: '11px', fontWeight: 700, color: '#475569', textTransform: 'uppercase' as const, letterSpacing: '0.08em' },
-  count: { fontSize: '11px', color: '#334155', background: '#0f172a', padding: '2px 8px', borderRadius: '10px', fontWeight: 600 },
+  title: { fontSize: TYPE.sm, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em' },
+  count: { fontSize: TYPE.sm, padding: '2px 8px', borderRadius: RADIUS.pill, fontWeight: 600 },
+  storeBtn: {
+    width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: 'none', borderRadius: RADIUS.sm, fontSize: TYPE.lg, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
+  },
   typeSummary: {
     display: 'flex',
-    gap: '6px',
-    padding: '0 16px 10px',
+    gap: SPACE.xs,
+    padding: `0 ${SPACE.lg} ${SPACE.sm}`,
   },
   typePill: {
     display: 'flex',
     alignItems: 'center',
-    gap: '4px',
+    gap: SPACE['2xs'],
     padding: '3px 8px',
-    borderRadius: '6px',
+    borderRadius: RADIUS.sm,
     border: '1px solid',
-    background: 'rgba(255,255,255,0.02)',
   },
   loadingRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    padding: '6px 16px',
-    fontSize: '11px',
-    color: '#475569',
+    gap: SPACE.sm,
+    padding: `${SPACE.xs} ${SPACE.lg}`,
+    fontSize: TYPE.sm,
   },
   loadingDot: {
     width: '6px',
     height: '6px',
     borderRadius: '50%',
-    background: '#6366f1',
+    flexShrink: 0,
+  },
+  errorBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: SPACE.sm,
+    margin: `0 ${SPACE.lg} ${SPACE.sm}`,
+    padding: '8px 10px',
+    borderRadius: RADIUS.sm,
+  },
+  errorText: {
+    fontSize: TYPE.sm,
+    lineHeight: 1.4,
+  },
+  retryBtn: {
+    fontSize: TYPE.xs,
+    fontWeight: 600,
+    background: 'transparent',
+    border: '1px solid',
+    borderRadius: RADIUS.tight,
+    padding: '3px 8px',
     flexShrink: 0,
   },
   list: {
     flex: 1,
     overflowY: 'auto' as const,
-    paddingBottom: '8px',
+    paddingBottom: SPACE.sm,
   },
   groupLabel: {
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
-    padding: '10px 16px 4px',
-    fontSize: '10px',
+    gap: SPACE.xs,
+    padding: `10px ${SPACE.lg} 4px`,
+    fontSize: TYPE.xs,
     fontWeight: 700,
-    color: '#334155',
     textTransform: 'uppercase' as const,
     letterSpacing: '0.06em',
   },
   groupCount: {
     marginLeft: 'auto',
-    background: '#0f172a',
-    color: '#334155',
-    fontSize: '10px',
+    fontSize: TYPE.xs,
     padding: '1px 6px',
-    borderRadius: '8px',
+    borderRadius: RADIUS.pill,
   },
   item: {
     display: 'flex',
@@ -199,13 +237,8 @@ const styles = {
     padding: '0',
     background: 'transparent',
     border: 'none',
-    cursor: 'pointer',
     textAlign: 'left' as const,
-    transition: 'background 0.1s',
     alignItems: 'stretch',
-  },
-  itemSelected: {
-    background: 'rgba(99, 102, 241, 0.08)',
   },
   typeBar: {
     width: '3px',
@@ -219,8 +252,7 @@ const styles = {
     minWidth: 0,
   },
   itemLabel: {
-    fontSize: '12px',
-    color: '#cbd5e1',
+    fontSize: TYPE.base,
     marginBottom: '5px',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -230,13 +262,12 @@ const styles = {
   itemFooter: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    fontSize: '10px',
+    gap: SPACE.sm,
+    fontSize: TYPE.xs,
   },
   importanceBar: {
     flex: 1,
     height: '2px',
-    background: '#0f172a',
     borderRadius: '1px',
     overflow: 'hidden',
   },
@@ -247,8 +278,7 @@ const styles = {
   },
   empty: {
     padding: '32px 16px',
-    fontSize: '12px',
-    color: '#334155',
+    fontSize: TYPE.base,
     textAlign: 'center' as const,
   },
 } as const;

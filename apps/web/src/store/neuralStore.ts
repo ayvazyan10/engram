@@ -48,8 +48,6 @@ interface NeuralState {
   contradictionIds: Set<string>;
 
   setNeurons: (neurons: NeuronNode[]) => void;
-  /** Set target positions for smooth transitions (doesn't change current x/y/z) */
-  setTargetPositions: (targets: Array<{ id: string; x: number; y: number; z: number }>) => void;
   /**
    * Reconcile the node set against a fresh layout: retarget existing nodes
    * (keeping their current position and activation), append nodes that appeared
@@ -59,6 +57,16 @@ interface NeuralState {
   setConnections: (connections: NeuronConnection[]) => void;
   setContradictionPairs: (pairs: ContradictionPair[]) => void;
   selectNeuron: (id: string | null) => void;
+  /**
+   * W15: deliberate future API, not dead code. `activeNeuronIds`,
+   * `activateNeuron` and `deactivateNeuron` are fully wired end-to-end —
+   * NeuronMesh already reads `isActive` off `activeNeuronIds` for its
+   * emissive/glow/ring targets across all 5 view styles — the only missing
+   * piece is a caller that decides *when* a neuron counts as "active"
+   * (e.g. while it's part of a live recall, or a real-time consolidation
+   * pulse). Left in place rather than deleted so that trigger can be added
+   * without re-deriving this from scratch.
+   */
   activateNeuron: (id: string) => void;
   deactivateNeuron: (id: string) => void;
   removeNeuron: (id: string) => void;
@@ -75,17 +83,6 @@ export const useNeuralStore = create<NeuralState>((set) => ({
   contradictionIds: new Set(),
 
   setNeurons: (neurons) => set({ neurons }),
-
-  setTargetPositions: (targets) =>
-    set((state) => {
-      const targetMap = new Map(targets.map((t) => [t.id, t]));
-      return {
-        neurons: state.neurons.map((n) => {
-          const t = targetMap.get(n.id);
-          return t ? { ...n, tx: t.x, ty: t.y, tz: t.z } : n;
-        }),
-      };
-    }),
 
   reconcileNeurons: (targets) =>
     set((state) => {

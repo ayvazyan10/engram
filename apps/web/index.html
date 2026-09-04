@@ -5,25 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Engram — AI Brain Visualization</title>
     <meta name="description" content="Universal AI Brain — visualize and interact with persistent memory" />
+    <!--
+      Inter was previously named in the font-family stack (index.html, old
+      version) but never actually loaded, so the browser always fell through
+      to the system UI font — a typeface implied but absent. Loaded properly
+      here: preconnect to both Google Fonts hosts, then the stylesheet with
+      display=swap so text still paints in the fallback stack immediately and
+      swaps once Inter arrives, matching the font-loading rule (max two
+      families, swap, preload only the weights actually used).
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    />
+    <!-- Pre-paint background so there's no flash-of-white before global.css
+         (imported from main.tsx) finishes loading. -->
     <style>
-      *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body, #root {
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        background: #020817;
-        color: #e2e8f0;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
-        -webkit-font-smoothing: antialiased;
-      }
-      ::-webkit-scrollbar { width: 4px; }
-      ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 2px; }
-      ::-webkit-scrollbar-thumb:hover { background: #334155; }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      input::placeholder { color: #1e3a5f; }
-      input:focus::placeholder { color: #2a4a7f; }
-      button:active { transform: scale(0.95); }
+      html, body, #root { background: #020817; }
     </style>
   </head>
   <body>

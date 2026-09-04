@@ -1,0 +1,175 @@
+/**
+ * Interaction states (V1/V2) + small responsive helpers (V3) that apply
+ * app-wide. These are real CSS rules — the thing the audit found missing
+ * entirely (`grep -rn ":hover" src/` returned one hit before this file).
+ */
+
+/* Inter is loaded from index.html via <link rel="stylesheet"> (preconnect +
+ * display=swap) rather than @import here — @import is render-blocking and
+ * can't be discovered by the preloader until this stylesheet itself has
+ * already been fetched and parsed. */
+
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #020817;
+  color: #e2e8f0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+@keyframes ec-spin { to { transform: rotate(360deg); } }
+
+input::placeholder { color: #64748b; }
+input:focus::placeholder { color: #94a3b8; }
+
+/* ─── Focus (V2) ────────────────────────────────────────────────────────────
+ * One rule, applied globally, covers every native interactive element —
+ * including ones no component below hand-edits a focus style for. Elements
+ * that used to set `outline: 'none'` inline (StoreMemoryModal's textarea/
+ * select/input, NeuronInspector's tag input) had that literal removed so
+ * this can actually show through — inline styles beat stylesheet rules
+ * regardless of pseudo-class, so leaving `outline: 'none'` there would have
+ * silently defeated this. */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--ec-focus, #6366f1);
+  outline-offset: 2px;
+  border-radius: var(--ec-radius-tight);
+}
+
+/* ─── Hover / active (V1) ────────────────────────────────────────────────────
+ * Two flavours, chosen so neither ever has to fight an element's own inline
+ * `background` (inline always wins that fight, pseudo-class or not):
+ *
+ * .ec-hover-tint  — for elements with a transparent/conditional inline
+ *                    background (list rows, switcher buttons). Painted with
+ *                    an inset box-shadow instead of `background`, so it
+ *                    layers over whatever the inline style already set.
+ * .ec-hover-bright — for elements with a solid/gradient inline background
+ *                    (icon buttons, CTA buttons). `filter: brightness()`
+ *                    post-processes the rendered layer regardless of what
+ *                    produced its colour.
+ */
+.ec-hover-tint,
+.ec-hover-bright,
+.ec-press {
+  cursor: pointer;
+}
+
+.ec-hover-tint:disabled,
+.ec-hover-bright:disabled,
+.ec-press:disabled {
+  cursor: not-allowed;
+}
+
+.ec-hover-tint:not(:disabled):hover {
+  box-shadow: inset 0 0 0 999px var(--ec-hover-overlay, rgba(255, 255, 255, 0.06));
+}
+
+.ec-hover-tint:not(:disabled):active {
+  box-shadow: inset 0 0 0 999px var(--ec-active-overlay, rgba(0, 0, 0, 0.18));
+}
+
+.ec-hover-bright:not(:disabled):hover {
+  filter: brightness(1.14);
+}
+
+.ec-hover-bright:not(:disabled):active {
+  filter: brightness(0.9);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ec-hover-tint, .ec-hover-bright, .ec-press, .ec-row-transition {
+    transition:
+      filter var(--ec-duration-fast) var(--ec-ease-out),
+      box-shadow var(--ec-duration-fast) var(--ec-ease-out),
+      border-color var(--ec-duration-fast) var(--ec-ease-out),
+      color var(--ec-duration-fast) var(--ec-ease-out),
+      transform var(--ec-duration-fast) var(--ec-ease-out);
+  }
+
+  button:active {
+    transform: scale(0.95);
+  }
+}
+
+/* prefers-reduced-motion (guardrail: every animation/transition in the app,
+ * present and future, collapses to effectively-instant rather than needing
+ * every rule individually guarded). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ─── Responsive header (V3) ─────────────────────────────────────────────── */
+
+.ec-header {
+  flex-wrap: wrap;
+  row-gap: var(--ec-space-sm);
+}
+
+/* Mode-tab / view-switcher text labels collapse to icon-only first — the
+ * icons plus each button's `title` tooltip keep every control usable, they
+ * just stop demanding horizontal space. */
+@media (max-width: 860px) {
+  .ec-switcher-label {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .ec-logo-badge {
+    display: none;
+  }
+}
+
+/* ─── Responsive side panels (V3) ────────────────────────────────────────────
+ * Below 900px AppLayout switches the sidebar/canvas/inspector from a fixed
+ * 3-column row to a single-pane-plus-tab-bar layout (see AppLayout.tsx /
+ * MobileTabBar.tsx) — these classes style that tab bar and its panes. */
+
+.ec-mobile-tabbar {
+  display: flex;
+  flex-shrink: 0;
+  border-top: 1px solid;
+}
+
+.ec-mobile-tab {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 4px 8px;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+}
+
+.ec-mobile-pane {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}

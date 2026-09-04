@@ -1,14 +1,90 @@
+import { getStoredApiKey } from './apiKey.js';
+import { useAuthStore } from '../store/authStore.js';
+
 const BASE = '/api';
 
+const REQUEST_TIMEOUT_MS = 15000;
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(status: number, message: string, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/** True when the server sent a JSON `{ error: string }` body we can surface. */
+function errorMessageFromBody(body: unknown): string | null {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const message = (body as { error: unknown }).error;
+    if (typeof message === 'string' && message.length > 0) return message;
+  }
+  return null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
   if (init?.body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`${BASE}${path}`, { headers, ...init });
-  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
-  return res.json() as Promise<T>;
+  const apiKey = getStoredApiKey();
+  if (apiKey) headers['X-API-Key'] = apiKey;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { ...init, headers, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new ApiError(0, `Request timed out after ${REQUEST_TIMEOUT_MS}ms: ${path}`);
+    }
+    const message = err instanceof Error ? err.message : 'Network error';
+    throw new ApiError(0, `${message}: ${path}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!res.ok) {
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      // No JSON body (or not valid JSON) — fall back to the generic message below.
+    }
+    // A 401 means the key is missing or wrong — surface the unlock gate
+    // (F2) instead of leaving every view to interpret this on its own.
+    // `hadKey` is what a stored-but-wrong key looks like vs never having
+    // entered one, and drives the gate's "enter a key" vs "wrong key" copy.
+    if (res.status === 401) {
+      useAuthStore.getState().lock(Boolean(apiKey));
+    }
+    const message = errorMessageFromBody(body) ?? `API ${res.status}: ${path}`;
+    throw new ApiError(res.status, message, body);
+  }
+
+  // A genuine 2xx proves whatever key is in play (or no key, if none is
+  // required) works — clear a stale gate if one was showing.
+  useAuthStore.getState().unlock();
+
+  if (res.status === 204) return undefined as T;
+
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiError(res.status, `Invalid JSON response: ${path}`);
+  }
 }
 
 export const api = {
+  // W15: no UI calls this today (it's the request()-helper test suite's
+  // stand-in endpoint), but it mirrors a real server route and is exactly
+  // the kind of small, self-contained method a future "server status" /
+  // uptime indicator would want — kept rather than deleted only to be
+  // re-added.
   health: () => request<{ status: string; uptime: number }>('/health'),
 
   stats: () =>
@@ -35,10 +111,7 @@ export const api = {
     concept?: string;
   }) => request<{ memory: { id: string; type: string; content: string; importance: number; source: string | null; concept: string | null; tags: string; createdAt: string; summary: string | null } }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
 
-  deleteMemory: (id: string) =>
-    fetch(`${BASE}/memory/${id}`, { method: 'DELETE' }).then((r) => {
-      if (!r.ok) throw new Error(`API ${r.status}: DELETE /memory/${id}`);
-    }),
+  deleteMemory: (id: string) => request<void>(`/memory/${id}`, { method: 'DELETE' }),
 
   recall: (query: string, maxTokens = 2000) =>
     request<{ context: string; memories: unknown[]; latencyMs: number }>('/recall', {
@@ -121,6 +194,14 @@ export const api = {
   // The dashboard only reports scheduling state and lists stored insights.
   getReflectionStatus: () =>
     request<{ enabled: boolean; due: boolean; counter: number; threshold: number }>('/reflection/status'),
+
+  // W15: deliberate future API, not dead code — these three match real,
+  // working server routes (PATCH /memory/:id, POST /memory/bulk/tag,
+  // POST /memory/bulk/archive) for inline editing and multi-select bulk
+  // actions that the dashboard UI doesn't expose yet. Removing the client
+  // methods wouldn't shrink the shipped bundle meaningfully (they're a few
+  // lines each, no extra dependency), so there's nothing to gain by
+  // deleting them ahead of the UI that will call them.
 
   // Inline edit
   updateMemory: (id: string, body: { content?: string; importance?: number; tags?: string[]; concept?: string }) =>

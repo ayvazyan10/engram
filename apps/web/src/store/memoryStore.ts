@@ -50,11 +50,24 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   setSearching: (searching) => set({ isSearching: searching }),
   setContext: (context, latencyMs) => set({ currentContext: context, recallLatencyMs: latencyMs }),
   setHighlightedIds: (ids) => set({ highlightedIds: ids }),
+  // Idempotent by id: the modal's onStored callback and the server's
+  // 'memory:stored' broadcast both call this for the same POST, and either
+  // can arrive first. A duplicate arrival replaces the existing entry
+  // in-place (picking up any newer fields) instead of prepending a second
+  // copy — see F1.
   addRecord: (record) =>
-    set((state) => ({
-      records: [record, ...state.records],
-      totalCount: state.totalCount + 1,
-    })),
+    set((state) => {
+      const index = state.records.findIndex((r) => r.id === record.id);
+      if (index !== -1) {
+        const records = [...state.records];
+        records[index] = record;
+        return { records };
+      }
+      return {
+        records: [record, ...state.records],
+        totalCount: state.totalCount + 1,
+      };
+    }),
   removeRecord: (id) =>
     set((state) => ({
       records: state.records.filter((r) => r.id !== id),

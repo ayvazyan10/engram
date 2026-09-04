@@ -1,4 +1,5 @@
 import { useTemplateStore, TEMPLATES } from '../../store/templateStore.js';
+import { RADIUS, TYPE } from '../../lib/tokens.js';
 
 export default function TemplateSwitcher() {
   const { activeTemplate, setTemplate } = useTemplateStore();
@@ -10,6 +11,7 @@ export default function TemplateSwitcher() {
         return (
           <button
             key={t.id}
+            className="ec-hover-tint"
             style={{
               ...styles.btn,
               background: active ? activeTemplate.cardBg : 'transparent',
@@ -25,7 +27,7 @@ export default function TemplateSwitcher() {
               display: 'inline-block',
               boxShadow: active ? `0 0 6px ${t.accentGlow}` : 'none',
             }} />
-            <span style={{ fontSize: '10px', fontWeight: active ? 600 : 400 }}>{t.name}</span>
+            <span className="ec-switcher-label" style={{ fontSize: TYPE.xs, fontWeight: active ? 600 : 400 }}>{t.name}</span>
           </button>
         );
       })}
@@ -39,7 +41,7 @@ const styles = {
     alignItems: 'center',
     gap: '2px',
     padding: '2px',
-    borderRadius: '8px',
+    borderRadius: RADIUS.sm,
     border: '1px solid #1a1a1a',
     background: '#050505',
   },
@@ -49,9 +51,7 @@ const styles = {
     gap: '5px',
     padding: '4px 10px',
     border: '1px solid',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    transition: 'all 0.15s',
+    borderRadius: RADIUS.tight,
     whiteSpace: 'nowrap' as const,
     fontFamily: 'inherit',
   },

@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore } from '../../store/memoryStore.js';
+import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
+import { SPACE, STATUS, TYPE, TYPE_COLORS } from '../../lib/tokens.js';
 
 export default function StatusBar() {
   const { neurons } = useNeuralStore();
   const { totalCount, recallLatencyMs, currentContext } = useMemoryStore();
+  const t = useTemplateStore((s) => s.activeTemplate);
   const [stats, setStats] = useState<{ byType?: Record<string, number>; bySource?: Record<string, number> } | null>(null);
 
   useEffect(() => {
@@ -17,19 +20,19 @@ export default function StatusBar() {
   const total = stats ? Object.values(stats.byType ?? {}).reduce((a, b) => a + b, 0) : totalCount;
 
   return (
-    <div style={styles.bar}>
+    <div style={{ ...styles.bar, background: t.statusBg, borderTopColor: t.panelBorder, color: t.textMuted }}>
       <div style={styles.left}>
         {stats?.byType && (
           <>
-            <Chip label="E" value={stats.byType['episodic'] ?? 0} color="#6366f1" title="Episodic memories" />
-            <Chip label="S" value={stats.byType['semantic'] ?? 0} color="#06b6d4" title="Semantic memories" />
-            <Chip label="P" value={stats.byType['procedural'] ?? 0} color="#f59e0b" title="Procedural memories" />
-            <div style={styles.sep} />
+            <Chip label="E" value={stats.byType['episodic'] ?? 0} color={TYPE_COLORS.episodic} title="Episodic memories" t={t} />
+            <Chip label="S" value={stats.byType['semantic'] ?? 0} color={TYPE_COLORS.semantic} title="Semantic memories" t={t} />
+            <Chip label="P" value={stats.byType['procedural'] ?? 0} color={TYPE_COLORS.procedural} title="Procedural memories" t={t} />
+            <div style={{ ...styles.sep, background: t.panelBorder }} />
           </>
         )}
-        <span style={styles.muted}>{total} memories</span>
-        <div style={styles.sep} />
-        <span style={styles.muted}>{neurons.length} nodes visible</span>
+        <span>{total} memories</span>
+        <div style={{ ...styles.sep, background: t.panelBorder }} />
+        <span>{neurons.length} nodes visible</span>
       </div>
 
       <div style={styles.center}>
@@ -43,24 +46,24 @@ export default function StatusBar() {
       <div style={styles.right}>
         {recallLatencyMs !== null && (
           <>
-            <span style={styles.muted}>recall</span>
-            <span style={{ ...styles.latency, color: recallLatencyMs < 100 ? '#22c55e' : recallLatencyMs < 300 ? '#f59e0b' : '#ef4444' }}>
+            <span>recall</span>
+            <span style={{ ...styles.latency, color: recallLatencyMs < 100 ? STATUS.success : recallLatencyMs < 300 ? STATUS.warning : STATUS.danger }}>
               {recallLatencyMs}ms
             </span>
-            <div style={styles.sep} />
+            <div style={{ ...styles.sep, background: t.panelBorder }} />
           </>
         )}
-        <span style={styles.brand}>Engram</span>
+        <span style={{ ...styles.brand, color: t.textMuted }}>Engram</span>
       </div>
     </div>
   );
 }
 
-function Chip({ label, value, color, title }: { label: string; value: number; color: string; title: string }) {
+function Chip({ label, value, color, title, t }: { label: string; value: number; color: string; title: string; t: UITemplate }) {
   return (
     <div style={styles.chip} title={title}>
-      <span style={{ color, fontSize: '10px', fontWeight: 700 }}>{label}</span>
-      <span style={styles.chipVal}>{value}</span>
+      <span style={{ color, fontSize: TYPE.xs, fontWeight: 700 }}>{label}</span>
+      <span style={{ color: t.textSecondary, fontWeight: 500 }}>{value}</span>
     </div>
   );
 }
@@ -69,23 +72,19 @@ const styles = {
   bar: {
     display: 'flex',
     alignItems: 'center',
-    padding: '0 16px',
+    padding: `0 ${SPACE.lg}`,
     height: '26px',
-    background: '#040c1a',
-    borderTop: '1px solid #0f2040',
-    fontSize: '11px',
-    color: '#475569',
+    borderTop: '1px solid',
+    fontSize: TYPE.sm,
     flexShrink: 0,
-    gap: '8px',
+    gap: SPACE.sm,
   },
-  left: { display: 'flex', alignItems: 'center', gap: '8px' },
+  left: { display: 'flex', alignItems: 'center', gap: SPACE.sm },
   center: { flex: 1, display: 'flex', justifyContent: 'center' },
-  right: { display: 'flex', alignItems: 'center', gap: '8px' },
-  chip: { display: 'flex', alignItems: 'center', gap: '4px' },
-  chipVal: { color: '#334155', fontWeight: 500 },
-  sep: { width: '1px', height: '12px', background: '#0f2040' },
-  muted: { color: '#334155' },
-  latency: { fontWeight: 600, fontSize: '11px' },
-  contextHint: { color: '#334155', fontSize: '10px', cursor: 'default' },
-  brand: { color: '#1e3050', fontSize: '10px', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' as const },
+  right: { display: 'flex', alignItems: 'center', gap: SPACE.sm },
+  chip: { display: 'flex', alignItems: 'center', gap: SPACE['2xs'] },
+  sep: { width: '1px', height: '12px' },
+  latency: { fontWeight: 600, fontSize: TYPE.sm },
+  contextHint: { fontSize: TYPE.xs, cursor: 'default' },
+  brand: { fontSize: TYPE.xs, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' as const },
 } as const;

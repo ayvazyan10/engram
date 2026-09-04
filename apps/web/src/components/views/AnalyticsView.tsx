@@ -7,12 +7,7 @@ import {
 import { useAnalyticsStore } from '../../store/analyticsStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { api } from '../../lib/api.js';
-
-const TYPE_COLORS: Record<string, string> = {
-  episodic: '#818cf8',
-  semantic: '#22d3ee',
-  procedural: '#fbbf24',
-};
+import { STATUS, TYPE_COLORS } from '../../lib/tokens.js';
 
 export default function AnalyticsView() {
   const { data, loading, days, error, setData, setLoading, setError } = useAnalyticsStore();
@@ -37,16 +32,16 @@ export default function AnalyticsView() {
   // A failed request used to be indistinguishable from an empty dataset.
   if (error && !data) {
     return (
-      <div style={{ ...s.center, flexDirection: 'column', gap: 12, color: '#ef4444' }}>
+      <div style={{ ...s.center, flexDirection: 'column', gap: 12, color: STATUS.danger }}>
         <div>Could not load analytics: {error}</div>
         <button
+          className="ec-hover-tint"
           style={{
             background: 'transparent',
-            border: '1px solid #ef4444',
-            color: '#ef4444',
+            border: `1px solid ${STATUS.danger}`,
+            color: STATUS.danger,
             borderRadius: 6,
             padding: '6px 14px',
-            cursor: 'pointer',
             fontSize: 12,
           }}
           onClick={() => {
@@ -128,7 +123,7 @@ export default function AnalyticsView() {
             <PieChart>
               <Pie data={typeData} cx="50%" cy="50%" innerRadius={40} outerRadius={70} dataKey="value" paddingAngle={3}>
                 {typeData.map((entry) => (
-                  <Cell key={entry.name} fill={TYPE_COLORS[entry.name] ?? '#64748b'} />
+                  <Cell key={entry.name} fill={TYPE_COLORS[entry.name as keyof typeof TYPE_COLORS] ?? '#64748b'} />
                 ))}
               </Pie>
               <Tooltip
@@ -140,7 +135,7 @@ export default function AnalyticsView() {
           <div style={s.legend}>
             {typeData.map((d) => (
               <div key={d.name} style={s.legendItem}>
-                <span style={{ ...s.legendDot, background: TYPE_COLORS[d.name] ?? '#64748b' }} />
+                <span style={{ ...s.legendDot, background: TYPE_COLORS[d.name as keyof typeof TYPE_COLORS] ?? '#64748b' }} />
                 <span style={{ color: t.textSecondary, fontSize: '11px' }}>{d.name}: {d.value}</span>
               </div>
             ))}
@@ -248,7 +243,10 @@ const s = {
   root: {
     flex: 1,
     overflow: 'auto',
-    padding: '28px 36px',
+    // clamp() rather than a fixed breakpoint — V3: 320px needs ~16px of
+    // breathing room, 1920px can afford the original 36px, and everything
+    // between scales instead of jumping.
+    padding: 'clamp(16px, 4vw, 28px) clamp(16px, 5vw, 36px)',
     display: 'flex',
     flexDirection: 'column' as const,
     gap: '20px',
@@ -283,7 +281,11 @@ const s = {
   },
   row: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    // auto-fit + minmax rather than a fixed '1fr 1fr' — the two chart
+    // panels stack to a single column on their own once the viewport can't
+    // give each at least 260px, instead of squeezing a pie chart into ~140px
+    // at 320-375px (V3).
+    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
     gap: '16px',
   },
   halfPanel: {},

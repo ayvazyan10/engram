@@ -10,6 +10,10 @@ interface Props {
   strength: number;
   relationship?: string;
   style: ViewTheme['style'];
+  /** W11: freezes the perpetual opacity pulse below at its resting value
+   *  when `prefers-reduced-motion: reduce` — see NeuronMesh's Props for why
+   *  that matters even with NeuralCanvas's `frameloop="demand"`. */
+  reducedMotion: boolean;
 }
 
 const STYLE_COLORS: Record<ViewTheme['style'], { low: number; mid: number; high: number }> = {
@@ -20,7 +24,7 @@ const STYLE_COLORS: Record<ViewTheme['style'], { low: number; mid: number; high:
   ghost:   { low: 0x2e1065, mid: 0x7c3aed, high: 0xc084fc },
 };
 
-export default function ConnectionLine({ sourcePos, targetPos, strength, relationship, style }: Props) {
+export default function ConnectionLine({ sourcePos, targetPos, strength, relationship, style, reducedMotion }: Props) {
   const ref = useRef<THREE.Mesh>(null);
   const isContradiction = relationship === 'contradicts';
   const palette = isContradiction
@@ -38,7 +42,7 @@ export default function ConnectionLine({ sourcePos, targetPos, strength, relatio
   }, [sourcePos, targetPos]);
 
   useFrame(({ clock }) => {
-    if (!ref.current) return;
+    if (!ref.current || reducedMotion) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
     const base = 0.06 + strength * 0.22;
     const pulse = isContradiction ? 0.12 : style === 'neon' ? 0.08 : 0.04;

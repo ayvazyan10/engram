@@ -1,7 +1,11 @@
 import { useMemo } from 'react';
-import { format, parseISO, startOfDay } from 'date-fns';
+import { format, startOfDay } from 'date-fns';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
+import { TYPE_COLORS } from '../../lib/tokens.js';
+import { safeParseISO } from '../../lib/dates.js';
+
+const UNKNOWN_DATE_KEY = 'unknown';
 
 interface DayGroup {
   date: string;
@@ -14,19 +18,24 @@ export default function TimelineView() {
   const t = useTemplateStore((s) => s.activeTemplate);
 
   const groups = useMemo((): DayGroup[] => {
+    // W10: a REST/socket-sourced createdAt that fails to parse must not
+    // throw here — one bad row used to blank the entire timeline (there is
+    // no error boundary anywhere in the app). It's grouped under its own
+    // "Unknown date" bucket instead, so the memory stays visible.
     const sorted = [...records].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      (a, b) => (safeParseISO(b.createdAt)?.getTime() ?? 0) - (safeParseISO(a.createdAt)?.getTime() ?? 0)
     );
     const map = new Map<string, MemoryRecord[]>();
     for (const mem of sorted) {
-      const key = startOfDay(parseISO(mem.createdAt)).toISOString();
+      const parsed = safeParseISO(mem.createdAt);
+      const key = parsed ? startOfDay(parsed).toISOString() : UNKNOWN_DATE_KEY;
       const list = map.get(key) ?? [];
       list.push(mem);
       map.set(key, list);
     }
     return Array.from(map.entries()).map(([date, memories]) => ({
       date,
-      label: format(parseISO(date), 'MMM d, yyyy'),
+      label: date === UNKNOWN_DATE_KEY ? 'Unknown date' : format(safeParseISO(date)!, 'MMM d, yyyy'),
       memories,
     }));
   }, [records]);
@@ -60,11 +69,7 @@ export default function TimelineView() {
 
 function TimelineCard({ memory }: { memory: MemoryRecord }) {
   const t = useTemplateStore((s) => s.activeTemplate);
-  const typeColor = {
-    episodic: '#818cf8',
-    semantic: '#22d3ee',
-    procedural: '#fbbf24',
-  }[memory.type] ?? t.accent;
+  const typeColor = TYPE_COLORS[memory.type] ?? t.accent;
 
   return (
     <div style={{ ...s.card, background: t.cardBg, borderColor: t.panelBorder }}>
@@ -73,7 +78,10 @@ function TimelineCard({ memory }: { memory: MemoryRecord }) {
           {memory.type}
         </span>
         <span style={{ ...s.time, color: t.textMuted }}>
-          {format(parseISO(memory.createdAt), 'HH:mm')}
+          {(() => {
+            const parsed = safeParseISO(memory.createdAt);
+            return parsed ? format(parsed, 'HH:mm') : '--:--';
+          })()}
         </span>
       </div>
       <div style={{ ...s.content, color: t.textPrimary }}>
@@ -95,7 +103,7 @@ const s = {
   root: {
     flex: 1,
     overflow: 'auto',
-    padding: '32px 48px',
+    padding: 'clamp(16px, 5vw, 32px) clamp(16px, 6vw, 48px)',
   },
   rail: {
     maxWidth: '720px',
