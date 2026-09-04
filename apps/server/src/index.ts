@@ -27,6 +27,7 @@ import { healthRoutes } from './routes/health.js';
 import { memoryRoutes } from './routes/memory.js';
 import { searchRoutes } from './routes/search.js';
 import { graphRoutes } from './routes/graph.js';
+import { sceneRoutes } from './routes/scene.js';
 import { contradictionRoutes } from './routes/contradictions.js';
 import { embeddingRoutes } from './routes/embeddings.js';
 import { indexRoutes } from './routes/index-mgmt.js';
@@ -357,6 +358,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   await app.register(memoryRoutes, { prefix: '/api' });
   await app.register(searchRoutes, { prefix: '/api' });
   await app.register(graphRoutes, { prefix: '/api' });
+  await app.register(sceneRoutes, { prefix: '/api' });
   await app.register(contradictionRoutes, { prefix: '/api' });
   await app.register(embeddingRoutes, { prefix: '/api' });
   await app.register(indexRoutes, { prefix: '/api' });

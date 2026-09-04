@@ -39,7 +39,10 @@ export default function ViewSwitcher() {
         })}
       </div>
 
-      {/* 3D sub-views only visible in 3D mode */}
+      {/* The 3D sub-views. These are framings of ONE layout now, not five
+          different scatter functions — see store/viewStore.ts. Nebula and
+          Galaxy were removed there, and this list follows VIEWS rather than
+          naming them, so it cannot fall out of step. */}
       {viewMode === '3d' && (
         <div style={{ ...s.wrap, background: t.inputBg, borderColor: t.panelBorder }}>
           {VIEWS.map((v) => {
@@ -54,6 +57,7 @@ export default function ViewSwitcher() {
                 }}
                 onClick={() => setView(v.id)}
                 title={v.description}
+                aria-pressed={active}
               >
                 <span style={{ ...s.icon, color: t.accent }}>{v.icon}</span>
                 <span className="ec-switcher-label" style={{ ...s.label, color: active ? t.textSecondary : t.textMuted }}>

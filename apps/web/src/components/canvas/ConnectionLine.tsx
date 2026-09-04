@@ -1,72 +1,127 @@
-import { useRef, useMemo } from 'react';
+import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import type { Vector3Tuple } from 'three';
-import type { ViewTheme } from '../../store/viewStore.js';
+import { hexToInt, STATUS } from '../../lib/tokens.js';
+import type { RenderableConnection } from './NeuralCanvas.js';
+import type { ScenePositions } from './scenePositions.js';
+
+/**
+ * Every edge in one draw call.
+ *
+ * This was a `<mesh>` with a 4-sided cylinder per connection, plus a per-frame
+ * opacity animation per connection. That is one draw call per edge — and it was
+ * only ever asked to draw 67 of them, because the client fetched the
+ * neighbourhoods of the top 30 memories by importance and then dropped any edge
+ * whose other end had fallen outside its 200-row page. It now renders the full
+ * set the server reports (3,102 on the live store) as a single THREE.LineSegments
+ * over one BufferGeometry.
+ */
 
 interface Props {
-  sourcePos: Vector3Tuple;
-  targetPos: Vector3Tuple;
-  strength: number;
-  relationship?: string;
-  style: ViewTheme['style'];
-  /** W11: freezes the perpetual opacity pulse below at its resting value
-   *  when `prefers-reduced-motion: reduce` — see NeuronMesh's Props for why
-   *  that matters even with NeuralCanvas's `frameloop="demand"`. */
-  reducedMotion: boolean;
+  connections: readonly RenderableConnection[];
+  positions: RefObject<ScenePositions>;
+  /** Edges touching this node are brightened — the fastest way to read a
+   *  neighbourhood out of a dense graph. */
+  selectedId: string | null;
 }
 
-const STYLE_COLORS: Record<ViewTheme['style'], { low: number; mid: number; high: number }> = {
-  cosmos:  { low: 0x1e2060, mid: 0x3730a3, high: 0x6366f1 },
-  neon:    { low: 0x14532d, mid: 0x166534, high: 0x4ade80 },
-  plasma:  { low: 0x1e1b4b, mid: 0x4338ca, high: 0x818cf8 },
-  stars:   { low: 0x2d1b00, mid: 0x78350f, high: 0xfde68a },
-  ghost:   { low: 0x2e1065, mid: 0x7c3aed, high: 0xc084fc },
-};
+const CONTRADICTION = hexToInt(STATUS.contradiction);
 
-export default function ConnectionLine({ sourcePos, targetPos, strength, relationship, style, reducedMotion }: Props) {
-  const ref = useRef<THREE.Mesh>(null);
-  const isContradiction = relationship === 'contradicts';
-  const palette = isContradiction
-    ? { low: 0x7c2d12, mid: 0xea580c, high: 0xf97316 }
-    : (STYLE_COLORS[style] ?? STYLE_COLORS.cosmos);
+/** Cool ramp for ordinary relations; strength picks the step. */
+const RELATION_RAMP = [0x2b3d7d, 0x4a63d6, 0x8fa8ff] as const;
 
-  const { midPoint, length, quaternion } = useMemo(() => {
-    const s   = new THREE.Vector3(...sourcePos);
-    const t   = new THREE.Vector3(...targetPos);
-    const mid = s.clone().lerp(t, 0.5);
-    const dir = t.clone().sub(s);
-    const len = dir.length();
-    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-    return { midPoint: mid, length: len, quaternion: quat };
-  }, [sourcePos, targetPos]);
+function relationColor(strength: number): number {
+  if (strength > 0.7) return RELATION_RAMP[2];
+  if (strength > 0.45) return RELATION_RAMP[1];
+  return RELATION_RAMP[0];
+}
 
-  useFrame(({ clock }) => {
-    if (!ref.current || reducedMotion) return;
-    const mat = ref.current.material as THREE.MeshStandardMaterial;
-    const base = 0.06 + strength * 0.22;
-    const pulse = isContradiction ? 0.12 : style === 'neon' ? 0.08 : 0.04;
-    const speed = isContradiction ? 3.0 : 1.5;
-    mat.opacity = base + Math.sin(clock.getElapsedTime() * speed + strength * 8) * pulse;
+const scratchColor = new THREE.Color();
+
+/** Colour and brightness for one edge, folded into the vertex colour. */
+function edgeColor(edge: RenderableConnection, incidentToSelection: boolean): THREE.Color {
+  const isContradiction = edge.relationship === 'contradicts';
+  scratchColor.setHex(isContradiction ? CONTRADICTION : relationColor(edge.strength));
+  // Opacity is a single material-wide value for a LineSegments, so per-edge
+  // weight has to live in the colour: strong edges read brighter, weak ones
+  // recede, and anything touching the selection is lifted above both.
+  const weight = 0.45 + edge.strength * 0.55;
+  scratchColor.multiplyScalar(incidentToSelection ? 1.9 : isContradiction ? weight * 0.85 : weight);
+  return scratchColor;
+}
+
+export default function ConnectionLines({ connections, positions, selectedId }: Props) {
+  const geometryRef = useRef<THREE.BufferGeometry>(null);
+  const versionRef = useRef(-1);
+
+  const buffers = useMemo(() => {
+    const count = connections.length;
+    return {
+      position: new Float32Array(count * 6),
+      color: new Float32Array(count * 6),
+      count,
+    };
+  }, [connections.length]);
+
+  // Colour depends on the data and the selection, never on the frame.
+  useEffect(() => {
+    const { color } = buffers;
+    connections.forEach((edge, i) => {
+      const incident =
+        selectedId !== null && (edge.sourceId === selectedId || edge.targetId === selectedId);
+      const c = edgeColor(edge, incident);
+      for (const offset of [0, 3]) {
+        color[i * 6 + offset] = c.r;
+        color[i * 6 + offset + 1] = c.g;
+        color[i * 6 + offset + 2] = c.b;
+      }
+    });
+    const attribute = geometryRef.current?.getAttribute('color');
+    if (attribute) attribute.needsUpdate = true;
+    // Force a position rewrite too: the buffers were just reallocated.
+    versionRef.current = -1;
+  }, [connections, buffers, selectedId]);
+
+  useFrame(() => {
+    const geometry = geometryRef.current;
+    if (!geometry) return;
+    const scene = positions.current;
+    if (scene.version === versionRef.current) return;
+    versionRef.current = scene.version;
+
+    const { position } = buffers;
+    const xyz = scene.xyz;
+    connections.forEach((edge, i) => {
+      const s = edge.sourceIndex * 3;
+      const t = edge.targetIndex * 3;
+      if (s < 0 || t < 0 || t + 2 >= xyz.length || s + 2 >= xyz.length) return;
+      position[i * 6] = xyz[s]!;
+      position[i * 6 + 1] = xyz[s + 1]!;
+      position[i * 6 + 2] = xyz[s + 2]!;
+      position[i * 6 + 3] = xyz[t]!;
+      position[i * 6 + 4] = xyz[t + 1]!;
+      position[i * 6 + 5] = xyz[t + 2]!;
+    });
+    const attribute = geometry.getAttribute('position');
+    if (attribute) attribute.needsUpdate = true;
+    geometry.computeBoundingSphere();
   });
 
-  const color  = strength > 0.7 ? palette.high : strength > 0.4 ? palette.mid : palette.low;
-  const radius = isContradiction ? 0.08 + strength * 0.14 :
-                 style === 'neon' ? 0.06 + strength * 0.1 :
-                 style === 'stars' ? 0.03 + strength * 0.04 :
-                 0.04 + strength * 0.08;
+  if (buffers.count === 0) return null;
 
   return (
-    <mesh ref={ref} position={midPoint} quaternion={quaternion}>
-      <cylinderGeometry args={[radius, radius, length, 4, 1]} />
-      <meshStandardMaterial
-        color={color}
-        emissive={color}
-        emissiveIntensity={style === 'neon' ? 2 : style === 'ghost' ? 1.8 : 1.2}
+    <lineSegments frustumCulled={false} raycast={() => null} renderOrder={0}>
+      <bufferGeometry ref={geometryRef}>
+        <bufferAttribute attach="attributes-position" args={[buffers.position, 3]} />
+        <bufferAttribute attach="attributes-color" args={[buffers.color, 3]} />
+      </bufferGeometry>
+      <lineBasicMaterial
+        vertexColors
         transparent
-        opacity={0.06 + strength * 0.22}
+        opacity={0.7}
         depthWrite={false}
+        toneMapped={false}
       />
-    </mesh>
+    </lineSegments>
   );
 }

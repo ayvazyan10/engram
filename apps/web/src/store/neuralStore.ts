@@ -14,6 +14,20 @@ export interface NeuronNode {
   activation: number;
   importance: number;
   source: string | null;
+  /**
+   * Retrieval and recency, carried through from the API instead of being
+   * discarded at the layout boundary. The old `base()` copied id, type, label,
+   * importance, source and coordinates and dropped everything else — so the two
+   * fields that actually distinguish memories in a memory system (how often
+   * this one has been recalled, and how long ago it was written) never reached
+   * the renderer. NeuronField encodes accessCount as halo size and recency as
+   * core brightness; see canvas/encoding.ts.
+   */
+  accessCount: number;
+  createdAtMs: number;
+  lastAccessedAtMs: number | null;
+  /** False when the server could not project this memory from an embedding. */
+  projected: boolean;
 }
 
 export interface NeuronConnection {
@@ -37,6 +51,9 @@ interface NeuralState {
   neurons: NeuronNode[];
   connections: NeuronConnection[];
   selectedNeuronId: string | null;
+  /** Node under the pointer. Drives the label layer, which shows the selected
+   *  node, its direct neighbours and whatever is hovered. */
+  hoveredNeuronId: string | null;
   activeNeuronIds: Set<string>;
   isConnected: boolean;
   contradictionPairs: ContradictionPair[];
@@ -57,6 +74,7 @@ interface NeuralState {
   setConnections: (connections: NeuronConnection[]) => void;
   setContradictionPairs: (pairs: ContradictionPair[]) => void;
   selectNeuron: (id: string | null) => void;
+  hoverNeuron: (id: string | null) => void;
   /**
    * W15: deliberate future API, not dead code. `activeNeuronIds`,
    * `activateNeuron` and `deactivateNeuron` are fully wired end-to-end —
@@ -77,6 +95,7 @@ export const useNeuralStore = create<NeuralState>((set) => ({
   neurons: [],
   connections: [],
   selectedNeuronId: null,
+  hoveredNeuronId: null,
   activeNeuronIds: new Set(),
   isConnected: false,
   contradictionPairs: [],
@@ -112,6 +131,8 @@ export const useNeuralStore = create<NeuralState>((set) => ({
         neurons,
         selectedNeuronId:
           state.selectedNeuronId && ids.has(state.selectedNeuronId) ? state.selectedNeuronId : null,
+        hoveredNeuronId:
+          state.hoveredNeuronId && ids.has(state.hoveredNeuronId) ? state.hoveredNeuronId : null,
       };
     }),
 
@@ -122,6 +143,8 @@ export const useNeuralStore = create<NeuralState>((set) => ({
       contradictionIds: new Set(pairs.flatMap((p) => [p.sourceId, p.targetId])),
     }),
   selectNeuron: (id) => set({ selectedNeuronId: id }),
+  hoverNeuron: (id) =>
+    set((state) => (state.hoveredNeuronId === id ? state : { hoveredNeuronId: id })),
 
   activateNeuron: (id) =>
     set((state) => {
@@ -142,6 +165,7 @@ export const useNeuralStore = create<NeuralState>((set) => ({
       neurons: state.neurons.filter((n) => n.id !== id),
       connections: state.connections.filter((c) => c.sourceId !== id && c.targetId !== id),
       selectedNeuronId: state.selectedNeuronId === id ? null : state.selectedNeuronId,
+      hoveredNeuronId: state.hoveredNeuronId === id ? null : state.hoveredNeuronId,
     })),
 
   setConnected: (connected) => set({ isConnected: connected }),

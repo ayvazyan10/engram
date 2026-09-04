@@ -11,6 +11,10 @@ function makeNeuron(overrides: Partial<NeuronNode> = {}): NeuronNode {
     activation: 0,
     importance: 0.5,
     source: null,
+    accessCount: 0,
+    createdAtMs: Date.parse('2026-01-01T00:00:00.000Z'),
+    lastAccessedAtMs: null,
+    projected: true,
     ...overrides,
   };
 }
@@ -39,6 +43,12 @@ describe('buildRenderableConnections (F5, "one level up")', () => {
     expect(result).toEqual([
       {
         id: 'c1',
+        sourceId: 'n1',
+        targetId: 'n2',
+        // Instance indices, so the edge geometry can follow the position tween
+        // frame by frame instead of being rebuilt from world coordinates.
+        sourceIndex: 0,
+        targetIndex: 1,
         sourcePos: [10, 10, 10],
         targetPos: [2, 2, 2],
         strength: 0.5,
@@ -72,6 +82,10 @@ describe('buildRenderableConnections (F5, "one level up")', () => {
     expect(result).toHaveLength(50);
     expect(result[0]).toEqual({
       id: 'c0',
+      sourceId: 'n0',
+      targetId: 'n1',
+      sourceIndex: 0,
+      targetIndex: 1,
       sourcePos: [0, 2, 3],
       targetPos: [1, 2, 3],
       strength: 0.5,

@@ -11,11 +11,25 @@ import type { FastifyInstance } from 'fastify';
  * The CSP below is written against what the built dashboard actually loads —
  * see apps/web/dist/index.html — rather than copied from a template:
  *
- *   script-src 'self'      The Vite build emits one external module script and
+ *   script-src             The Vite build emits one external module script and
  *                          modulepreload links. There is no inline <script>,
  *                          so no 'unsafe-inline' and no nonce plumbing is
  *                          needed. Swagger UI at /docs is external-script-only
  *                          too, so the same directive covers it.
+ *                          `blob:` is NOT decoration: troika-three-text (the
+ *                          3D labels) bootstraps its worker by calling
+ *                          importScripts() on a blob URL it builds at runtime,
+ *                          and importScripts is governed by script-src, not
+ *                          worker-src. Without it the console fills with
+ *                          "failed to execute 'importScripts'" and every label
+ *                          in the graph silently disappears — which is exactly
+ *                          what happened: labels rendered under the Vite dev
+ *                          server, which sends no CSP, and never rendered from
+ *                          the server that actually ships the dashboard. A
+ *                          blob: script can only be created by script that is
+ *                          already running on this origin, so this permits
+ *                          nothing an attacker who can already execute here
+ *                          could not do anyway.
  *   style-src              index.html carries an inline <style> for the
  *                          pre-paint background, and Swagger UI injects styles
  *                          at runtime — both need 'unsafe-inline'. The Inter
@@ -42,7 +56,7 @@ const DEFAULT_CSP = [
   "form-action 'self'",
   "frame-ancestors 'none'",
   "object-src 'none'",
-  "script-src 'self'",
+  "script-src 'self' blob:",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
   "img-src 'self' data: blob:",

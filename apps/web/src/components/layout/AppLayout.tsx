@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import NeuralCanvas from '../canvas/NeuralCanvas.js';
 import MemoryPanel from '../ui/MemoryPanel.js';
 import SearchBar from '../ui/SearchBar.js';
@@ -9,9 +9,11 @@ import TemplateSwitcher from '../ui/TemplateSwitcher.js';
 import StoreMemoryModal from '../ui/StoreMemoryModal.js';
 import UnlockGate from '../ui/UnlockGate.js';
 import MobileTabBar, { type MobilePane } from './MobileTabBar.js';
+import SceneKey, { type SceneStats } from '../canvas/SceneKey.js';
+import { fetchEdges, fetchLayout, type EdgeSummary, type LayoutResponse } from '../canvas/graphSource.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
-import { useViewStore } from '../../store/viewStore.js';
+import { useViewStore, fallbackSceneNodes, type SceneNodeInput } from '../../store/viewStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { useDashboardStore } from '../../store/dashboardStore.js';
 import { useAuthStore } from '../../store/authStore.js';
@@ -37,6 +39,12 @@ export default function AppLayout() {
   const t = useTemplateStore((s) => s.activeTemplate);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The 3D scene's node set no longer comes from the memory page: it comes from
+  // GET /api/graph/layout, which places EVERY memory by projecting its
+  // embedding. The sidebar still lists its own page of records.
+  const [layout, setLayout] = useState<LayoutResponse | null>(null);
+  const [layoutFailed, setLayoutFailed] = useState(false);
+  const [edgeSummary, setEdgeSummary] = useState<EdgeSummary | null>(null);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [firstLoad, setFirstLoad] = useState(true);
   const locked = useAuthStore((s) => s.locked);
@@ -105,62 +113,103 @@ export default function AppLayout() {
       .catch(() => {});
   }, [records, setContradictionPairs]);
 
+  // W12: a ref-counted "already fetched for this many records" guard, not a
+  // dependency-array trick. Toggling `viewMode` away from and back to '3d' with
+  // the same record count is a no-op; a new or removed record refetches once,
+  // including one that arrived over the socket while another view was showing.
+  //
+  // What changed here: this used to sort records by importance, take the top
+  // 30, and fire thirty GET /graph/:id requests, then drop every edge whose
+  // other endpoint had fallen outside the 200-row page — 67 edges out of
+  // thousands, biased toward important nodes, with nothing on screen saying so.
+  // Two requests now: the projection, and the whole edge set.
+  const sceneFetchedForCountRef = useRef(-1);
   useEffect(() => {
-    if (records.length === 0 || viewMode !== '3d') return;
-    const positions = activeView.layout(records);
+    if (viewMode !== '3d') return;
+    if (sceneFetchedForCountRef.current === records.length) return;
+    sceneFetchedForCountRef.current = records.length;
+
+    let cancelled = false;
+    fetchLayout()
+      .then((res) => {
+        if (cancelled) return;
+        setLayout(res);
+        setLayoutFailed(false);
+      })
+      .catch(() => {
+        // Not silent: `layoutFailed` drives the scene key's "positions
+        // unavailable" note and the id-derived fallback below.
+        if (!cancelled) setLayoutFailed(true);
+      });
+
+    fetchEdges()
+      .then((res) => {
+        if (cancelled) return;
+        setEdgeSummary(res);
+        setConnections(
+          res.edges.map((e) => ({
+            id: e.id,
+            sourceId: e.sourceId,
+            targetId: e.targetId,
+            relationship: e.relationship,
+            strength: e.strength,
+          }))
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setEdgeSummary(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [records.length, viewMode, setConnections]);
+
+  /** Where the scene's nodes come from: the projection, or a flagged fallback. */
+  const sceneNodes = useMemo<SceneNodeInput[] | null>(() => {
+    if (layout) return layout.nodes;
+    if (layoutFailed) return fallbackSceneNodes(records);
+    return null;
+  }, [layout, layoutFailed, records]);
+
+  useEffect(() => {
+    if (!sceneNodes || sceneNodes.length === 0 || viewMode !== '3d') return;
+    const positions = activeView.layout(sceneNodes);
 
     if (firstLoad || neurons.length === 0) {
       setNeurons(positions.map((p) => ({ ...p, activation: 0, tx: p.x, ty: p.y, tz: p.z })));
       setFirstLoad(false);
     } else {
-      // Reconcile rather than only retarget: setTargetPositions mapped over the
-      // EXISTING array, so memories stored during the session never appeared as
-      // neurons until a full page reload.
+      // Reconcile rather than only retarget: memories stored during the session
+      // never appeared as neurons until a full page reload.
       reconcileNeurons(positions);
     }
   // firstLoad/neurons.length/setNeurons/reconcileNeurons deliberately excluded:
   // firstLoad and neurons.length are read only to pick a branch, both are
-  // updated inside this very effect, and including them would either loop
-  // (setNeurons's new array reference re-triggers on `neurons.length`) or add
-  // nothing (the branch decision is already fresh off the current render on
-  // every legitimate re-run — records/activeView/viewMode changing is what a
-  // "legitimate re-run" means here). setNeurons/reconcileNeurons are stable
-  // Zustand actions.
+  // updated inside this very effect, and including them would either loop or
+  // add nothing. setNeurons/reconcileNeurons are stable Zustand actions.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [records, activeView, viewMode]);
+  }, [sceneNodes, activeView, viewMode]);
 
-  // W12: a ref-counted "already fetched for this many records" guard, not a
-  // dependency-array trick — `records` (not `records.length > 0`) is a real
-  // dependency so eslint can see everything the effect reads, but toggling
-  // `viewMode` away from and back to '3d' with the same record count is a
-  // no-op instead of re-running the 30-call Promise.all below (five tab
-  // flips used to mean 150 requests). A new/removed record still refetches,
-  // including one that arrived over the socket while a different view was
-  // showing — the guard is keyed on count, not on "did we ever fetch", so
-  // returning to 3D after that always finds it stale and fetches once.
-  const connectionsFetchedForCountRef = useRef(-1);
-  useEffect(() => {
-    if (records.length === 0 || viewMode !== '3d') return;
-    if (connectionsFetchedForCountRef.current === records.length) return;
-    connectionsFetchedForCountRef.current = records.length;
-    const top = [...records].sort((a, b) => b.importance - a.importance).slice(0, 30);
-    Promise.all(top.map((m) => api.getGraph(m.id, 1).catch(() => null))).then((graphs) => {
-      // The route returns edges in both directions, so the same edge arrives
-      // once per endpoint — dedupe by id and drop self-loops.
-      const byId = new Map<string, Parameters<typeof setConnections>[0][number]>();
-      graphs.forEach((g, i) => {
-        if (!g) return;
-        const src = top[i]!.id;
-        g.connections?.forEach((c) => {
-          const sourceId = c.sourceId || src;
-          if (!c.targetId || sourceId === c.targetId) return;
-          if (byId.has(c.id)) return;
-          byId.set(c.id, { id: c.id, sourceId, targetId: c.targetId, relationship: c.relationship, strength: c.strength });
-        });
-      });
-      setConnections([...byId.values()]);
-    });
-  }, [records, viewMode, setConnections]);
+  const sceneStats = useMemo<SceneStats | null>(() => {
+    if (!sceneNodes) return null;
+    const filter =
+      edgeSummary && edgeSummary.truncated
+        ? `capped at ${edgeSummary.limit.toLocaleString('en-US')}`
+        : edgeSummary && edgeSummary.minStrength > 0
+          ? `strength ≥ ${edgeSummary.minStrength}`
+          : null;
+    return {
+      nodes: sceneNodes.length,
+      method: layout ? layout.method : 'offline',
+      unprojected: layout ? layout.unprojected : sceneNodes.length,
+      explainedVariance: layout?.explainedVariance ?? [],
+      edgesShown: edgeSummary?.returned ?? 0,
+      edgesRenderable: edgeSummary?.total ?? 0,
+      edgesStored: edgeSummary?.stored ?? 0,
+      edgeFilter: filter,
+    };
+  }, [sceneNodes, layout, edgeSummary]);
 
   return (
     <div style={{ ...s.root, background: t.rootBg }}>
@@ -190,6 +239,8 @@ export default function AppLayout() {
             loadError={loadError}
             loadMemories={loadMemories}
             onStore={() => setShowStoreModal(true)}
+            sceneStats={sceneStats}
+            sceneReady={sceneNodes !== null}
           />
         ) : (
           <div style={s.main}>
@@ -199,7 +250,8 @@ export default function AppLayout() {
             </div>
 
             <div style={s.canvas}>
-              <CanvasOrLoading loading={loading} hasRecords={records.length > 0} />
+              <CanvasOrLoading sceneReady={sceneNodes !== null} />
+              <SceneKey stats={sceneStats} compact={false} />
             </div>
 
             <div style={{ ...s.inspector, background: t.panelBg, borderLeftColor: t.panelBorder }}>
@@ -210,9 +262,19 @@ export default function AppLayout() {
       ) : (
         <div style={s.fullView}>
           <Suspense fallback={<div style={{ ...s.loadingText, color: t.textMuted, padding: SPACE.lg }}>Loading…</div>}>
-            {viewMode === 'timeline' && <TimelineView />}
-            {viewMode === 'analytics' && <AnalyticsView />}
-            {viewMode === 'reflections' && <ReflectionView />}
+            {/* loading / error / onRetry come from the same state MemoryPanel
+                receives, so every surface reports the same load in the same
+                words. Threaded from here because these three are rendered by
+                this component and cannot reach that state themselves. */}
+            {viewMode === 'timeline' && (
+              <TimelineView loading={loading} error={loadError} onRetry={loadMemories} />
+            )}
+            {viewMode === 'analytics' && (
+              <AnalyticsView loading={loading} error={loadError} onRetry={loadMemories} />
+            )}
+            {viewMode === 'reflections' && (
+              <ReflectionView loading={loading} error={loadError} onRetry={loadMemories} />
+            )}
           </Suspense>
         </div>
       )}
@@ -234,9 +296,11 @@ export default function AppLayout() {
   );
 }
 
-function CanvasOrLoading({ loading, hasRecords }: { loading: boolean; hasRecords: boolean }) {
+/** The spinner also covers the projection fetch: rendering an empty canvas
+ *  while `/api/graph/layout` is in flight looked identical to an empty store. */
+function CanvasOrLoading({ sceneReady }: { sceneReady: boolean }) {
   const t = useTemplateStore((s) => s.activeTemplate);
-  if (loading && !hasRecords) {
+  if (!sceneReady) {
     return (
       <div style={{ ...s.loadingOverlay, background: t.rootBg }}>
         <div style={{ ...s.spinner, borderColor: t.panelBorder, borderTopColor: t.accent }} />
@@ -254,14 +318,15 @@ interface CompactMainProps {
   loadError: string | null;
   loadMemories: () => void;
   onStore: () => void;
+  sceneStats: SceneStats | null;
+  sceneReady: boolean;
 }
 
 /** The 3D-mode layout below ~900px (V3): one full-width pane at a time
  *  (list / canvas / inspector), switched via MobileTabBar instead of the
  *  desktop's fixed 3-column row. */
-function CompactMain({ pane, onPaneChange, loading, loadError, loadMemories, onStore }: CompactMainProps) {
+function CompactMain({ pane, onPaneChange, loading, loadError, loadMemories, onStore, sceneStats, sceneReady }: CompactMainProps) {
   const t = useTemplateStore((s) => s.activeTemplate);
-  const records = useMemoryStore((s) => s.records);
 
   return (
     <div style={s.compactMain}>
@@ -274,7 +339,8 @@ function CompactMain({ pane, onPaneChange, loading, loadError, loadMemories, onS
         )}
         {pane === 'canvas' && (
           <div className="ec-mobile-pane" style={{ position: 'relative' }}>
-            <CanvasOrLoading loading={loading} hasRecords={records.length > 0} />
+            <CanvasOrLoading sceneReady={sceneReady} />
+            <SceneKey stats={sceneStats} compact />
           </div>
         )}
         {pane === 'inspector' && (

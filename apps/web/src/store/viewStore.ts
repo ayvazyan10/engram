@@ -3,162 +3,316 @@ import type { MemoryRecord } from './memoryStore.js';
 import type { NeuronNode } from './neuralStore.js';
 import { hexToInt, TYPE_COLORS } from '../lib/tokens.js';
 
-// The 5 views below are deliberately, independently art-directed — Nebula's
-// pink/violet fog, Neural Net's green, Galaxy's yellow are the point of
-// having different views, the same way switching UI templates is. That's
-// not the "same memory changes colour" bug the audit found (that was
-// TYPE_COLORS disagreeing between 2D panels — see lib/tokens.ts). 'cosmos'
-// (the default view) and 'clusters' happen to already agree with the
-// canonical 2D palette, so they reference it directly instead of
-// re-typing the same three hex values as numeric literals.
+/**
+ * One honest layout, three framings of it.
+ *
+ * Position used to be decorative: five views, five unrelated scatter functions,
+ * none of which encoded anything about the memory beyond its type. A node's
+ * place on screen told you nothing you could not read off its colour.
+ *
+ * Now every view draws the SAME projection — the server's PCA of each memory's
+ * 384-dimension embedding into a fixed world box (GET /api/graph/layout), so
+ * two nodes near each other are near each other in meaning. The views differ in
+ * how that projection is framed and art-directed, not in where they put things:
+ *
+ *   Cosmos    the projection as it is, free orbit — global structure
+ *   Neural Net the projection with type pulled apart along X — bands you can
+ *              compare, similarity still governing within each band
+ *   Clusters  the projection folded into three per-type volumes — the view the
+ *             audit found was the only one that worked, now with real
+ *             within-cluster structure instead of hash noise
+ *
+ * Nebula and Galaxy are gone. Nebula was Cosmos with a bigger radius and the
+ * type colours thrown away; Galaxy encoded nothing at all in position and could
+ * not show the spiral it was named for (disc in XZ, camera inside that plane,
+ * autoRotate about Y preserving the polar angle).
+ */
+
+// ─── Canonical colour ─────────────────────────────────────────────────────────
+//
+// TYPE_COLORS is the app's single source of truth for memory-type colour, and
+// the footer legend has always drawn from it. Three view themes used to
+// override it with near-monochrome ramps (Neural Net's worst pair was ΔE 10.4 —
+// effectively one colour), which made the app's own legend false. Memory type is
+// the primary categorical variable here, so its encoding is invariant across
+// views: views differentiate on background, fog, bloom and geometry, never on
+// hue. See lib/__tests__/typeColorsSingleSource.test.ts.
 const CANONICAL_NEURON_COLORS = {
   episodic: hexToInt(TYPE_COLORS.episodic),
   semantic: hexToInt(TYPE_COLORS.semantic),
   procedural: hexToInt(TYPE_COLORS.procedural),
-};
+} as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ViewStyle = 'cosmos' | 'neon' | 'plasma' | 'ghost' | 'stars';
+export type ViewStyle = 'cosmos' | 'net' | 'clusters';
+
+export interface ViewCamera {
+  /** Direction the camera sits in, from the target. Normalised by the rig. */
+  direction: [number, number, number];
+  /** Half-extent of the content, in world units — what has to fit on screen. */
+  frameRadius: number;
+  /** Where the orbit pivots, for a layout that is not centred on the origin. */
+  target: [number, number, number];
+  fov: number;
+}
 
 export interface ViewTheme {
   background: string;
+  /**
+   * Fog as a fraction of the camera distance, not absolute world units: the rig
+   * pushes the camera back on a narrow viewport, and absolute fog would swallow
+   * the whole scene on a phone while barely touching it on a desktop.
+   */
+  fog: { nearFactor: number; farFactor: number };
   bloom: { intensity: number; threshold: number; smoothing: number };
   autoRotateSpeed: number;
-  colors: { episodic: number; semantic: number; procedural: number };
+  /** Always CANONICAL_NEURON_COLORS. Kept as a field so the renderer reads
+   *  colour from one place, not so views can disagree about it. */
+  colors: typeof CANONICAL_NEURON_COLORS;
+  camera: ViewCamera;
+  /** Ground plane, only where a horizontal reference means something. */
+  grid: boolean;
   style: ViewStyle;
 }
 
-export type NeuronPosition = Omit<NeuronNode, 'activation'>;
+/** A placed memory as `GET /api/graph/layout` returns it. */
+export interface SceneNodeInput {
+  id: string;
+  type: NeuronNode['type'];
+  label: string;
+  importance: number;
+  source: string | null;
+  accessCount: number;
+  createdAt: string;
+  lastAccessedAt: string | null;
+  x: number;
+  y: number;
+  z: number;
+  /** False when the server could not project this memory (no usable embedding). */
+  projected: boolean;
+}
+
+export type NeuronPosition = Omit<NeuronNode, 'activation' | 'tx' | 'ty' | 'tz'>;
 
 export interface ViewConfig {
   id: string;
   name: string;
   icon: string;
   description: string;
-  layout: (records: MemoryRecord[]) => NeuronPosition[];
+  layout: (nodes: readonly SceneNodeInput[]) => NeuronPosition[];
   theme: ViewTheme;
 }
 
-// ─── Layout helpers ───────────────────────────────────────────────────────────
-//
-// F3: every position below is a pure function of a record's own id/type/
-// importance — never of its index in `records` or of `records.length`. That's
-// what makes a node's position stable across unrelated record changes: array
-// reordering (a new memory prepended), removals (an archive), or edits to
-// *other* records all used to feed into `i`, `records.length`, or a fresh
-// `Math.random()` draw, so the whole graph reshuffled on every write. A
-// record's own importance/type changing its own position is still correct —
-// that's a related change.
+// ─── Deterministic hash ───────────────────────────────────────────────────────
+
+/**
+ * murmur3's finalizer. The previous hash ended in a single `h ^= h >>> 15`,
+ * which does not avalanche: with the salt appended LAST, two salts differing
+ * only in their final character produced almost the same value. Measured over
+ * 4,000 uuids: corr(cloud-x, cloud-y) = 0.978, corr(net-y, net-z) = 0.953, mean
+ * absolute difference 0.008 where independent uniforms give 0.333. That is why
+ * the "clusters" clouds rendered as straight diagonal rods — x, y and z were
+ * the same number.
+ *
+ * Two fixes, both needed: the salt goes FIRST so it is mixed through every
+ * subsequent byte, and the finalizer is a real avalanche.
+ * See store/__tests__/viewStore.hash.test.ts, which asserts |r| < 0.05 for
+ * every salt pair.
+ */
+function fmix32(h: number): number {
+  let x = h >>> 0;
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x85ebca6b);
+  x ^= x >>> 13;
+  x = Math.imul(x, 0xc2b2ae35);
+  x ^= x >>> 16;
+  return x >>> 0;
+}
 
 /** Deterministic pseudo-random float in [0, 1), stable for a given id + salt.
- *  Swap the salt to get an independent-looking value for the same id (e.g.
- *  one for an x jitter, another for y) without ever touching Math.random. */
-function idRandom(id: string, salt: string): number {
+ *  Never Math.random — the layout must be reproducible. */
+export function idRandom(id: string, salt: string): number {
   let h = 0x811c9dc5; // FNV-1a offset basis
-  const s = id + ':' + salt;
+  const s = salt + ':' + id;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
-  h ^= h >>> 15;
-  return (h >>> 0) / 4294967296;
+  return fmix32(h) / 4294967296;
 }
 
-function base(r: MemoryRecord, x: number, y: number, z: number): NeuronPosition {
+// ─── Layout helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Jitter, and nothing else.
+ *
+ * The hash no longer decides where a memory goes — the projection does. Its one
+ * remaining job is to pull apart nodes whose embeddings are identical: 42 of the
+ * live store's 653 memories are job-generated reflections that embed to the same
+ * vector, and without this they would occupy exactly one pixel.
+ */
+const JITTER = 0.9;
+
+function jitter(id: string, axis: string): number {
+  return (idRandom(id, 'jitter-' + axis) - 0.5) * JITTER;
+}
+
+function base(n: SceneNodeInput, x: number, y: number, z: number): NeuronPosition {
   return {
-    id: r.id, type: r.type,
-    label: r.concept ?? r.content.slice(0, 30),
-    importance: r.importance, source: r.source,
-    x, y, z,
+    id: n.id,
+    type: n.type,
+    label: n.label,
+    importance: n.importance,
+    source: n.source,
+    accessCount: n.accessCount,
+    createdAtMs: Date.parse(n.createdAt),
+    lastAccessedAtMs: n.lastAccessedAt ? Date.parse(n.lastAccessedAt) : null,
+    projected: n.projected,
+    x: x + jitter(n.id, 'x'),
+    y: y + jitter(n.id, 'y'),
+    z: z + jitter(n.id, 'z'),
   };
 }
 
-// Fixed spiral density (replaces the old sqrt(records.length * PI)): tuned to
-// look like the same banding a few-hundred-record dataset produced, but
-// fixed so the graph doesn't visibly rewind as records arrive.
-const FIB_SPIRAL_TURNS = 30;
+/** Cosmos — the projection, untouched. */
+function projectionLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
+  return nodes.map((n) => base(n, n.x, n.y, n.z));
+}
 
-function fibSphere(records: MemoryRecord[], minR: number, maxR: number): NeuronPosition[] {
-  return records.map((r) => {
-    const t     = idRandom(r.id, 'fib-t'); // uniform latitude position, stands in for i/N
-    const spin  = idRandom(r.id, 'fib-spin');
-    const phi   = Math.acos(1 - 2 * t);
-    const theta = phi * FIB_SPIRAL_TURNS + spin * Math.PI * 2;
-    const rad   = minR + r.importance * (maxR - minR);
-    return base(r, rad * Math.cos(theta) * Math.sin(phi), rad * Math.sin(theta) * Math.sin(phi), rad * Math.cos(phi));
+/** Neural Net — type separated along X, similarity still governing within a band. */
+const NET_BAND_X: Record<NeuronNode['type'], number> = {
+  episodic: -58,
+  semantic: 0,
+  procedural: 58,
+};
+/** How much of the projection's X survives inside a band. Small enough that
+ *  bands never overlap (0.28 x 42 = 11.8 against a 58-unit gap). */
+const NET_X_COMPRESSION = 0.28;
+
+function bandedLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
+  return nodes.map((n) => base(n, NET_BAND_X[n.type] + n.x * NET_X_COMPRESSION, n.y, n.z));
+}
+
+/** Clusters — three volumes, each keeping its own internal projection. */
+const CLUSTER_CENTRE: Record<NeuronNode['type'], [number, number, number]> = {
+  episodic: [-44, 24, 0],
+  semantic: [44, 24, 0],
+  procedural: [0, -46, 0],
+};
+const CLUSTER_SCALE = 0.4;
+
+function clusteredLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
+  return nodes.map((n) => {
+    const [cx, cy, cz] = CLUSTER_CENTRE[n.type];
+    return base(n, cx + n.x * CLUSTER_SCALE, cy + n.y * CLUSTER_SCALE, cz + n.z * CLUSTER_SCALE);
   });
 }
 
-function spiralGalaxy(records: MemoryRecord[]): NeuronPosition[] {
-  const arms = 3;
+// ─── Fallback when the projection is unavailable ──────────────────────────────
+
+/** Half-extent the server scales its projection into (GET /api/graph/layout). */
+export const WORLD_HALF_EXTENT = 42;
+
+/**
+ * What the scene shows when `/api/graph/layout` cannot be reached.
+ *
+ * A deterministic sphere derived from ids alone — meaningless as a position,
+ * and flagged `projected: false` so the renderer draws these hollow and the
+ * scene key says "positions unavailable" rather than implying the arrangement
+ * means something. This is a degraded mode, not a second layout.
+ */
+export function fallbackSceneNodes(records: readonly MemoryRecord[]): SceneNodeInput[] {
   return records.map((r) => {
-    const t     = idRandom(r.id, 'galaxy-t'); // stands in for i / records.length
-    const arm   = Math.floor(idRandom(r.id, 'galaxy-arm') * arms);
-    const angle = t * Math.PI * 6 + (arm / arms) * Math.PI * 2;
-    const rad   = 8 + t * 55;
-    const y     = (idRandom(r.id, 'galaxy-y') - 0.5) * rad * 0.18;
-    return base(r, rad * Math.cos(angle), y, rad * Math.sin(angle));
+    const phi = Math.acos(1 - 2 * idRandom(r.id, 'fallback-u'));
+    const theta = idRandom(r.id, 'fallback-v') * Math.PI * 2;
+    const radius = WORLD_HALF_EXTENT * 0.85;
+    return {
+      id: r.id,
+      type: r.type,
+      label: r.concept ?? r.content.slice(0, 60),
+      importance: r.importance,
+      source: r.source,
+      accessCount: 0,
+      createdAt: r.createdAt,
+      lastAccessedAt: null,
+      x: radius * Math.sin(phi) * Math.cos(theta),
+      y: radius * Math.cos(phi),
+      z: radius * Math.sin(phi) * Math.sin(theta),
+      projected: false,
+    };
   });
 }
 
-function layeredNet(records: MemoryRecord[]): NeuronPosition[] {
-  const colX = { episodic: -48, semantic: 0, procedural: 48 };
-  const columnSpread = 80; // vertical scatter within a type's column
-  return records.map((r) => {
-    const y = (idRandom(r.id, 'net-y') - 0.5) * columnSpread;
-    const z = (idRandom(r.id, 'net-z') - 0.5) * 18;
-    return base(r, colX[r.type], y, z);
-  });
-}
-
-function cloudCluster(records: MemoryRecord[]): NeuronPosition[] {
-  const centres: Record<string, [number, number, number]> = {
-    episodic:   [-35, 15, 0],
-    semantic:   [35, 15, 0],
-    procedural: [0, -30, 0],
-  };
-  return records.map((r) => {
-    const [cx, cy, cz] = centres[r.type] ?? [0, 0, 0];
-    const s = 22 + r.importance * 8;
-    return base(
-      r,
-      cx + (idRandom(r.id, 'cloud-x') - 0.5) * s,
-      cy + (idRandom(r.id, 'cloud-y') - 0.5) * s,
-      cz + (idRandom(r.id, 'cloud-z') - 0.5) * s
-    );
-  });
-}
-
-// ─── 5 View configs ───────────────────────────────────────────────────────────
+// ─── View configs ─────────────────────────────────────────────────────────────
 
 export const VIEWS: ViewConfig[] = [
   {
-    id: 'cosmos', name: 'Cosmos', icon: '✦', description: 'Deep-space sphere with metallic neurons',
-    layout: (rs) => fibSphere(rs, 25, 45),
-    theme: { background: '#020a18', bloom: { intensity: 1.4, threshold: 0.2, smoothing: 0.8 }, autoRotateSpeed: 0.25, colors: CANONICAL_NEURON_COLORS, style: 'cosmos' },
+    id: 'cosmos',
+    name: 'Cosmos',
+    icon: '✦',
+    description: 'The whole projection, free orbit — near means similar',
+    layout: projectionLayout,
+    theme: {
+      background: '#03060f',
+      fog: { nearFactor: 0.72, farFactor: 2.35 },
+      bloom: { intensity: 1.05, threshold: 0.3, smoothing: 0.75 },
+      autoRotateSpeed: 0.18,
+      colors: CANONICAL_NEURON_COLORS,
+      camera: { direction: [0, 0.06, 1], frameRadius: 52, target: [0, 0, 0], fov: 50 },
+      grid: false,
+      style: 'cosmos',
+    },
   },
   {
-    id: 'nebula', name: 'Nebula', icon: '◈', description: 'Pink & violet fog with soft glowing orbs',
-    layout: (rs) => fibSphere(rs, 30, 60),
-    theme: { background: '#0a0015', bloom: { intensity: 2.4, threshold: 0.08, smoothing: 0.95 }, autoRotateSpeed: 0.12, colors: { episodic: 0xf472b6, semantic: 0xc084fc, procedural: 0xfb7185 }, style: 'ghost' },
+    id: 'neural',
+    name: 'Neural Net',
+    icon: '⬡',
+    description: 'Same projection, type separated into bands along one axis',
+    layout: bandedLayout,
+    theme: {
+      background: '#04090c',
+      fog: { nearFactor: 0.8, farFactor: 2.6 },
+      bloom: { intensity: 0.9, threshold: 0.32, smoothing: 0.6 },
+      autoRotateSpeed: 0,
+      colors: CANONICAL_NEURON_COLORS,
+      camera: { direction: [0, 0.17, 1], frameRadius: 74, target: [0, 0, 0], fov: 50 },
+      grid: true,
+      style: 'net',
+    },
   },
   {
-    id: 'neural', name: 'Neural Net', icon: '⬡', description: 'Layered architecture — episodic / semantic / procedural',
-    layout: layeredNet,
-    theme: { background: '#000d00', bloom: { intensity: 1.1, threshold: 0.25, smoothing: 0.6 }, autoRotateSpeed: 0, colors: { episodic: 0x4ade80, semantic: 0x86efac, procedural: 0x6ee7b7 }, style: 'neon' },
-  },
-  {
-    id: 'galaxy', name: 'Galaxy', icon: '⊛', description: 'Spiral arms, star-like cores, fast rotation',
-    layout: spiralGalaxy,
-    theme: { background: '#000005', bloom: { intensity: 2.0, threshold: 0.15, smoothing: 0.85 }, autoRotateSpeed: 0.9, colors: { episodic: 0xfde68a, semantic: 0xfef9c3, procedural: 0xfca5a1 }, style: 'stars' },
-  },
-  {
-    id: 'clusters', name: 'Clusters', icon: '⊹', description: 'Three memory types as distinct cloud clusters',
-    layout: cloudCluster,
-    theme: { background: '#08080f', bloom: { intensity: 1.2, threshold: 0.2, smoothing: 0.7 }, autoRotateSpeed: 0.18, colors: CANONICAL_NEURON_COLORS, style: 'plasma' },
+    id: 'clusters',
+    name: 'Clusters',
+    icon: '⊹',
+    description: 'Same projection, grouped into one volume per memory type',
+    layout: clusteredLayout,
+    theme: {
+      background: '#07070d',
+      fog: { nearFactor: 0.78, farFactor: 2.6 },
+      bloom: { intensity: 1.0, threshold: 0.3, smoothing: 0.7 },
+      autoRotateSpeed: 0.12,
+      colors: CANONICAL_NEURON_COLORS,
+      camera: { direction: [0, 0.05, 1], frameRadius: 72, target: [0, -10, 0], fov: 50 },
+      grid: false,
+      style: 'clusters',
+    },
   },
 ];
+
+export const DEFAULT_VIEW_ID = 'cosmos';
+
+/**
+ * Resolve a view id to one that exists.
+ *
+ * Nebula and Galaxy were removed, and `setView` used to store whatever id it
+ * was handed even when no view matched — so a stale 'nebula' left the switcher
+ * highlighting nothing while the canvas rendered Cosmos. An unknown id now
+ * resolves to the default, id included.
+ */
+export function resolveView(id: string | null | undefined): ViewConfig {
+  return VIEWS.find((v) => v.id === id) ?? (VIEWS[0] as ViewConfig);
+}
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -169,10 +323,10 @@ interface ViewState {
 }
 
 export const useViewStore = create<ViewState>((set) => ({
-  activeViewId: 'cosmos',
-  activeView: VIEWS[0]!,
+  activeViewId: DEFAULT_VIEW_ID,
+  activeView: resolveView(DEFAULT_VIEW_ID),
   setView: (id) => {
-    const view = VIEWS.find((v) => v.id === id) ?? VIEWS[0]!;
-    set({ activeViewId: id, activeView: view });
+    const view = resolveView(id);
+    set({ activeViewId: view.id, activeView: view });
   },
 }));

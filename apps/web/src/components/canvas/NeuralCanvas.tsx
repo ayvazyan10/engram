@@ -1,16 +1,26 @@
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Stars, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import { BlendFunction } from 'postprocessing';
-import { Suspense, useMemo } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
+import * as THREE from 'three';
 import { useNeuralStore, type NeuronNode, type NeuronConnection } from '../../store/neuralStore.js';
-import { useViewStore } from '../../store/viewStore.js';
+import { useViewStore, type ViewTheme } from '../../store/viewStore.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
-import NeuronMesh from './NeuronMesh.js';
-import ConnectionLine from './ConnectionLine.js';
+import NeuronField from './NeuronMesh.js';
+import NeuronRings from './NeuronRings.js';
+import NeuronLabels from './NeuronLabels.js';
+import ConnectionLines from './ConnectionLine.js';
+import { createScenePositions } from './scenePositions.js';
 
 export interface RenderableConnection {
   id: string;
+  sourceId: string;
+  targetId: string;
+  /** Instance index of each endpoint, parallel to `neurons` and to the shared
+   *  position buffer — what the edge geometry needs to follow a tween. */
+  sourceIndex: number;
+  targetIndex: number;
   sourcePos: [number, number, number];
   targetPos: [number, number, number];
   strength: number;
@@ -18,20 +28,20 @@ export interface RenderableConnection {
 }
 
 /**
- * Map connections onto the endpoints ConnectionLine needs to render.
+ * Map connections onto the endpoints the edge geometry needs.
  *
- * Pulled out as a plain, testable function (F5, "one level up" from
- * NeuronMesh): an O(1) id → neuron lookup instead of the previous
- * O(connections x neurons) `neurons.find` per line, and its result is meant
- * to be wrapped in `useMemo` by the caller so ConnectionLine's own useMemo
- * (keyed on sourcePos/targetPos) isn't defeated by fresh position arrays on
- * every NeuralCanvas render that has nothing to do with connections.
+ * Pulled out as a plain, testable function (F5, "one level up" from the node
+ * renderer): an O(1) id → neuron lookup instead of an O(connections x neurons)
+ * `neurons.find` per line, and its result is meant to be wrapped in `useMemo`
+ * by the caller so it is rebuilt only when the data changes — not on every
+ * render that has nothing to do with connections. At 3,102 edges that
+ * difference is the whole frame budget.
  */
 export function buildRenderableConnections(
   neurons: NeuronNode[],
   connections: NeuronConnection[]
 ): RenderableConnection[] {
-  const byId = new Map(neurons.map((n) => [n.id, n] as const));
+  const byId = new Map(neurons.map((n, index) => [n.id, { node: n, index }] as const));
   const result: RenderableConnection[] = [];
   for (const conn of connections) {
     const src = byId.get(conn.sourceId);
@@ -39,8 +49,12 @@ export function buildRenderableConnections(
     if (!src || !tgt || !conn.targetId) continue;
     result.push({
       id: conn.id,
-      sourcePos: [src.tx ?? src.x, src.ty ?? src.y, src.tz ?? src.z],
-      targetPos: [tgt.tx ?? tgt.x, tgt.ty ?? tgt.y, tgt.tz ?? tgt.z],
+      sourceId: conn.sourceId,
+      targetId: conn.targetId,
+      sourceIndex: src.index,
+      targetIndex: tgt.index,
+      sourcePos: [src.node.tx ?? src.node.x, src.node.ty ?? src.node.y, src.node.tz ?? src.node.z],
+      targetPos: [tgt.node.tx ?? tgt.node.x, tgt.node.ty ?? tgt.node.y, tgt.node.tz ?? tgt.node.z],
       strength: conn.strength,
       relationship: conn.relationship,
     });
@@ -48,11 +62,8 @@ export function buildRenderableConnections(
   return result;
 }
 
-/** Non-null Suspense fallback (W3) — a dim placeholder sphere plus a light,
- *  rendered with plain three.js primitives so it can never itself suspend.
- *  Visible for at most a frame or two in practice now that NeuronMesh's
- *  labels each carry their own boundary, but a placeholder still beats a
- *  black canvas for whatever ends up hitting this one. */
+/** Non-null Suspense fallback (W3) — a dim placeholder rendered with plain
+ *  three.js primitives, so it can never itself suspend. */
 function CanvasLoadingFallback({ background }: { background: string }) {
   return (
     <>
@@ -66,22 +77,68 @@ function CanvasLoadingFallback({ background }: { background: string }) {
   );
 }
 
+/**
+ * Frames the scene for the active view, at the current viewport.
+ *
+ * Two jobs the `camera` prop on <Canvas> cannot do. It is applied once at
+ * mount, so the three views would otherwise share whatever framing the first
+ * one wanted — and since they are now framings of ONE layout, framing is most
+ * of what distinguishes them. And it takes a fixed position, which crops the
+ * graph on a narrow viewport: a perspective camera fits its FOV vertically, so
+ * at a 375px width the horizontal half-extent on screen is barely half what it
+ * is at 1440px. The distance is solved from the content radius and the actual
+ * aspect ratio instead, and the fog follows it, so a phone gets the same
+ * composition rather than a cropped one.
+ */
+function CameraRig({ theme }: { theme: ViewTheme }) {
+  const camera = useThree((s) => s.camera);
+  const scene = useThree((s) => s.scene);
+  const size = useThree((s) => s.size);
+  const controls = useThree((s) => s.controls) as { target?: THREE.Vector3; update?: () => void } | null;
+  const invalidate = useThree((s) => s.invalidate);
+  const { direction, frameRadius, target, fov } = theme.camera;
+  const { nearFactor, farFactor } = theme.fog;
+  const aspect = size.width > 0 && size.height > 0 ? size.width / size.height : 1;
+
+  useEffect(() => {
+    const half = Math.tan((fov * Math.PI) / 360);
+    // Fit vertically AND horizontally; whichever needs more room wins.
+    const distance = (frameRadius / half) * Math.max(1, 1 / aspect) * 1.06;
+
+    const offset = new THREE.Vector3(...direction).normalize().multiplyScalar(distance);
+    camera.position.set(target[0] + offset.x, target[1] + offset.y, target[2] + offset.z);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+    camera.lookAt(target[0], target[1], target[2]);
+
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.near = distance * nearFactor;
+      scene.fog.far = distance * farFactor;
+    }
+
+    controls?.target?.set(target[0], target[1], target[2]);
+    controls?.update?.();
+    invalidate();
+  }, [camera, scene, controls, invalidate, direction, frameRadius, target, fov, aspect, nearFactor, farFactor]);
+
+  return null;
+}
+
 export default function NeuralCanvas() {
-  // Narrow selectors (F5): NeuralCanvas used to pull the whole neural store,
-  // so it (and every child it re-renders) re-ran on state this component
-  // never uses, like selectedNeuronId or isConnected.
+  // Narrow selectors (F5): this component used to pull the whole neural store,
+  // so it (and every child it re-rendered) re-ran on state it never used.
   const neurons = useNeuralStore((s) => s.neurons);
   const connections = useNeuralStore((s) => s.connections);
+  const selectedId = useNeuralStore((s) => s.selectedNeuronId);
   const activeView = useViewStore((s) => s.activeView);
   const { theme } = activeView;
-  // W11: no prior handling of prefers-reduced-motion, and the render loop
-  // never idled — auto-rotate, per-neuron/per-line pulsing, animated Stars
-  // and Bloom all ran on a continuous rAF loop regardless, burning GPU in an
-  // idle background tab. `frameloop="demand"` (r3f only renders on an actual
-  // state/prop change, or an explicit invalidate() — which OrbitControls'
-  // damping already calls) is the load-bearing fix; autoRotate and the
-  // Stars twinkle are turned off outright since a control loop can't un-spin
-  // a rotation that's still being requested every frame.
+  // W11: no prior handling of prefers-reduced-motion, and the render loop never
+  // idled. `frameloop="demand"` (r3f renders only on an actual change or an
+  // explicit invalidate) is the load-bearing fix; auto-rotate and the Stars
+  // twinkle are turned off outright, since a control loop cannot un-spin a
+  // rotation that is still being requested every frame.
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
 
   const renderableConnections = useMemo(
@@ -89,94 +146,70 @@ export default function NeuralCanvas() {
     [neurons, connections]
   );
 
+  // Shared tween buffer: NeuronField writes it, rings, labels and edges read it.
+  const positions = useRef(createScenePositions());
+
   return (
     <Canvas
       style={{ width: '100%', height: '100%' }}
-      camera={{ position: [0, 0, 120], fov: 55, near: 0.1, far: 2000 }}
+      camera={{ position: [0, 0, 140], fov: theme.camera.fov, near: 0.1, far: 4000 }}
       gl={{ antialias: true, powerPreference: 'high-performance', alpha: false }}
       dpr={[1, 1.5]}
       frameloop={reducedMotion ? 'demand' : 'always'}
     >
-      {/* W3: this boundary is defense-in-depth, not the primary fix — every
-          <Text> in NeuronMesh now suspends behind its own local Suspense
-          (fallback=null) so a font fetch never blanks the shared scene below
-          it. This one keeps a non-null fallback (rather than the previous
-          `null`) so that IF some future suspending drei/r3f addition (a
-          loader, a texture) ever bubbles up here, the canvas shows a visible
-          placeholder instead of going black. */}
+      {/* W3: defence in depth. Every <Text> in NeuronLabels suspends behind its
+          own local boundary, so a font fetch never blanks the shared scene;
+          this one keeps a visible fallback in case some future suspending
+          addition ever bubbles up here. */}
       <Suspense fallback={<CanvasLoadingFallback background={theme.background} />}>
         <color attach="background" args={[theme.background]} />
+        {/* Fog is the depth cue that replaces the old per-style haze: it is
+            keyed to the world box, so "further away" reads the same in every
+            view instead of meaning something different in each. */}
+        {/* CameraRig owns near/far — they are a fraction of the camera distance
+            it solves for, not fixed world units. These are placeholders. */}
+        <fog attach="fog" args={[theme.background, 100, 400]} />
 
-        {/* Lighting varies by style */}
-        {theme.style === 'neon' ? (
-          <>
-            <ambientLight intensity={0.05} />
-            <pointLight position={[0, 60, 0]} intensity={1.5} color="#4ade80" />
-            <pointLight position={[-60, -40, 60]} intensity={0.8} color="#22c55e" />
-          </>
-        ) : theme.style === 'stars' ? (
-          <>
-            <ambientLight intensity={0.1} />
-            <pointLight position={[80, 0, 0]} intensity={2} color="#fef9c3" />
-            <pointLight position={[-80, 0, 0]} intensity={1} color="#fca5a1" />
-          </>
-        ) : theme.style === 'ghost' ? (
-          <>
-            <ambientLight intensity={0.08} />
-            <pointLight position={[60, 60, 40]} intensity={2} color="#c084fc" />
-            <pointLight position={[-60, -40, -60]} intensity={1.2} color="#f472b6" />
-          </>
-        ) : (
-          <>
-            <ambientLight intensity={0.15} />
-            <pointLight position={[100, 80, 60]} intensity={2} color="#6366f1" />
-            <pointLight position={[-80, -60, -80]} intensity={1.2} color="#22d3ee" />
-            <pointLight position={[0, -120, 60]} intensity={0.8} color="#fbbf24" />
-          </>
-        )}
+        {/* The node and edge materials are unlit — colour is data here, and a
+            light would tint it — so this is atmosphere for the grid and the
+            fallback mesh only. */}
+        <ambientLight intensity={0.6} />
 
-        {/* Background decoration */}
         <Stars
-          radius={500} depth={100}
-          count={theme.style === 'stars' ? 6000 : theme.style === 'neon' ? 500 : 3500}
-          factor={theme.style === 'stars' ? 4 : 2.5}
-          saturation={theme.style === 'neon' ? 0 : 0.15}
-          fade speed={reducedMotion ? 0 : theme.style === 'stars' ? 0.6 : 0.2}
+          radius={520}
+          depth={110}
+          count={theme.style === 'net' ? 700 : 2200}
+          factor={2.4}
+          saturation={0}
+          fade
+          speed={reducedMotion ? 0 : 0.16}
         />
 
-        {/* Neural Net style gets a subtle grid */}
-        {theme.style === 'neon' && (
+        {theme.grid && (
           <Grid
-            position={[0, -50, 0]}
-            args={[200, 200]}
-            cellSize={8}
+            position={[0, -58, 0]}
+            args={[240, 240]}
+            cellSize={10}
             cellThickness={0.3}
-            cellColor="#1a3a1a"
-            sectionSize={32}
+            cellColor="#16233a"
+            sectionSize={40}
             sectionThickness={0.6}
-            sectionColor="#224422"
-            fadeDistance={180}
+            sectionColor="#22344f"
+            fadeDistance={320}
             infiniteGrid
           />
         )}
 
-        {/* Connections */}
-        {renderableConnections.map((c) => (
-          <ConnectionLine
-            key={c.id}
-            sourcePos={c.sourcePos}
-            targetPos={c.targetPos}
-            strength={c.strength}
-            relationship={c.relationship}
-            style={theme.style}
-            reducedMotion={reducedMotion}
-          />
-        ))}
+        <ConnectionLines
+          connections={renderableConnections}
+          positions={positions}
+          selectedId={selectedId}
+        />
+        <NeuronField theme={theme} positions={positions} reducedMotion={reducedMotion} />
+        <NeuronRings positions={positions} reducedMotion={reducedMotion} />
+        <NeuronLabels positions={positions} />
 
-        {/* Neurons */}
-        {neurons.map((neuron) => (
-          <NeuronMesh key={neuron.id} neuron={neuron} theme={theme} reducedMotion={reducedMotion} />
-        ))}
+        <CameraRig theme={theme} />
 
         <OrbitControls
           enableDamping
@@ -184,7 +217,7 @@ export default function NeuralCanvas() {
           rotateSpeed={0.45}
           zoomSpeed={0.7}
           minDistance={10}
-          maxDistance={700}
+          maxDistance={1200}
           makeDefault
           autoRotate={theme.autoRotateSpeed > 0 && !reducedMotion}
           autoRotateSpeed={theme.autoRotateSpeed}
@@ -197,7 +230,7 @@ export default function NeuralCanvas() {
             luminanceSmoothing={theme.bloom.smoothing}
             mipmapBlur
           />
-          <Vignette offset={0.35} darkness={0.65} blendFunction={BlendFunction.NORMAL} />
+          <Vignette offset={0.35} darkness={0.6} blendFunction={BlendFunction.NORMAL} />
         </EffectComposer>
       </Suspense>
     </Canvas>

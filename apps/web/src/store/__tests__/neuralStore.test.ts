@@ -10,6 +10,10 @@ function makeNeuron(overrides: Partial<NeuronNode> = {}): NeuronNode {
     activation: 0,
     importance: 0.5,
     source: null,
+    accessCount: 0,
+    createdAtMs: Date.parse('2026-01-01T00:00:00.000Z'),
+    lastAccessedAtMs: null,
+    projected: true,
     ...overrides,
   };
 }

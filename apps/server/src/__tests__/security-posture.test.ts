@@ -147,9 +147,22 @@ describe('security response headers', () => {
     const csp = String((await app.inject({ method: 'GET', url: '/' })).headers['content-security-policy']);
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain('unsafe-eval');
+    expect(csp).not.toContain("'unsafe-inline'; script-src");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
+  });
+
+  it('allows the blob: worker bootstrap the 3D text labels need', async () => {
+    // troika-three-text calls importScripts() on a blob URL it builds at
+    // runtime, and importScripts is governed by script-src rather than
+    // worker-src. Without blob: here every label in the graph silently vanishes
+    // under this server while still rendering under the Vite dev server, which
+    // sends no CSP at all — which is exactly what was happening.
+    const csp = String((await app.inject({ method: 'GET', url: '/' })).headers['content-security-policy']);
+    const scriptSrc = csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('script-src'));
+    expect(scriptSrc).toBe("script-src 'self' blob:");
+    expect(csp).toContain('worker-src');
   });
 
   it('permits every external origin the built dashboard actually loads', async () => {
