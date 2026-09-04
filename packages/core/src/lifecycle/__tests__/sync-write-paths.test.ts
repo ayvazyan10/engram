@@ -30,9 +30,19 @@ import { getDeviceId, _resetMemoizedDeviceIdForTests } from '../../sync/deviceId
 import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const MIGRATIONS_DIR = path.join(__dirname, '../../db/migrations');
+
+/**
+ * The migration is resolved from the directory, not by filename: drizzle
+ * renames the generated file every time it is regenerated, and a hard-coded
+ * name turns that rename into an ENOENT in every suite at once.
+ */
 const MIGRATION_SQL = fs.readFileSync(
-  path.join(__dirname, '../../db/migrations/0000_cynical_marauders.sql'),
-  'utf-8'
+  path.join(
+    MIGRATIONS_DIR,
+    fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()[0]!,
+  ),
+  'utf-8',
 );
 
 /** Millisecond ISO-8601 UTC, e.g. "2026-08-25T14:23:01.123Z". */

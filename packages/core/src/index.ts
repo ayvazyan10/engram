@@ -94,7 +94,7 @@ export { getDb, closeDb, schema, getDatabaseDialect, getDatabaseConnection } fro
 export type { DatabaseDialect, AdapterConfig, DatabaseConnection } from './db/index.js';
 
 // Sync (multi-device) — Phase 0 foundation
-export { getDeviceId } from './sync/deviceId.js';
+export { getDeviceId, resetDeviceId } from './sync/deviceId.js';
 
 // Sync — Postgres replication target (Phase 1)
 export {

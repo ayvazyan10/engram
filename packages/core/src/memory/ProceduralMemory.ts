@@ -2,12 +2,26 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
-import { embed, packFP16, unpackFP16 } from '../embedding/Embedder.js';
+import { embed, getEmbeddingModelId, packFP16, unpackFP16 } from '../embedding/Embedder.js';
 import { getDeviceId } from '../sync/deviceId.js';
+import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
-/** Cosine similarity between two equal-length embedding vectors. */
-function cosineSimilarity(a: Float32Array | number[], b: Float32Array | number[]): number {
-  const len = Math.min(a.length, b.length);
+/**
+ * Cosine similarity between two embedding vectors of the SAME length.
+ *
+ * Equal length is a precondition, not a detail to paper over. Iterating
+ * Math.min(a.length, b.length) scored a 384-dim rule left behind by a previous
+ * embedding model against the first 384 components of a 768-dim query — noise,
+ * and noise confident enough to clear a similarity threshold, with no throw and
+ * no skip. VectorSearch.upsert refuses the same mismatch for the same reason.
+ */
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) {
+    throw new Error(
+      `Vector dimension mismatch: cannot compare a ${a.length}-dim vector with a ${b.length}-dim one`
+    );
+  }
+  const len = a.length;
   let dot = 0;
   let normA = 0;
   let normB = 0;
@@ -44,10 +58,14 @@ export class ProceduralMemory {
   /**
    * @param namespace Scopes writes and reads. NeuralBrain passes its own
    *   namespace so `brain.procedural` cannot leak across tenants.
+   * @param indexSink Receives every committed row so it reaches the brain's
+   *   vector index and graph. Without it a memory written here is stored but
+   *   unsearchable — see MemoryIndexSink.
    */
   constructor(
     private readonly namespace?: string,
     namespaceMode?: 'none' | 'filter' | 'isolated',
+    private readonly indexSink?: MemoryIndexSink,
   ) {
     this.namespaceMode = namespaceMode ?? (namespace ? 'filter' : 'none');
     if (this.namespaceMode === 'isolated' && !namespace) throw new Error('namespace is required in isolated mode');
@@ -80,6 +98,7 @@ export class ProceduralMemory {
       actionPattern: input.actionPattern,
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
+      embeddingModel: getEmbeddingModelId(),
       importance: 0.6,
       confidence: input.confidence ?? 1.0,
       namespace: this.storeNamespace(input.namespace),
@@ -91,6 +110,15 @@ export class ProceduralMemory {
     };
 
     await db.insert(schema.memories).values(record);
+
+    // Index and graph only after the durable write succeeded, so in-memory
+    // state can never run ahead of the database.
+    await this.indexSink?.onMemoryWritten({
+      id: record.id!,
+      type: 'procedural',
+      namespace: record.namespace ?? null,
+      vector: embedding,
+    });
 
     const [inserted] = await db
       .select()
@@ -130,14 +158,19 @@ export class ProceduralMemory {
 
     const queryVec = await embed(query);
 
-    const ranked = candidates
-      .map((memory) => {
-        if (!memory.embedding) return { memory, similarity: 0 };
-        const vec = unpackFP16(Buffer.from(memory.embedding as ArrayBuffer));
-        return { memory, similarity: cosineSimilarity(queryVec, vec) };
-      })
-      .filter((r) => r.similarity >= minSimilarity)
-      .sort((a, b) => b.similarity - a.similarity);
+    const ranked: Array<{ memory: Memory; similarity: number }> = [];
+    for (const memory of candidates) {
+      if (!memory.embedding) continue;
+      const vec = unpackFP16(Buffer.from(memory.embedding as ArrayBuffer));
+      // A rule embedded by another model cannot be compared to this query.
+      // Skipped rather than fatal, exactly as the vector index treats the same
+      // row: it stays stored and readable, and re_embed brings it back into
+      // matching. Returning it on a prefix score would be worse than missing it.
+      if (vec.length !== queryVec.length) continue;
+      const similarity = cosineSimilarity(queryVec, vec);
+      if (similarity >= minSimilarity) ranked.push({ memory, similarity });
+    }
+    ranked.sort((a, b) => b.similarity - a.similarity);
 
     return ranked.slice(0, limit).map((r) => r.memory);
   }

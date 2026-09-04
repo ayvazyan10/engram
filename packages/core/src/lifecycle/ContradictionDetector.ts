@@ -10,11 +10,18 @@
  * then pattern-based content analysis to detect actual contradictions. No LLM needed.
  */
 
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, inArray, isNull } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
-import type { Memory, MemoryType } from '../db/schema.js';
-import { embed, unpackFP16 } from '../embedding/Embedder.js';
+import type { Memory } from '../db/schema.js';
 import type { VectorSearch } from '../retrieval/VectorSearch.js';
+import {
+  assertBoolean,
+  assertNoUnknownKeys,
+  assertNumberInRange,
+  assertOneOf,
+  assertPlainObject,
+} from './configValidation.js';
+import type { NumericRange } from './configValidation.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -24,6 +31,15 @@ export type ResolutionStrategy =
   | 'keep_important' // Keep whichever has higher importance
   | 'keep_both'      // Keep both but link them with 'contradicts' edge
   | 'manual';        // Flag for human review, take no action
+
+/** Every strategy, as runtime values a caller's input can be checked against. */
+export const RESOLUTION_STRATEGIES: readonly ResolutionStrategy[] = [
+  'keep_newest',
+  'keep_oldest',
+  'keep_important',
+  'keep_both',
+  'manual',
+];
 
 export interface Contradiction {
   /** The new memory that triggered the contradiction */
@@ -84,6 +100,71 @@ export const DEFAULT_CONTRADICTION_CONFIG: ContradictionConfig = {
   autoResolve: false,
 };
 
+// ─── Validation ──────────────────────────────────────────────────────────────
+
+/** Names this config in every validation message. */
+const LABEL = 'contradiction config';
+
+/**
+ * Bounds every merged config has to satisfy.
+ *
+ * `maxCandidates` is the sharp one: it becomes the topK of the vector search
+ * this detector runs on the store() hot path, so a fractional or non-positive
+ * value silently changes how many candidates every write is checked against.
+ */
+const CONTRADICTION_RANGES = {
+  similarityThreshold: { min: 0, max: 1 },
+  confidenceThreshold: { min: 0, max: 1 },
+  maxCandidates: { min: 1, max: 10_000, integer: true },
+} as const satisfies Record<string, NumericRange>;
+
+const CONTRADICTION_KEYS: readonly string[] = [
+  ...Object.keys(CONTRADICTION_RANGES),
+  'enabled',
+  'defaultStrategy',
+  'autoResolve',
+];
+
+/**
+ * Merge a partial config over a base and validate the result.
+ *
+ * Fields are copied one by one rather than spread, so an unknown key or an
+ * explicit `undefined` cannot reach the detector. Throws on anything it could
+ * not work with, leaving the caller with the config it already had — the bare
+ * spread this replaces took whatever it was handed, and in-process callers
+ * (MCP tools, library consumers) never pass through the REST schema that now
+ * guards the HTTP surface.
+ */
+export function mergeContradictionConfig(
+  partial: Partial<ContradictionConfig>,
+  base: ContradictionConfig = DEFAULT_CONTRADICTION_CONFIG,
+): ContradictionConfig {
+  assertNoUnknownKeys(LABEL, assertPlainObject(LABEL, partial), CONTRADICTION_KEYS);
+
+  const merged: ContradictionConfig = {
+    enabled: partial.enabled ?? base.enabled,
+    similarityThreshold: partial.similarityThreshold ?? base.similarityThreshold,
+    confidenceThreshold: partial.confidenceThreshold ?? base.confidenceThreshold,
+    maxCandidates: partial.maxCandidates ?? base.maxCandidates,
+    defaultStrategy: partial.defaultStrategy ?? base.defaultStrategy,
+    autoResolve: partial.autoResolve ?? base.autoResolve,
+  };
+
+  assertBoolean(LABEL, 'enabled', merged.enabled);
+  assertBoolean(LABEL, 'autoResolve', merged.autoResolve);
+  assertOneOf(LABEL, 'defaultStrategy', merged.defaultStrategy, RESOLUTION_STRATEGIES);
+  for (const [field, range] of Object.entries(CONTRADICTION_RANGES)) {
+    assertNumberInRange(
+      LABEL,
+      field,
+      merged[field as keyof typeof CONTRADICTION_RANGES],
+      range as NumericRange,
+    );
+  }
+
+  return merged;
+}
+
 // ─── Negation & Contradiction Patterns ───────────────────────────────────────
 
 /** Words/phrases that negate or reverse meaning. */
@@ -119,7 +200,10 @@ export class ContradictionDetector {
   private config: ContradictionConfig;
 
   constructor(config: Partial<ContradictionConfig> = {}) {
-    this.config = { ...DEFAULT_CONTRADICTION_CONFIG, ...config };
+    // Validated here too, not only in updateConfig: a config rejected at
+    // construction is a caller error reported at the call, rather than a
+    // detector that looks fine until the first store().
+    this.config = mergeContradictionConfig(config);
   }
 
   /** Get the current config. */
@@ -129,7 +213,9 @@ export class ContradictionDetector {
 
   /** Update config at runtime. */
   updateConfig(partial: Partial<ContradictionConfig>): void {
-    this.config = { ...this.config, ...partial };
+    // Merged and validated before assignment, so a rejected update leaves the
+    // previous config exactly as it was.
+    this.config = mergeContradictionConfig(partial, this.config);
   }
 
   /**
@@ -299,9 +385,19 @@ export class ContradictionDetector {
 
   /**
    * Detect explicit value/state change patterns.
+   *
+   * Each text is tested on its own, deliberately. An earlier draft concatenated
+   * them (`a + ' ' + b`) so a CHANGE_PATTERN could span the boundary — a match
+   * on "was ... now" made of one word from each memory. That intent is
+   * abandoned, for two reasons: a pattern straddling two independent texts
+   * matches an artefact of the join order rather than anything either memory
+   * says, and the one real cross-text case it would catch (older text says
+   * "was", newer says "now") is already the temporal_override signal's job, so
+   * wiring it up here would double-count the same evidence into confidence.
+   * The question this signal answers is "does either memory announce a change?"
+   * — and the pair is already known to be on the same topic by similarity.
    */
   private detectValueChange(a: string, b: string): number {
-    const combined = a + ' ' + b;
     let score = 0;
 
     for (const pattern of CHANGE_PATTERNS) {
@@ -358,9 +454,20 @@ export class ContradictionDetector {
     // Weighted average of signal weights
     const signalScore = signals.reduce((sum, s) => sum + s.weight, 0) / signals.length;
 
-    // Higher similarity means they're about the same topic — amplifies contradiction
-    // Similarity above threshold is already guaranteed, so normalize to 0–1 range above threshold
-    const topicRelevance = Math.min(1.0, (similarity - this.config.similarityThreshold) / (1 - this.config.similarityThreshold));
+    // Higher similarity means they're about the same topic — amplifies contradiction.
+    // Similarity above threshold is already guaranteed, so normalize to 0–1 range
+    // above threshold.
+    //
+    // The zero-headroom case is guarded rather than divided through: a
+    // similarityThreshold of exactly 1 is inside the documented [0, 1] range and
+    // the REST schema accepts it, but it makes this a 0/0 — NaN confidence, so
+    // `confidence >= confidenceThreshold` is false for everything and detection
+    // is silently off. At that threshold every surviving candidate is by
+    // definition maximally relevant, so 1 is the right answer.
+    const headroom = 1 - this.config.similarityThreshold;
+    const topicRelevance = headroom > 0
+      ? Math.min(1.0, (similarity - this.config.similarityThreshold) / headroom)
+      : 1;
 
     // Final confidence = signal strength × topic relevance, with signal count bonus
     const countBonus = Math.min(0.2, signals.length * 0.05);

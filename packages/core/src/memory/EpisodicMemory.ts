@@ -1,9 +1,11 @@
-import { and, desc, eq, gt, isNull, like } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
-import { embed, packFP16 } from '../embedding/Embedder.js';
+import { embed, getEmbeddingModelId, packFP16 } from '../embedding/Embedder.js';
+import { assertValidImportance } from '../retrieval/ImportanceScorer.js';
 import { getDeviceId } from '../sync/deviceId.js';
+import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
 export interface StoreEpisodicInput {
   content: string;
@@ -27,10 +29,14 @@ export class EpisodicMemory {
    * @param namespace Scopes writes and reads. NeuralBrain passes its own
    *   namespace so `brain.episodic` cannot leak across tenants — these getters
    *   previously spanned every namespace.
+   * @param indexSink Receives every committed row so it reaches the brain's
+   *   vector index and graph. Without it a memory written here is stored but
+   *   unsearchable — see MemoryIndexSink.
    */
   constructor(
     private readonly namespace?: string,
     namespaceMode?: 'none' | 'filter' | 'isolated',
+    private readonly indexSink?: MemoryIndexSink,
   ) {
     this.namespaceMode = namespaceMode ?? (namespace ? 'filter' : 'none');
     if (this.namespaceMode === 'isolated' && !namespace) throw new Error('namespace is required in isolated mode');
@@ -47,6 +53,10 @@ export class EpisodicMemory {
   }
 
   async store(input: StoreEpisodicInput): Promise<Memory> {
+    // Bounds-checked before anything is embedded or written — see
+    // assertValidImportance for what an unchecked value does downstream.
+    if (input.importance !== undefined) assertValidImportance(input.importance);
+
     const db = getDb();
     const now = new Date().toISOString();
 
@@ -59,6 +69,7 @@ export class EpisodicMemory {
       content: input.content,
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
+      embeddingModel: getEmbeddingModelId(),
       importance: input.importance ?? 0.5,
       source: input.source ?? null,
       sessionId: input.sessionId ?? null,
@@ -72,6 +83,15 @@ export class EpisodicMemory {
     };
 
     await db.insert(schema.memories).values(record);
+
+    // Index and graph only after the durable write succeeded, so in-memory
+    // state can never run ahead of the database.
+    await this.indexSink?.onMemoryWritten({
+      id: record.id!,
+      type: 'episodic',
+      namespace: record.namespace ?? null,
+      vector: embedding,
+    });
 
     const [inserted] = await db
       .select()

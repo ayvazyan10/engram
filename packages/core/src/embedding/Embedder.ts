@@ -44,7 +44,7 @@ export async function getEmbedder(): Promise<typeof embedder> {
 
   const loadingFor = activeModelId;
 
-  embedderLoading = (async () => {
+  const load = (async () => {
     if (!pipeline) {
       const transformers = await import('@xenova/transformers');
       pipeline = transformers.pipeline;
@@ -54,16 +54,30 @@ export async function getEmbedder(): Promise<typeof embedder> {
       quantized: true, // use quantized ONNX model (~25MB vs ~90MB)
     });
 
-    // The active model may have been switched while we were loading — discard
-    // this result rather than binding a stale model.
-    if (loadingFor === activeModelId) embedder = loaded;
+    // The active model was switched while this load was running. The result was
+    // already correctly kept out of the cache — but it was still handed back to
+    // every caller waiting on it, and store() then tagged the resulting vector
+    // with the NEW model id, so the row claimed a model that never produced it.
+    // Load the model that is actually active instead.
+    //
+    // Safe to recurse: switchEmbeddingModel is the only thing that can move
+    // activeModelId, and it clears embedderLoading, so this call starts a fresh
+    // load rather than awaiting itself.
+    if (loadingFor !== activeModelId) return getEmbedder();
+
+    embedder = loaded;
     return loaded;
   })();
 
+  embedderLoading = load;
+
   try {
-    return await embedderLoading;
+    return await load;
   } finally {
-    embedderLoading = null;
+    // Only if it is still ours: switchEmbeddingModel, or the retry above, may
+    // have put a newer load in this slot, and clearing that one would let the
+    // next caller start a duplicate load of the same model.
+    if (embedderLoading === load) embedderLoading = null;
   }
 }
 
@@ -174,8 +188,12 @@ function float32ToFloat16(val: number): number {
     return (sign << 15) | 0x7c00 | (frac ? 0x200 : 0);
   }
   if (exp === 0) {
-    // Subnormal or zero
-    return (sign << 15) | ((frac >> 13) & 0x3ff);
+    // An FP32 subnormal (or zero): |value| < 2^-126, which is many orders of
+    // magnitude below the smallest FP16 subnormal (2^-24), so the only faithful
+    // FP16 result is signed zero. Emitting `frac >> 13` as an FP16 subnormal
+    // mantissa reinterpreted a value of frac x 2^-149 as (frac >> 13) x 2^-24
+    // instead — turning 1e-40 into 4.77e-7, a number seventeen decades too big.
+    return sign << 15;
   }
 
   const newExp = exp - 127 + 15;

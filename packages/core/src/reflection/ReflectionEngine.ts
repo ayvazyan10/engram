@@ -1,8 +1,24 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Memory } from '../db/schema.js';
+import {
+  assertBoolean,
+  assertNonEmptyArrayOf,
+  assertNoUnknownKeys,
+  assertNumberInRange,
+  assertPlainObject,
+} from '../lifecycle/configValidation.js';
+import type { NumericRange } from '../lifecycle/configValidation.js';
 import { getReflectionPrompt } from './prompts.js';
 
 export type ReflectionType = 'pattern' | 'knowledge_gap' | 'trend' | 'contradiction_summary';
+
+/** Every reflection type, as runtime values a caller's input can be checked against. */
+export const REFLECTION_TYPES: readonly ReflectionType[] = [
+  'pattern',
+  'knowledge_gap',
+  'trend',
+  'contradiction_summary',
+];
 
 export interface ReflectionConfig {
   enabled: boolean;
@@ -17,10 +33,80 @@ export const DEFAULT_REFLECTION_CONFIG: ReflectionConfig = {
   enabled: true,
   storeCountThreshold: 10,
   triggerOnDecay: true,
-  types: ['pattern', 'knowledge_gap', 'trend', 'contradiction_summary'],
+  types: [...REFLECTION_TYPES],
   maxMemoriesToAnalyze: 50,
   minImportance: 0.3,
 };
+
+// ─── Validation ──────────────────────────────────────────────────────────────
+
+/** Names this config in every validation message. */
+const LABEL = 'reflection config';
+
+/**
+ * Bounds every merged config has to satisfy.
+ *
+ * As with the decay policy, these are not tuning advice — an out-of-range value
+ * does not fail where it is set:
+ *
+ *   - `maxMemoriesToAnalyze` becomes the LIMIT of the query
+ *     NeuralBrain.getReflectionTasks() runs, and SQLite answers a fractional
+ *     LIMIT with SQLITE_MISMATCH: every later reflection request fails, from a
+ *     value the caller set successfully long before.
+ *   - `storeCountThreshold` of 0 or less makes notifyStore() report reflection
+ *     due on every single store, forever.
+ */
+const REFLECTION_RANGES = {
+  storeCountThreshold: { min: 1, max: 1_000_000, integer: true },
+  maxMemoriesToAnalyze: { min: 1, max: 10_000, integer: true },
+  minImportance: { min: 0, max: 1 },
+} as const satisfies Record<string, NumericRange>;
+
+const REFLECTION_KEYS: readonly string[] = [
+  ...Object.keys(REFLECTION_RANGES),
+  'enabled',
+  'triggerOnDecay',
+  'types',
+];
+
+/**
+ * Merge a partial config over a base and validate the result.
+ *
+ * Fields are copied one by one rather than spread, so an unknown key or an
+ * explicit `undefined` cannot reach the engine — and `types` is copied rather
+ * than aliased, so neither the caller's array nor the module-level default can
+ * be mutated through the engine afterwards.
+ *
+ * Throws on anything the engine could not work with, leaving the caller with
+ * the config it already had. Without this, `types` in particular was accepted
+ * as any value at all and then threw from `this.config.types.map(...)` inside
+ * buildTasks — far from the call that caused it, and taking the MCP
+ * `request_reflection` tool down with it.
+ */
+export function mergeReflectionConfig(
+  partial: Partial<ReflectionConfig>,
+  base: ReflectionConfig = DEFAULT_REFLECTION_CONFIG,
+): ReflectionConfig {
+  assertNoUnknownKeys(LABEL, assertPlainObject(LABEL, partial), REFLECTION_KEYS);
+
+  const merged: ReflectionConfig = {
+    enabled: partial.enabled ?? base.enabled,
+    storeCountThreshold: partial.storeCountThreshold ?? base.storeCountThreshold,
+    triggerOnDecay: partial.triggerOnDecay ?? base.triggerOnDecay,
+    types: [...(partial.types ?? base.types)],
+    maxMemoriesToAnalyze: partial.maxMemoriesToAnalyze ?? base.maxMemoriesToAnalyze,
+    minImportance: partial.minImportance ?? base.minImportance,
+  };
+
+  assertBoolean(LABEL, 'enabled', merged.enabled);
+  assertBoolean(LABEL, 'triggerOnDecay', merged.triggerOnDecay);
+  assertNonEmptyArrayOf(LABEL, 'types', partial.types ?? base.types, REFLECTION_TYPES);
+  for (const [field, range] of Object.entries(REFLECTION_RANGES)) {
+    assertNumberInRange(LABEL, field, merged[field as keyof typeof REFLECTION_RANGES], range as NumericRange);
+  }
+
+  return merged;
+}
 
 export interface ReflectionStats {
   total: number;
@@ -68,7 +154,10 @@ export class ReflectionEngine {
   private config: ReflectionConfig;
 
   constructor(config?: Partial<ReflectionConfig>) {
-    this.config = { ...DEFAULT_REFLECTION_CONFIG, ...config };
+    // Validated here too, not only in updateConfig: a config rejected at
+    // construction is a caller error reported at the call, rather than an
+    // engine that looks fine until the first reflection request.
+    this.config = mergeReflectionConfig(config ?? {});
   }
 
   /** Count a store event. Returns true (and marks reflection due) at the threshold. */
@@ -185,7 +274,12 @@ export class ReflectionEngine {
   }
 
   updateConfig(partial: Partial<ReflectionConfig>): void {
-    this.config = { ...this.config, ...partial };
+    // Merged and validated before assignment, so a rejected update leaves the
+    // previous config exactly as it was. The bare spread this replaces took
+    // whatever it was handed — a bare JSON string became config keys "0", "1",
+    // "2" — and in-process callers (MCP tools, library consumers) never pass
+    // through the REST schema that now guards the HTTP surface.
+    this.config = mergeReflectionConfig(partial, this.config);
   }
 
   private computeConfidence(insight: string, memoryCount: number): number {

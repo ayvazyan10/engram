@@ -55,6 +55,19 @@ describe('FP16 codec', () => {
     expect(Math.abs(out[1]!)).toBe(0);
   });
 
+  it('flushes FP32-subnormal inputs to signed zero instead of inventing a value', () => {
+    // An FP32 subnormal is |v| < 2^-126 — orders of magnitude below the
+    // smallest FP16 subnormal (2^-24). The exp === 0 branch emitted
+    // `frac >> 13` as an FP16 subnormal mantissa, reinterpreting frac × 2^-149
+    // as (frac >> 13) × 2^-24, so 1e-40 came back as 4.77e-7.
+    const out = roundTrip([1e-40, 1e-38, 5e-39, -1e-40]);
+
+    expect(out[0]).toBe(0);
+    expect(out[1]).toBe(0);
+    expect(out[2]).toBe(0);
+    expect(Object.is(out[3], -0)).toBe(true);
+  });
+
   it('handles a realistic normalized embedding without zeroing components', () => {
     // L2-normalized vectors routinely contain very small components.
     const raw = Array.from({ length: 64 }, (_, i) => (i % 2 === 0 ? 1e-5 : 0.2));

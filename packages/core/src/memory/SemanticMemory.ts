@@ -2,9 +2,11 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory, NewMemoryConnection, RelationshipType } from '../db/schema.js';
-import { embed, packFP16 } from '../embedding/Embedder.js';
+import { embed, getEmbeddingModelId, packFP16 } from '../embedding/Embedder.js';
+import { assertValidImportance } from '../retrieval/ImportanceScorer.js';
 import { getDeviceId } from '../sync/deviceId.js';
 import { upsertConnections } from '../graph/connectionStore.js';
+import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
 export interface StoreSemanticInput {
   concept: string;
@@ -30,10 +32,14 @@ export class SemanticMemory {
    * @param namespace Scopes writes and reads. NeuralBrain passes its own
    *   namespace so `brain.semantic` cannot leak across tenants — these getters
    *   previously spanned every namespace.
+   * @param indexSink Receives every committed row so it reaches the brain's
+   *   vector index and graph. Without it a memory written here is stored but
+   *   unsearchable — see MemoryIndexSink.
    */
   constructor(
     private readonly namespace?: string,
     namespaceMode?: 'none' | 'filter' | 'isolated',
+    private readonly indexSink?: MemoryIndexSink,
   ) {
     this.namespaceMode = namespaceMode ?? (namespace ? 'filter' : 'none');
     if (this.namespaceMode === 'isolated' && !namespace) throw new Error('namespace is required in isolated mode');
@@ -50,6 +56,10 @@ export class SemanticMemory {
   }
 
   async store(input: StoreSemanticInput): Promise<Memory> {
+    // Bounds-checked before anything is embedded or written — see
+    // assertValidImportance for what an unchecked value does downstream.
+    if (input.importance !== undefined) assertValidImportance(input.importance);
+
     const db = getDb();
     const now = new Date().toISOString();
     const deviceId = getDeviceId();
@@ -65,6 +75,7 @@ export class SemanticMemory {
       concept: input.concept,
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
+      embeddingModel: getEmbeddingModelId(),
       importance: input.importance ?? 0.7, // semantic memories are generally more important
       confidence: input.confidence ?? 1.0,
       namespace: this.storeNamespace(input.namespace),
@@ -114,6 +125,24 @@ export class SemanticMemory {
       }
     });
 
+    // Index and graph only after the durable write succeeded, so in-memory
+    // state can never run ahead of the database. The edges travel with it:
+    // relatesTo links belong in the graph as much as in memory_connections.
+    await this.indexSink?.onMemoryWritten({
+      id: record.id!,
+      type: 'semantic',
+      namespace: record.namespace ?? null,
+      concept: record.concept ?? null,
+      vector: embedding,
+      edges: connections.map((connection) => ({
+        sourceId: connection.sourceId,
+        targetId: connection.targetId,
+        relationship: connection.relationship as RelationshipType,
+        strength: connection.strength ?? 1.0,
+        bidirectional: Boolean(connection.bidirectional),
+      })),
+    });
+
     const [inserted] = await db
       .select()
       .from(schema.memories)
@@ -141,6 +170,8 @@ export class SemanticMemory {
   }
 
   async update(id: string, updates: { content?: string; confidence?: number; importance?: number }): Promise<void> {
+    if (updates.importance !== undefined) assertValidImportance(updates.importance);
+
     const db = getDb();
     const now = new Date().toISOString();
 
@@ -148,6 +179,11 @@ export class SemanticMemory {
       updatedAt: now,
       deviceId: getDeviceId(),
     };
+
+    // Held for the sink below: re-embedding writes a new vector to the row, and
+    // an index still holding the old one outranks every fresher memory for the
+    // old content — a staleness that shutdown() then persists.
+    let reindex: { vector: Float32Array; namespace: string | null; concept: string | null } | null = null;
 
     if (updates.content !== undefined) {
       updateData.content = updates.content;
@@ -173,6 +209,12 @@ export class SemanticMemory {
       const embedding = await embed(embeddable);
       updateData.embedding = packFP16(embedding);
       updateData.embeddingDim = embedding.length;
+      updateData.embeddingModel = getEmbeddingModelId();
+      reindex = {
+        vector: embedding,
+        namespace: existing.namespace ?? null,
+        concept: existing.concept ?? null,
+      };
     }
     if (updates.confidence !== undefined) updateData.confidence = updates.confidence;
     if (updates.importance !== undefined) updateData.importance = updates.importance;
@@ -184,5 +226,15 @@ export class SemanticMemory {
     }
 
     await db.update(schema.memories).set(updateData).where(eq(schema.memories.id, id));
+
+    if (reindex) {
+      await this.indexSink?.onMemoryWritten({
+        id,
+        type: 'semantic',
+        namespace: reindex.namespace,
+        concept: reindex.concept,
+        vector: reindex.vector,
+      });
+    }
   }
 }

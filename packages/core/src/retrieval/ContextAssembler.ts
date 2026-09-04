@@ -149,6 +149,11 @@ export class ContextAssembler {
         if (record.archivedAt) continue;
         // Apply source filter
         if (sources && record.source && !sources.includes(record.source)) continue;
+        // Apply type filter. The vector search already honours `types`, but
+        // graph expansion reaches memories it never scored, so without this the
+        // documented "Filter by memory type" leaked neighbours of every other
+        // type into the result — and rendered whole sections for them.
+        if (types && !types.includes(record.type as MemoryType)) continue;
         // Apply namespace filter
         if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
         records.push(record);
@@ -310,6 +315,7 @@ export class ContextAssembler {
 
       if (!record || record.archivedAt) continue;
       if (sources && record.source && !sources.includes(record.source)) continue;
+      if (types && !types.includes(record.type as MemoryType)) continue;
       if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
 
       const score = scoreMemory({
@@ -361,6 +367,9 @@ export class ContextAssembler {
 
       if (!record || record.archivedAt) continue;
       if (sources && record.source && !sources.includes(record.source)) continue;
+      // See recall(): expansion reaches memories the vector search never
+      // filtered, so the type filter has to be re-applied here.
+      if (types && !types.includes(record.type as MemoryType)) continue;
       if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
 
       // Graph-expanded memories get a lower base similarity

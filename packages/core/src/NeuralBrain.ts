@@ -13,13 +13,14 @@
 
 import fs from 'fs';
 import { createHash } from 'crypto';
-import { and, desc, eq, inArray, isNull, like, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, like, lt, or } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { closeDb, getDataVersion, getDb, schema, walCheckpoint } from './db/index.js';
+import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
-  EMBEDDING_DIMENSION, embed, embedBatch, packFP16, unpackFP16,
-  getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel,
+  embed, embedBatch, packFP16, unpackFP16,
+  getEmbeddingModelId, getModelDimension, getEmbeddingDimension,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
 import { upsertConnection, upsertConnections } from './graph/connectionStore.js';
@@ -27,25 +28,30 @@ import { getDeviceId } from './sync/deviceId.js';
 import { EpisodicMemory } from './memory/EpisodicMemory.js';
 import { ProceduralMemory } from './memory/ProceduralMemory.js';
 import { SemanticMemory } from './memory/SemanticMemory.js';
+import type { MemoryIndexSink, MemoryIndexWrite } from './memory/MemoryIndexSink.js';
 import { DecayEngine } from './lifecycle/DecayEngine.js';
 import type { DecaySweepResult } from './lifecycle/DecayEngine.js';
 import type { DecayPolicyConfig } from './lifecycle/DecayPolicy.js';
 import { mergePolicy } from './lifecycle/DecayPolicy.js';
 import { ContradictionDetector } from './lifecycle/ContradictionDetector.js';
+import { decideResolution, planAutoResolution, writeResolution } from './lifecycle/contradictionResolution.js';
 import type {
   ContradictionCheckResult,
   ContradictionConfig,
   Contradiction,
   ResolutionStrategy,
 } from './lifecycle/ContradictionDetector.js';
-import { DEFAULT_CONTRADICTION_CONFIG } from './lifecycle/ContradictionDetector.js';
 import { WebhookManager } from './webhooks/WebhookManager.js';
-import type { WebhookEvent, WebhookSubscription, WebhookDeliveryResult } from './webhooks/WebhookManager.js';
 import { PluginRegistry } from './plugins/PluginRegistry.js';
 import type { EngramPlugin, PluginInfo } from './plugins/PluginRegistry.js';
+import { assertValidImportance, clampImportance } from './retrieval/ImportanceScorer.js';
 import { ContextAssembler } from './retrieval/ContextAssembler.js';
 import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
+import type { VectorEntry } from './retrieval/VectorSearch.js';
+import { indexEntryIsCurrent, storedDimension, storedVector, upsertIfCompatible } from './retrieval/indexEntry.js';
+import { baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
+import type { ChangeCounters, StoreBaseline } from './retrieval/indexBaseline.js';
 import { ReflectionEngine } from './reflection/ReflectionEngine.js';
 import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflection/ReflectionEngine.js';
 
@@ -55,7 +61,7 @@ import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflect
  */
 function extractConcept(content: string): string | null {
   // Strip "User:" / "Assistant:" prefixes
-  let text = content.replace(/^(User|Assistant):\s*/gi, '').trim();
+  const text = content.replace(/^(User|Assistant):\s*/gi, '').trim();
   // If very short or just punctuation/emoji, skip
   if (text.length < 5 || !/[a-zA-Zа-яА-ЯёЁ]{3,}/.test(text)) return null;
   // Take first sentence or up to 60 chars
@@ -138,6 +144,13 @@ export interface EmbeddingStatus {
   staleCount: number;
   /** Memories with no model ID recorded (legacy) */
   legacyCount: number;
+  /**
+   * Memories whose stored vector has a different dimension than the active
+   * model produces. These are readable but can never be searched — the index
+   * cannot hold a vector it cannot compare — so `re_embed` is the only way to
+   * bring them back into retrieval.
+   */
+  dimensionMismatchCount: number;
   /** Whether a re-embedding is needed */
   needsReEmbed: boolean;
 }
@@ -183,11 +196,44 @@ export interface IndexStatus {
   /** Entries dropped by those reconciles since init */
   externalRemoved: number;
   /**
+   * Entries those reconciles re-indexed because the stored vector had changed
+   * under an id the index already held — a pulled update, or a re-embed by
+   * another process.
+   */
+  externalRefreshed: number;
+  /**
    * Memories those reconciles could not index because their vector came from a
    * different embedding model. Non-zero means `re_embed` is due — the memories
    * exist and are readable, but no search will surface them.
    */
   externalSkipped: number;
+  /**
+   * Vectors the index could not hold because they came from a model of another
+   * dimension: what the last full pass (initialize or rebuildIndex) counted,
+   * plus anything refused by a write since. Like `externalSkipped` this is a
+   * `re_embed` signal — these memories are stored but unsearchable. The
+   * authoritative total is `embeddingStatus().dimensionMismatchCount`, which
+   * counts the database rather than one pass over it.
+   */
+  dimensionMismatched: number;
+}
+
+/** What the vector index was last reconciled against. */
+interface IndexClaim {
+  /**
+   * Counters as of the moment the fingerprint below was taken, or null when the
+   * two could not be shown to belong to the same instant — a commit in that
+   * window may be in the fingerprint without having reached the index, so the
+   * fast path must not trust them.
+   */
+  counters: ChangeCounters | null;
+  /** Fingerprint of the live rows at that moment. */
+  baseline: StoreBaseline;
+  /**
+   * The connection the counters came from. `total_changes()` restarts at zero
+   * on a reopen, so counters from a previous connection say nothing.
+   */
+  connection: unknown;
 }
 
 export interface TagInfo {
@@ -256,14 +302,17 @@ export class NeuralBrain {
     externalSyncCount: 0,
     externalAdded: 0,
     externalRemoved: 0,
+    externalRefreshed: 0,
     externalSkipped: 0,
+    dimensionMismatched: 0,
   };
 
   /**
-   * Database data-version observed at the last reconcile. See
-   * syncIndexFromStore — this is how a write by another process is noticed.
+   * The database state the in-memory index is known to match. See
+   * syncIndexFromStore for how each part is used, and retrieval/indexBaseline
+   * for why one marker alone is not enough.
    */
-  private lastDataVersion: number | null = null;
+  private indexClaim: IndexClaim | null = null;
 
   /**
    * In-flight reconcile, shared by concurrent readers so a burst of requests
@@ -300,9 +349,17 @@ export class NeuralBrain {
     // Pass the namespace down: these classes are public (brain.episodic etc.)
     // and previously wrote to the shared null-namespace pool while their getters
     // read across every tenant.
-    this.episodic = new EpisodicMemory(this.activeNamespace, this.namespaceMode);
-    this.semantic = new SemanticMemory(this.activeNamespace, this.namespaceMode);
-    this.procedural = new ProceduralMemory(this.activeNamespace, this.namespaceMode);
+    //
+    // The sink is the second half of that: they also wrote to SQLite alone, so a
+    // memory stored through them was counted by stats() but could never be
+    // searched or walked in the graph. Everything they commit now lands in the
+    // same in-memory state store() maintains.
+    const indexSink: MemoryIndexSink = {
+      onMemoryWritten: (write) => this.applyMemoryWrite(write),
+    };
+    this.episodic = new EpisodicMemory(this.activeNamespace, this.namespaceMode, indexSink);
+    this.semantic = new SemanticMemory(this.activeNamespace, this.namespaceMode, indexSink);
+    this.procedural = new ProceduralMemory(this.activeNamespace, this.namespaceMode, indexSink);
   }
 
   private resolveStoreNamespace(requested?: string): string | null {
@@ -329,6 +386,100 @@ export class NeuralBrain {
   }
 
   /**
+   * The rows this brain's index is expected to mirror.
+   *
+   * Shared by initialize, the reconcile, the rebuild and the staleness
+   * fingerprint — a fingerprint taken over a different predicate than the
+   * reconcile uses would hide changes inside the reconcile's own scope.
+   */
+  private liveConditions(): SQL[] {
+    const conditions: SQL[] = [isNull(schema.memories.archivedAt)];
+    // Isolated instances keep only their own tenant in memory. Filter mode keeps
+    // the full index because its explicit crossNamespace option needs it.
+    if (this.namespaceMode === 'isolated') {
+      conditions.push(eq(schema.memories.namespace, this.activeNamespace!));
+    }
+    return conditions;
+  }
+
+  /**
+   * Add a vector to the index, counting rather than throwing when it came from
+   * a model of another dimension.
+   *
+   * upsert() rejects a length mismatch on purpose — cosine similarity over
+   * mixed dimensions scores garbage — but a write path that lets that reach the
+   * caller turns one incompatible row into a failed store or an
+   * un-initialisable database. Returns false when the vector was refused.
+   */
+  private indexVector(entry: VectorEntry): boolean {
+    if (upsertIfCompatible(this.vectorSearch, entry)) return true;
+    this.indexStatus.dimensionMismatched++;
+    return false;
+  }
+
+  /**
+   * Take a row committed by brain.episodic / .semantic / .procedural into the
+   * index and graph. See memory/MemoryIndexSink.
+   */
+  private async applyMemoryWrite(write: MemoryIndexWrite): Promise<void> {
+    this.indexVector({
+      id: write.id,
+      vector: write.vector,
+      type: write.type,
+      namespace: write.namespace,
+    });
+    this.graph.addNode({ id: write.id, type: write.type, concept: write.concept ?? undefined });
+    for (const edge of write.edges ?? []) {
+      this.graph.addEdge({
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        relationship: edge.relationship,
+        strength: edge.strength,
+        bidirectional: edge.bidirectional,
+      });
+    }
+    // This write moved the store fingerprint, and the index is already in step
+    // with it — claim it so the next read does not pay for a reconcile that
+    // would find nothing to do.
+    await this.refreshIndexBaseline();
+  }
+
+  /**
+   * Record that the index now matches the database, so syncIndexFromStore
+   * early-outs until something actually changes. Called by every path that
+   * writes and updates the index in the same breath — without it the next read
+   * pays for a reconcile that would find nothing to do.
+   */
+  private async refreshIndexBaseline(): Promise<void> {
+    const db = getDb();
+    const before = readChangeCounters(db);
+    const baseline = await readStoreBaseline(db, this.liveConditions());
+    this.claimIndexState(before, baseline);
+  }
+
+  /**
+   * Claim `baseline` as the state the index matches, pairing it with the
+   * counters only if nothing committed while the two were being read.
+   *
+   * That check is the important part. A commit landing between the counter read
+   * and the fingerprint read would be inside the fingerprint but not inside the
+   * index — claiming that pair would let the fast path vouch for a memory that
+   * never got indexed. Dropping the claim instead costs one reconcile.
+   *
+   * A counter that cannot be read at all is a different matter: nothing has
+   * necessarily changed, so the fingerprint is still claimed and only the O(1)
+   * path is given up (countersMatch refuses an unknown counter).
+   */
+  private claimIndexState(before: ChangeCounters, baseline: StoreBaseline): void {
+    const after = readChangeCounters(getDb());
+    if (!sameCounters(before, after)) {
+      this.indexClaim = null;
+      return;
+    }
+    this.indexClaim = { counters: after, baseline, connection: getDatabaseConnection() };
+  }
+
+  /**
    * Initialize the brain: connect to DB, load vector index and graph.
    * Must be called before any other method.
    *
@@ -341,6 +492,15 @@ export class NeuralBrain {
 
     const db = getDb(this.config.dbPath);
     const indexPath = this.resolveIndexPath();
+
+    // Every node and edge below is replayed from the database, so start from an
+    // empty graph. Nothing used to clear it, and shutdown() only closes the DB:
+    // a shutdown()/initialize() cycle in one process therefore replayed the
+    // whole graph on top of the one already in memory. Traversal results
+    // survived that (expand() keeps a visited set), but stats().graphEdges and
+    // the cost of every traversal grew with each cycle, and nodes archived
+    // while the brain was down stayed behind forever.
+    this.graph.clear();
 
     // Try loading persisted vector index from disk
     let cachedIds: Set<string> | null = null;
@@ -364,32 +524,39 @@ export class NeuralBrain {
       }
     }
 
-    // Isolated instances keep only their own tenant in memory. Filter mode keeps
-    // the full index because its explicit crossNamespace option needs it.
-    const initConditions = [isNull(schema.memories.archivedAt)];
-    if (this.namespaceMode === 'isolated') {
-      initConditions.push(eq(schema.memories.namespace, this.activeNamespace!));
-    }
     const allMemories = await db
       .select()
       .from(schema.memories)
-      .where(and(...initConditions));
+      .where(and(...this.liveConditions()));
+
+    // Keyed once: a per-id lookup over the entry array would make loading an
+    // index of n entries cost O(n^2), which is the whole reason the cache exists.
+    const cachedEntries = cachedIds ? this.vectorSearch.entriesById() : null;
 
     let incrementalCount = 0;
+    let dimensionMismatched = 0;
 
     for (const memory of allMemories) {
-      // Vector index: skip if already loaded from disk cache
       if (memory.embedding) {
-        const alreadyCached = cachedIds?.has(memory.id) ?? false;
-        if (!alreadyCached) {
-          const vec = unpackFP16(Buffer.from(memory.embedding as ArrayBuffer));
-          this.vectorSearch.upsert({
+        // The cache is checked against the row, not merely for the id. Trusting
+        // it blindly is how a vector the database had already replaced — a
+        // semantic.update(), a re-embed by another process — survived every
+        // restart: the id was present, so the stale vector was kept and then
+        // written back out at shutdown.
+        const current = indexEntryIsCurrent(cachedEntries?.get(memory.id), {
+          embedding: memory.embedding,
+          type: memory.type,
+          namespace: memory.namespace ?? null,
+        });
+        if (!current) {
+          const indexed = this.indexVector({
             id: memory.id,
-            vector: vec,
+            vector: storedVector(memory.embedding),
             type: memory.type as MemoryType,
             namespace: memory.namespace ?? undefined,
           });
-          incrementalCount++;
+          if (indexed) incrementalCount++;
+          else dimensionMismatched++;
         }
       }
 
@@ -439,11 +606,16 @@ export class NeuralBrain {
     }
     this.indexStatus.entryCount = this.vectorSearch.size;
     this.indexStatus.incrementalCount = incrementalCount;
+    // A full pass just counted every incompatible row, so this replaces rather
+    // than adds to whatever a previous pass or write recorded.
+    this.indexStatus.dimensionMismatched = dimensionMismatched;
     this.indexStatus.initDurationMs = Date.now() - initStart;
 
-    // Baseline for cross-process reconciles: the index now matches what the
+    // Starting point for later reconciles: the index now matches what the
     // database held at this moment, so only commits after it need catching up.
-    this.lastDataVersion = getDataVersion();
+    // The claim covers both connections — the pragma sees the others, and
+    // total_changes() sees this one, which is the one a sync pull writes through.
+    await this.refreshIndexBaseline();
 
     this.initialized = true;
 
@@ -456,8 +628,8 @@ export class NeuralBrain {
   }
 
   /**
-   * Reconcile the in-memory vector index with memories committed by OTHER
-   * processes, and report how many entries changed.
+   * Reconcile the in-memory vector index with memories committed since the last
+   * pass, and report how many entries changed.
    *
    * Engram routinely runs several processes — REST server, MCP server, CLI —
    * against one SQLite file, each holding its own index built at startup. A
@@ -466,57 +638,103 @@ export class NeuralBrain {
    * it (that reads the database) while `search()` could not see it (that reads
    * the index).
    *
-   * Detection is `PRAGMA data_version`, which changes only for commits by other
-   * connections — so this brain's own writes, already indexed by store(), cost
-   * nothing here. When it has not moved, the check is a pragma read and no
-   * query runs at all.
+   * Detection used to be `PRAGMA data_version` alone. That pragma moves only
+   * for commits by OTHER connections, which was exactly wrong for the case that
+   * matters most: `SyncEngine` applies every pulled row through `getDb()` — this
+   * brain's own connection — so the pragma stayed put, the post-pull
+   * `onIndexRebuildNeeded -> syncIndexFromStore()` hook reconciled nothing, and
+   * pulled memories stayed unsearchable until restart.
+   *
+   * So the check is now two counters — that pragma for other connections, plus
+   * SQLite's `total_changes()` for this one — and neither moving is proof there
+   * is nothing to do. That keeps the early-out as cheap as it was: two O(1)
+   * reads, no table touched. When one HAS moved, a fingerprint of the live rows
+   * (row count + newest `updated_at`) decides whether a memory actually changed,
+   * because `total_changes()` also fires for session rows, webhook rows and
+   * recall access stats, and reconciling on each of those would cost far more
+   * than the bug being fixed. See retrieval/indexBaseline.
    *
    * Idempotent and safe to call on any read path.
    */
   async syncIndexFromStore(): Promise<number> {
     if (!this.initialized) return 0;
 
-    // Join an in-flight pass before looking at the version. Checked the other
-    // way round, a second reader would see the version the running reconcile
-    // has already claimed, conclude there was nothing to do, and search a
-    // half-reconciled index.
+    // Join an in-flight pass before looking at anything. Checked the other way
+    // round, a second reader would see the markers the running reconcile has
+    // already claimed, conclude there was nothing to do, and search a
+    // half-reconciled index. Everything up to assigning pendingSync stays
+    // synchronous for that reason — an await in here would let two callers both
+    // start a pass.
     if (this.pendingSync) return this.pendingSync;
 
-    const version = getDataVersion();
-    // null means the backend cannot report it (PostgreSQL). Reconciling on
-    // every read would cost a full id scan per query, so we stay with the
-    // startup index — the same behaviour as before this method existed.
-    if (version === null || version === this.lastDataVersion) return 0;
+    const counters = readChangeCounters(getDb());
+    if (this.claimHolds(counters)) return 0;
 
-    this.pendingSync = this.reconcileIndex(version).finally(() => {
+    const pass = this.reconcileIfStale(counters).finally(() => {
       this.pendingSync = null;
     });
-    return this.pendingSync;
+    this.pendingSync = pass;
+    return pass;
+  }
+
+  /**
+   * Whether nothing has committed on either side since the claim — the O(1)
+   * early-out. Counters from a different connection are never trusted: see
+   * IndexClaim.connection.
+   */
+  private claimHolds(current: ChangeCounters): boolean {
+    const claim = this.indexClaim;
+    if (!claim || claim.connection !== getDatabaseConnection()) return false;
+    return countersMatch(claim.counters, current);
+  }
+
+  /** The staleness check — see syncIndexFromStore for what each marker covers. */
+  private async reconcileIfStale(counters: ChangeCounters): Promise<number> {
+    // Read before the reconcile's own query, so a commit landing mid-pass is
+    // left unclaimed and retried by the next read rather than marked handled.
+    const baseline = await readStoreBaseline(getDb(), this.liveConditions());
+
+    // Any commit by another connection is reconciled outright, as it always
+    // was: the fingerprint is a summary and a summary can repeat itself
+    // (a delete and an insert carrying an older timestamp, say), which is a
+    // risk worth taking for this connection's own chatter and not for
+    // somebody else's data arriving. A null version means the backend cannot
+    // report one — "unknown", so the fingerprint decides alone.
+    const claimed = this.indexClaim;
+    const externalCommit = counters.dataVersion !== null && counters.dataVersion !== claimed?.counters?.dataVersion;
+    if (!externalCommit && baselineMatches(claimed?.baseline ?? null, baseline)) {
+      // Only other tables moved, or rows the index already agrees with. Re-claim
+      // so the next read is back on the O(1) path.
+      this.claimIndexState(counters, baseline);
+      return 0;
+    }
+
+    return this.reconcileIndex(counters, baseline);
   }
 
   /** The reconcile itself — see syncIndexFromStore for why and when. */
-  private async reconcileIndex(version: number): Promise<number> {
+  private async reconcileIndex(counters: ChangeCounters, baseline: StoreBaseline): Promise<number> {
     const db = getDb();
 
-    // Claim the version before reading. A commit that lands mid-reconcile then
-    // leaves a version we have not recorded, so the next read tries again —
-    // whereas claiming it afterwards would mark that commit as already handled.
-    this.lastDataVersion = version;
+    // Claim before reading. Both markers were read before the queries below, so
+    // anything that lands mid-reconcile is either picked up by those queries or
+    // left unclaimed and retried by the next read — whereas claiming afterwards
+    // would mark a commit this pass never saw as already handled.
+    const previous = this.indexClaim?.baseline ?? null;
+    this.indexClaim = { counters, baseline, connection: getDatabaseConnection() };
 
-    const liveConditions = [isNull(schema.memories.archivedAt)];
-    if (this.namespaceMode === 'isolated') {
-      liveConditions.push(eq(schema.memories.namespace, this.activeNamespace!));
-    }
     const liveRows = await db
       .select({ id: schema.memories.id })
       .from(schema.memories)
-      .where(and(...liveConditions));
+      .where(and(...this.liveConditions()));
 
     const live = new Set(liveRows.map((r) => r.id));
-    const indexed = this.vectorSearch.getIds();
+    // Keyed rather than a bare id set: the refresh pass below has to compare the
+    // indexed vector against the stored one, and this costs the same to build.
+    const indexed = this.vectorSearch.entriesById();
 
     let removed = 0;
-    for (const id of indexed) {
+    for (const id of indexed.keys()) {
       if (!live.has(id)) {
         this.vectorSearch.remove(id);
         this.graph.removeNode(id);
@@ -539,21 +757,18 @@ export class NeuralBrain {
 
       for (const memory of rows) {
         if (memory.embedding) {
-          try {
-            this.vectorSearch.upsert({
-              id: memory.id,
-              vector: unpackFP16(Buffer.from(memory.embedding as ArrayBuffer)),
-              type: memory.type as MemoryType,
-              namespace: memory.namespace ?? undefined,
-            });
-            added++;
-          } catch {
-            // A vector from another embedding model: upsert rejects the
-            // dimension. Skipping keeps one incompatible row from throwing out
-            // of every search — the count below is what makes that visible
-            // rather than silent, and re_embed is the way to clear it.
-            skipped++;
-          }
+          // A vector from another embedding model has a length this index
+          // cannot hold. Skipping keeps one incompatible row from throwing out
+          // of every search — the count below is what makes that visible rather
+          // than silent, and re_embed is the way to clear it.
+          const ok = upsertIfCompatible(this.vectorSearch, {
+            id: memory.id,
+            vector: storedVector(memory.embedding),
+            type: memory.type as MemoryType,
+            namespace: memory.namespace ?? undefined,
+          });
+          if (ok) added++;
+          else skipped++;
         }
         this.graph.addNode({
           id: memory.id,
@@ -563,13 +778,17 @@ export class NeuralBrain {
       }
     }
 
+    const refreshed = await this.refreshChangedVectors(previous, baseline, indexed);
+
     // Edges touching the newly arrived nodes, so graph expansion during recall
     // sees them rather than treating them as isolated. Only edges with a new
-    // endpoint are fetched: addEdge appends without deduplicating, so replaying
-    // edges between two already-known nodes would double them. Edges created
-    // externally between two nodes this process already had are therefore
-    // missed until restart — a narrower gap than the one being closed here, and
-    // one that costs a full adjacency rebuild to close.
+    // endpoint are fetched, to keep the reconcile proportional to what changed
+    // rather than to the whole connection table. addEdge is idempotent, so an
+    // edge whose two endpoints fall in different id chunks is simply replaced
+    // the second time round rather than double-added. Edges created externally
+    // between two nodes this process already had are still missed until restart
+    // — a narrower gap than the one being closed here, and one that costs a
+    // full adjacency rebuild to close.
     if (missing.length > 0) {
       for (let i = 0; i < missing.length; i += CHUNK) {
         const slice = missing.slice(i, i + CHUNK);
@@ -598,15 +817,65 @@ export class NeuralBrain {
       }
     }
 
-    const changed = added + removed;
+    const changed = added + removed + refreshed;
     if (changed > 0 || skipped > 0) {
       this.indexStatus.externalSyncCount++;
       this.indexStatus.externalAdded += added;
       this.indexStatus.externalRemoved += removed;
+      this.indexStatus.externalRefreshed += refreshed;
       this.indexStatus.externalSkipped += skipped;
     }
 
     return changed;
+  }
+
+  /**
+   * Re-index rows whose vector changed under an id the index already holds.
+   *
+   * A sync pull applies updates as well as inserts — the same row id coming
+   * back with different content — and so does a re-embed run by another
+   * process. An add/remove-only reconcile sees no membership change for those
+   * and leaves the superseded vector in place, which then outranks fresher
+   * memories for the old content.
+   *
+   * Bounded by what actually moved: only rows newer than the fingerprint the
+   * last pass claimed are read, over an indexed column. A first pass (no claimed
+   * fingerprint) skips this — initialize() has just checked every row.
+   */
+  private async refreshChangedVectors(
+    previous: StoreBaseline | null,
+    baseline: StoreBaseline,
+    indexed: Map<string, VectorEntry>,
+  ): Promise<number> {
+    const since = previous?.maxUpdatedAt ?? null;
+    if (since === null || baseline.maxUpdatedAt === null || baseline.maxUpdatedAt <= since) return 0;
+
+    const rows = await getDb()
+      .select()
+      .from(schema.memories)
+      .where(and(...this.liveConditions(), gt(schema.memories.updatedAt, since)));
+
+    let refreshed = 0;
+    for (const memory of rows) {
+      const entry = indexed.get(memory.id);
+      // Ids the index did not have are the add path's job, and were handled above.
+      if (!entry || !memory.embedding) continue;
+      const current = indexEntryIsCurrent(entry, {
+        embedding: memory.embedding,
+        type: memory.type,
+        namespace: memory.namespace ?? null,
+      });
+      if (current) continue;
+      if (upsertIfCompatible(this.vectorSearch, {
+        id: memory.id,
+        vector: storedVector(memory.embedding),
+        type: memory.type as MemoryType,
+        namespace: memory.namespace ?? undefined,
+      })) {
+        refreshed++;
+      }
+    }
+    return refreshed;
   }
 
   private defaultImportance(type: string, source: string | null): number {
@@ -621,6 +890,13 @@ export class NeuralBrain {
    */
   async store(input: StoreInput): Promise<StoreResult> {
     this.assertInitialized();
+    // Checked before anything is embedded or written. `input.importance ??
+    // default` let any number through — NaN is not nullish, so it reached
+    // SQLite, which stores NaN as NULL and then rejects the row on a NOT NULL
+    // constraint. Out-of-range values were accepted outright: importance 100
+    // outranks every other memory in recall and can never fall below the
+    // archive threshold, so the memory becomes permanent and always first.
+    if (input.importance !== undefined) assertValidImportance(input.importance);
 
     const db = getDb();
     const type = input.type ?? 'episodic';
@@ -716,7 +992,13 @@ export class NeuralBrain {
     // In-memory state is updated only after the durable write succeeded —
     // previously the index and graph were advanced before the edges were
     // written, so a failure left them ahead of the database.
-    this.vectorSearch.upsert({ id: record.id!, vector: embedding, type, namespace: record.namespace });
+    //
+    // Guarded, because this runs AFTER the commit: a switchEmbeddingModel() at
+    // runtime leaves the index sized for the previous model, and an unguarded
+    // upsert threw here with the row already durable — a store() that reported
+    // failure while leaving the memory behind. The row is kept and counted
+    // instead; it is readable but unsearchable until re_embed resizes the index.
+    this.indexVector({ id: record.id!, vector: embedding, type, namespace: record.namespace });
     this.graph.addNode({ id: record.id!, type, concept: record.concept ?? undefined });
     for (const edge of edges) {
       this.graph.addEdge({
@@ -777,7 +1059,7 @@ export class NeuralBrain {
 
         // Auto-resolve if enabled
         if (this.contradictionDetector.getConfig().autoResolve) {
-          await this.autoResolveContradictions(contradictionResult.contradictions, record.id!);
+          await this.autoResolveContradictions(contradictionResult.contradictions);
         }
       }
     } catch {
@@ -796,6 +1078,7 @@ export class NeuralBrain {
     // report success, fire a 'stored' webhook alongside 'forgotten', and hand
     // back an id that can never be recalled.
     if (inserted!.archivedAt) {
+      await this.refreshIndexBaseline();
       return { memory: inserted!, contradictions: contradictionResult, discarded: true };
     }
 
@@ -830,6 +1113,11 @@ export class NeuralBrain {
     if (inserted!.source !== 'reflection') {
       this.reflectionEngine.notifyStore();
     }
+
+    // This write (and anything auto-resolution archived along with it) moved the
+    // store fingerprint, and the index already reflects it — claim it so the
+    // next read early-outs instead of paying for a reconcile with nothing to do.
+    await this.refreshIndexBaseline();
 
     return { memory: inserted!, contradictions: contradictionResult };
   }
@@ -989,6 +1277,9 @@ export class NeuralBrain {
 
     this.vectorSearch.remove(id);
     this.graph.removeNode(id);
+    // The archive moved the store fingerprint and the index is already in step,
+    // so claim it rather than making the next read reconcile for nothing.
+    await this.refreshIndexBaseline();
 
     this.webhookManager.fire('forgotten', { id });
     void this.pluginRegistry.runHook('onForget', { memoryId: id });
@@ -1140,12 +1431,15 @@ export class NeuralBrain {
       const concepts = cluster.map((m) => m.concept).filter(Boolean);
       const concept = concepts[0] ?? extractConcept(contents.join('\n')) ?? 'Consolidated memory';
 
+      // Clamped, not asserted: this is derived from stored rows, and a database
+      // written before importance was validated can hold values outside [0, 1].
+      // A derivation must not be the thing that makes consolidation throw.
       const avgImportance = cluster.reduce((s, m) => s + (m.importance ?? 0.5), 0) / cluster.length;
-      const importance = Math.min(1, avgImportance + 0.1);
+      const importance = clampImportance(avgImportance + 0.1);
 
       const summary = this.summarizeCluster(contents);
 
-      const { memory: semantic } = await this.store({
+      const { memory: semantic, discarded } = await this.store({
         content: summary,
         type: 'semantic',
         concept,
@@ -1154,6 +1448,16 @@ export class NeuralBrain {
         tags: ['consolidated'],
         metadata: { episodeCount: cluster.length, episodeIds: cluster.map((m) => m.id) },
       });
+
+      // The summary can be archived the instant it is written: the dedup
+      // summary repeats each episode's wording, negations included, so with
+      // contradiction auto-resolution on it contradicts its own sources at
+      // near-identical similarity and keep_oldest discards it. Archiving the
+      // cluster behind a summary that is already gone destroyed the cluster and
+      // replaced it with nothing — three episodes and a summary, none of them
+      // live — while store()'s return value was still reported as created.
+      // Leave the cluster intact and report no summary for it.
+      if (discarded) continue;
 
       // Archive the whole cluster in ONE transaction. Calling forget() per
       // episode meant a failure mid-loop left the cluster half-archived: a
@@ -1178,6 +1482,9 @@ export class NeuralBrain {
     }
 
     if (results.length > 0) {
+      // The archives above land after the last store() claimed the fingerprint,
+      // so re-claim it here for the same reason forget() does.
+      await this.refreshIndexBaseline();
       this.webhookManager.fire('consolidated', {
         count: results.length,
         ids: results.map((m) => m.id),
@@ -1228,9 +1535,21 @@ export class NeuralBrain {
     this.assertInitialized();
     const db = getDb();
 
+    const { maxMemoriesToAnalyze, minImportance } = this.reflectionEngine.getConfig();
+
     const conditions = [isNull(schema.memories.archivedAt)];
     if (this.activeNamespace) {
       conditions.push(eq(schema.memories.namespace, this.activeNamespace));
+    }
+    // Filtered in SQL so LIMIT applies AFTER the filter — the same ordering
+    // getReflections() was fixed for. Taking the newest N rows and letting the
+    // engine drop the ones below minImportance afterwards returned zero tasks
+    // whenever a burst of low-importance writes filled the window, while
+    // qualifying memories sat just outside it. Only applied when there is a
+    // floor to apply: `importance >= 0` in SQL would also drop NULL rows, which
+    // the engine's own filter treats as 0 and therefore admits.
+    if (minImportance > 0) {
+      conditions.push(gte(schema.memories.importance, minImportance));
     }
 
     const memories = await db
@@ -1240,7 +1559,7 @@ export class NeuralBrain {
       // Newest first — a bare orderBy is ASC, which fed the reflection prompt
       // the OLDEST memories while claiming they were "the most recent".
       .orderBy(desc(schema.memories.updatedAt))
-      .limit(this.reflectionEngine.getConfig().maxMemoriesToAnalyze);
+      .limit(maxMemoriesToAnalyze);
 
     const tasks = this.reflectionEngine.buildTasks(memories);
     if (tasks.length > 0) this.reflectionEngine.clearPending();
@@ -1272,7 +1591,10 @@ export class NeuralBrain {
       type: 'semantic',
       source: 'reflection',
       tags: ['reflection', `reflection:${result.type}`],
-      importance: Math.min(0.9, 0.6 + result.confidence * 0.3),
+      // Clamped for the same reason as consolidate(): confidence is supplied by
+      // the connected AI, and a derived importance must not throw the caller's
+      // own validation error back at them.
+      importance: clampImportance(Math.min(0.9, 0.6 + result.confidence * 0.3)),
       metadata: {
         reflectionType: result.type,
         confidence: result.confidence,
@@ -1553,10 +1875,13 @@ export class NeuralBrain {
       .from(schema.memories)
       .where(and(...embeddingConditions));
 
+    const currentDimension = getModelDimension();
+
     let totalEmbedded = 0;
     let currentModelCount = 0;
     let staleCount = 0;
     let legacyCount = 0;
+    let dimensionMismatchCount = 0;
 
     for (const m of all) {
       if (!m.embedding) continue;
@@ -1568,16 +1893,22 @@ export class NeuralBrain {
       } else {
         staleCount++;
       }
+      // Measured from the stored blob rather than the model id: this is the
+      // reason a row is skipped by initialize, rebuildIndex and the reconcile,
+      // and it is what tells an operator why a memory that plainly exists never
+      // comes back from a search.
+      if (storedDimension(m.embedding) !== currentDimension) dimensionMismatchCount++;
     }
 
     return {
       currentModel,
-      currentDimension: getModelDimension(),
+      currentDimension,
       totalEmbedded,
       currentModelCount,
       staleCount,
       legacyCount,
-      needsReEmbed: staleCount > 0 || legacyCount > 0,
+      dimensionMismatchCount,
+      needsReEmbed: staleCount > 0 || legacyCount > 0 || dimensionMismatchCount > 0,
     };
   }
 
@@ -1687,6 +2018,11 @@ export class NeuralBrain {
       onProgress?.(progress);
     }
 
+    // Every row's updated_at moved and the index already holds the new vectors,
+    // so claim the fingerprint — otherwise the next read re-reads every row this
+    // pass touched only to find the index correct.
+    if (progress.processed > 0) await this.refreshIndexBaseline();
+
     // Persist the refreshed vectors now. Until shutdown writes them, the cached
     // index on disk still holds the pre-re-embed vectors, and deserialize() only
     // validates dimension — so a restart (or another process saving its own
@@ -1720,7 +2056,7 @@ export class NeuralBrain {
     const now = new Date().toISOString();
     const deviceId = getDeviceId();
 
-    const result = await db
+    await db
       .update(schema.memories)
       // updatedAt/deviceId must move with the change — this write silently
       // mutated embeddingModel with no updatedAt bump, so a backfill would
@@ -1876,121 +2212,66 @@ export class NeuralBrain {
       return { resolved: false };
     }
 
-    let archivedId: string | undefined;
-    let keptId: string | undefined;
+    // An archived memory is not a party to a resolution. Without this check the
+    // rows were loaded regardless of `archivedAt`, so a pair whose loser was
+    // already gone — archived by an earlier iteration of the same auto-resolve
+    // pass, or by any forget() — could still archive the LIVE side "in favour
+    // of" a memory that no longer exists, leaving the fact with no carrier.
+    if (source.archivedAt || target.archivedAt) return { resolved: false };
 
-    switch (strategy) {
-      case 'keep_newest': {
-        const sourceTime = new Date(source.createdAt).getTime();
-        const targetTime = new Date(target.createdAt).getTime();
-        const [newer, older] = sourceTime >= targetTime ? [source, target] : [target, source];
-        archivedId = older.id;
-        keptId = newer.id;
-        break;
-      }
+    const outcome = decideResolution(source, target, strategy);
+    // 'manual' decides nothing on purpose — flag for human review.
+    if (!outcome) return { resolved: false };
+    const { archivedId, keptId } = outcome;
 
-      case 'keep_oldest': {
-        const sourceTime = new Date(source.createdAt).getTime();
-        const targetTime = new Date(target.createdAt).getTime();
-        const [newer, older] = sourceTime >= targetTime ? [source, target] : [target, source];
-        archivedId = newer.id;
-        keptId = older.id;
-        break;
-      }
+    // One transaction for the archive, its edge pruning and the contradicts
+    // tombstone — including for keep_both, which used to skip the tombstone and
+    // so reported `resolved: true` while getContradictions() handed the same
+    // pair back forever. See lifecycle/contradictionResolution.
+    writeResolution(sourceId, targetId, archivedId);
 
-      case 'keep_important': {
-        const sImp = source.importance ?? 0.5;
-        const tImp = target.importance ?? 0.5;
-        if (sImp >= tImp) {
-          archivedId = target.id;
-          keptId = source.id;
-        } else {
-          archivedId = source.id;
-          keptId = target.id;
-        }
-        break;
-      }
-
-      case 'keep_both':
-        // Just keep both — the contradicts edge remains as documentation
-        keptId = sourceId;
-        break;
-
-      case 'manual':
-        // No action — flag for human review
-        return { resolved: false };
-    }
-
-    // Everything the resolution writes — archiving the loser, pruning its edges,
-    // and dropping the contradicts edge in both directions — happens in ONE
-    // transaction. Previously forget() archived the loser and then two separate
-    // deletes removed the edge, so a failure in between left a resolved
-    // contradiction that still reported itself as unresolved.
-    if (strategy !== 'keep_both') {
-      const resolvedAt = new Date().toISOString();
-      const deviceId = getDeviceId();
-
-      db.transaction((tx) => {
-        if (archivedId) {
-          tx.update(schema.memories)
-            // updatedAt must move with archivedAt — see archiveAtomic for why
-            // (this is the same class of bug: a soft-delete invisible to a
-            // sync cursor never propagates).
-            .set({ archivedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
-            .where(eq(schema.memories.id, archivedId))
-            .run();
-
-          tx.update(schema.memoryConnections)
-            .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
-            .where(
-              and(
-                or(
-                  eq(schema.memoryConnections.sourceId, archivedId),
-                  eq(schema.memoryConnections.targetId, archivedId)
-                ),
-                isNull(schema.memoryConnections.deletedAt)
-              )
-            )
-            .run();
-        }
-
-        // Tombstone the contradicts edge in both directions. Archiving above
-        // already tombstones any edge touching the loser, but this also
-        // covers the case where no memory was archived — a resolved
-        // contradiction must not keep reporting itself as unresolved.
-        for (const [a, b] of [[sourceId, targetId], [targetId, sourceId]] as const) {
-          tx.update(schema.memoryConnections)
-            .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
-            .where(
-              and(
-                eq(schema.memoryConnections.sourceId, a),
-                eq(schema.memoryConnections.targetId, b),
-                eq(schema.memoryConnections.relationship, 'contradicts'),
-                isNull(schema.memoryConnections.deletedAt)
-              )
-            )
-            .run();
-        }
-      });
-
-      // In-memory state and events only after the durable write succeeded.
-      if (archivedId) {
-        this.vectorSearch.remove(archivedId);
-        this.graph.removeNode(archivedId);
-        this.webhookManager.fire('forgotten', { id: archivedId });
-        void this.pluginRegistry.runHook('onForget', { memoryId: archivedId });
-      }
+    // In-memory state and events only after the durable write succeeded.
+    if (archivedId) {
+      this.vectorSearch.remove(archivedId);
+      this.graph.removeNode(archivedId);
+      this.webhookManager.fire('forgotten', { id: archivedId });
+      void this.pluginRegistry.runHook('onForget', { memoryId: archivedId });
+    } else {
+      // Nothing was archived, so removeNode did not take the edge with it.
+      // The row is tombstoned and will not be reloaded at startup; drop it from
+      // the live graph too rather than leaving the two out of step.
+      this.graph.removeEdge(sourceId, targetId, 'contradicts');
+      this.graph.removeEdge(targetId, sourceId, 'contradicts');
     }
 
     return { resolved: true, archivedId, keptId };
   }
 
   /**
-   * Auto-resolve contradictions using the suggested strategies.
+   * Auto-resolve a whole batch of contradictions using the suggested strategies.
+   *
+   * The batch is planned before any of it is applied. Resolving pair by pair
+   * let strategies that disagree about the new memory both take effect: one
+   * pair archived an existing memory in favour of the newcomer, the next pair
+   * archived the newcomer, and the existing memory's fact was left with no
+   * replacement at all. See lifecycle/contradictionResolution.
+   *
+   * Every contradiction already carries the id of the memory that triggered it
+   * (`c.newMemoryId`, stamped by the detector), so no separate id is passed in.
    */
-  private async autoResolveContradictions(contradictions: Contradiction[], newMemoryId: string): Promise<void> {
-    for (const c of contradictions) {
-      await this.resolveContradiction(c.newMemoryId, c.existingMemoryId, c.suggestedStrategy);
+  private async autoResolveContradictions(contradictions: Contradiction[]): Promise<void> {
+    if (contradictions.length === 0) return;
+
+    const db = getDb();
+    const ids = [...new Set(contradictions.flatMap((c) => [c.newMemoryId, c.existingMemoryId]))];
+    const rows = await db
+      .select()
+      .from(schema.memories)
+      .where(inArray(schema.memories.id, ids));
+    const byId = new Map(rows.map((row) => [row.id, row] as const));
+
+    for (const planned of planAutoResolution(contradictions, byId)) {
+      await this.resolveContradiction(planned.sourceId, planned.targetId, planned.strategy);
     }
   }
 
@@ -2082,33 +2363,47 @@ export class NeuralBrain {
     const start = Date.now();
     const db = getDb();
 
-    this.vectorSearch.clear();
-
-    const rebuildConditions = [isNull(schema.memories.archivedAt)];
-    if (this.namespaceMode === 'isolated') {
-      rebuildConditions.push(eq(schema.memories.namespace, this.activeNamespace!));
-    }
     const allMemories = await db
       .select()
       .from(schema.memories)
-      .where(and(...rebuildConditions));
+      .where(and(...this.liveConditions()));
+
+    // Built aside and swapped in at the end. clear()-then-repopulate left the
+    // process searching a half-populated index whenever anything in the loop
+    // threw — and one vector from another embedding model was enough to throw.
+    const rebuilt: VectorEntry[] = [];
+    let dimensionMismatched = 0;
 
     for (const memory of allMemories) {
-      if (memory.embedding) {
-        const vec = unpackFP16(Buffer.from(memory.embedding as ArrayBuffer));
-        this.vectorSearch.upsert({
-          id: memory.id,
-          vector: vec,
-          type: memory.type as MemoryType,
-          namespace: memory.namespace ?? undefined,
-        });
+      if (!memory.embedding) continue;
+      const vector = storedVector(memory.embedding);
+      if (vector.length !== this.vectorSearch.dimension) {
+        // Skipped rather than fatal, exactly as the reconcile treats it: the
+        // memory is readable but unsearchable until re_embed rewrites it.
+        dimensionMismatched++;
+        continue;
       }
+      rebuilt.push({
+        id: memory.id,
+        vector,
+        type: memory.type as MemoryType,
+        namespace: memory.namespace ?? undefined,
+      });
     }
+
+    this.vectorSearch.load(rebuilt);
 
     this.indexStatus.loadedFrom = 'database';
     this.indexStatus.entryCount = this.vectorSearch.size;
     this.indexStatus.incrementalCount = 0;
+    // A full pass just counted every incompatible row, so this replaces rather
+    // than adds to whatever a previous pass or write recorded.
+    this.indexStatus.dimensionMismatched = dimensionMismatched;
     this.indexStatus.initDurationMs = Date.now() - start;
+
+    // The index now matches what the database holds, so a reconcile on the next
+    // read would find nothing to do.
+    await this.refreshIndexBaseline();
 
     // Auto-save if path configured
     const indexPath = this.resolveIndexPath();

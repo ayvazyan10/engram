@@ -9,6 +9,8 @@ import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { Memory } from '../db/schema.js';
 import { computeRetentionScore, decayImportance } from '../retrieval/ImportanceScorer.js';
+import { getDeviceId } from '../sync/deviceId.js';
+import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from './DecayPolicy.js';
 import type { DecayPolicyConfig } from './DecayPolicy.js';
 
 // ─── Result Types ────────────────────────────────────────────────────────────
@@ -83,6 +85,18 @@ export class DecayEngine {
   ): Promise<DecaySweepResult> {
     const start = Date.now();
     const now = new Date();
+    // The instant an importance-decay write measures to AND stamps `updated_at`
+    // with. Held behind `now` because `updated_at` doubles as the sync clock:
+    // stamping wall-clock `now` made a bookkeeping write on a locally-stale row
+    // outrank a genuine content edit made on another device moments earlier, so
+    // the edit was overwritten on the server and pulled back as stale content.
+    // Measuring to the same instant it stamps keeps decay exactly linear — each
+    // sweep applies precisely the interval between consecutive stamps. See
+    // DecayPolicy.decayConflictWindowMs. The field is optional on the interface,
+    // so a policy built without mergePolicy() falls back to the same default
+    // here — an omitted window must mean one hour, never zero.
+    const window = this.policy.decayConflictWindowMs ?? DEFAULT_DECAY_CONFLICT_WINDOW_MS;
+    const decayStamp = new Date(now.getTime() - window);
     const db = getDb();
 
     const result: DecaySweepResult = {
@@ -153,8 +167,16 @@ export class DecayEngine {
           // ~45). `updatedAt` is advanced by the decay write below, so each
           // sweep now only applies the time that actually elapsed since the
           // previous one — making decay frequency-independent.
+          //
+          // Measured to `decayStamp` rather than `now`, which also means a row
+          // whose checkpoint already sits inside the conflict window yields
+          // daysSince = 0 and is left entirely alone this pass — the next sweep
+          // picks it up once the window has moved past it.
           const checkpoint = memory.updatedAt ?? memory.lastAccessedAt ?? memory.createdAt;
-          const daysSince = Math.max(0, (now.getTime() - new Date(checkpoint).getTime()) / (24 * 60 * 60 * 1000));
+          const daysSince = Math.max(
+            0,
+            (decayStamp.getTime() - new Date(checkpoint).getTime()) / (24 * 60 * 60 * 1000)
+          );
 
           if (daysSince > 0) {
             const newImportance = decayImportance(
@@ -168,7 +190,15 @@ export class DecayEngine {
               if (!dryRun) {
                 await db
                   .update(schema.memories)
-                  .set({ importance: newImportance, updatedAt: now.toISOString() })
+                  // `device_id` too: the push query only selects rows this
+                  // device owns, so a decayed peer-written row would otherwise
+                  // never propagate its new importance anywhere.
+                  .set({
+                    importance: newImportance,
+                    // Deliberately not `now` — see decayStamp above.
+                    updatedAt: decayStamp.toISOString(),
+                    deviceId: getDeviceId(),
+                  })
                   .where(eq(schema.memories.id, memory.id));
               }
               result.decayedCount++;

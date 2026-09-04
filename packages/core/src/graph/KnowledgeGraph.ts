@@ -50,21 +50,38 @@ export class KnowledgeGraph {
   }
 
   addEdge(edge: GraphEdge): void {
-    if (!this.adjacency.has(edge.sourceId)) {
-      this.adjacency.set(edge.sourceId, []);
-    }
-    this.adjacency.get(edge.sourceId)!.push(edge);
+    this.link(edge.sourceId, edge);
 
     if (edge.bidirectional) {
-      if (!this.adjacency.has(edge.targetId)) {
-        this.adjacency.set(edge.targetId, []);
-      }
-      this.adjacency.get(edge.targetId)!.push({
+      this.link(edge.targetId, {
         ...edge,
         sourceId: edge.targetId,
         targetId: edge.sourceId,
       });
     }
+  }
+
+  /**
+   * Attach one directed edge, replacing any edge that already occupies the same
+   * (source, target, relationship) slot — the same slot the database's UNIQUE
+   * constraint on memory_connections defines.
+   *
+   * Appending blindly made addEdge non-idempotent, and every caller replays
+   * edges: initialize() re-adds every row (so a shutdown()/initialize() cycle
+   * doubled the whole graph), and the reconcile fetches edges per id chunk (so
+   * an edge whose two endpoints landed in different chunks was added twice).
+   * Traversal results survived both — expand() keeps a visited set — but
+   * stats().graphEdges and the cost of every traversal grew without bound.
+   */
+  private link(nodeId: string, edge: GraphEdge): void {
+    const edges = this.adjacency.get(nodeId) ?? [];
+    const existing = edges.findIndex(
+      (e) => e.targetId === edge.targetId && e.relationship === edge.relationship
+    );
+    this.adjacency.set(
+      nodeId,
+      existing >= 0 ? edges.map((e, i) => (i === existing ? edge : e)) : [...edges, edge]
+    );
   }
 
   removeEdge(sourceId: string, targetId: string, relationship: RelationshipType): void {

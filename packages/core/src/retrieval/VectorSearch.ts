@@ -197,6 +197,11 @@ export class VectorSearch {
     namespace?: string | null,
     crossNamespace?: boolean
   ): SearchResult[] {
+    // A non-positive or non-finite topK asks for nothing, so nothing comes
+    // back. `scores.slice(0, topK)` read a negative value as an offset from the
+    // END of the list, so topK = -1 returned every hit except the single worst
+    // one — the exact opposite of a narrower request.
+    if (!(topK >= 1)) return [];
     if (this.entries.length === 0) return [];
 
     let candidates = types
@@ -220,7 +225,7 @@ export class VectorSearch {
 
     // Partial sort: we only need top-K
     scores.sort((a, b) => b.similarity - a.similarity);
-    return scores.slice(0, topK);
+    return scores.slice(0, Math.floor(topK));
   }
 
   /** Clear the entire index. */
@@ -231,6 +236,18 @@ export class VectorSearch {
   /** Get all entry IDs currently in the index. */
   getIds(): Set<string> {
     return new Set(this.entries.map((e) => e.id));
+  }
+
+  /**
+   * The indexed entries keyed by id, for a caller that has to check the index
+   * against another source of truth — NeuralBrain.initialize() comparing a
+   * disk-cached vector against the stored row.
+   *
+   * Built in one pass on purpose: the entries are a flat array, so looking each
+   * id up individually would cost O(n) per lookup and O(n^2) over a full pass.
+   */
+  entriesById(): Map<string, VectorEntry> {
+    return new Map(this.entries.map((e) => [e.id, e]));
   }
 
   /**

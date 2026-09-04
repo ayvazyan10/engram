@@ -33,6 +33,46 @@ const DEFAULT_WEIGHTS: ScoringWeights = {
   accessFreq: 0.10,
 };
 
+/** The inclusive range a stored importance value must fall in. */
+export const IMPORTANCE_MIN = 0;
+export const IMPORTANCE_MAX = 1;
+
+/**
+ * Validate a caller-supplied importance, throwing with the offending value.
+ *
+ * The store paths used `input.importance ?? default`, and NaN is not nullish —
+ * so NaN reached SQLite, which stores it as NULL and then rejects the row on a
+ * NOT NULL constraint, surfacing as a constraint error rather than anything
+ * about the number. Out-of-range values were taken at face value: importance
+ * 100 outscores every other memory in recall and multiplies into a retention
+ * score that can never fall below the archive threshold, making the memory
+ * permanent and always first.
+ */
+export function assertValidImportance(value: number, field = 'importance'): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${field} must be a finite number between ${IMPORTANCE_MIN} and ${IMPORTANCE_MAX}`);
+  }
+  if (value < IMPORTANCE_MIN || value > IMPORTANCE_MAX) {
+    throw new Error(
+      `${field} must be between ${IMPORTANCE_MIN} and ${IMPORTANCE_MAX}, got ${value}`
+    );
+  }
+  return value;
+}
+
+/**
+ * Bring a stored importance into range for scoring.
+ *
+ * Validation at the write boundary stops new bad values; this covers the ones
+ * a database written before that validation may already hold, so one legacy row
+ * cannot dominate every ranking it appears in. A missing or NaN value falls back
+ * to the schema default rather than to zero.
+ */
+export function clampImportance(value: number | null | undefined): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 0.5;
+  return Math.min(IMPORTANCE_MAX, Math.max(IMPORTANCE_MIN, value));
+}
+
 /**
  * Compute a composite retrieval score for a memory.
  */
@@ -47,7 +87,7 @@ export function scoreMemory(
   return (
     weights.similarity * input.similarity +
     weights.recency * recency +
-    weights.importance * input.importance +
+    weights.importance * clampImportance(input.importance) +
     weights.accessFreq * accessFreq
   );
 }
@@ -143,5 +183,5 @@ export function computeRetentionScore(
   // scales logarithmically, saturates around count ≈ 999
   const accessFactor = Math.min(1.0, 0.3 + 0.7 * Math.log10(input.accessCount + 1) / 3);
 
-  return input.importance * recency * accessFactor;
+  return clampImportance(input.importance) * recency * accessFactor;
 }
