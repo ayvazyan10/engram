@@ -39,7 +39,7 @@ const PACKAGE = '@engram-ai-memory/mcp';
  * packages/mcp/src/__tests__/mcpb-launcher.test.ts, which fails when this, the
  * manifest pin and packages/mcp/package.json drift apart.
  */
-const DEFAULT_VERSION = '0.6.3';
+const DEFAULT_VERSION = '0.7.0';
 const INSTALL_DIR = path.join(os.homedir(), '.engram', 'mcp');
 
 /** A version we are willing to put on a command line: no shell metacharacters. */

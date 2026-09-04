@@ -184,10 +184,10 @@ export class KnowledgeGraph {
    * `addEdge` stores a bidirectional link as a mirrored pair of directed
    * adjacency entries (see `link`), so summing the adjacency lists counted
    * every bidirectional connection twice. The number surfaced as
-   * `stats().graphEdges`, which the dashboard prints beside
-   * `GET /api/graph/edges`'s own `stored` count of connection rows: on a real
-   * store those read 16,984 and 8,492 — two numbers for one noun, on one
-   * screen, differing by exactly the mirror.
+   * `stats().graphEdges`, which `engram stats` prints as its `Edges:` line
+   * while `GET /api/graph/edges` reports its own `stored` count of connection
+   * rows: on a real store those read 16,984 and 8,492 — two numbers for one
+   * noun, differing by exactly the mirror.
    *
    * A connection is one edge regardless of which way it can be traversed, so
    * the mirror is folded away here. Directed links still count once each, and
