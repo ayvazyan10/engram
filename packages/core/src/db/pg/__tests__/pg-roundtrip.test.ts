@@ -40,19 +40,48 @@ function isDockerAvailable(): boolean {
   }
 }
 
-const TEST_PG_URL = process.env['TEST_PG_URL'];
 const SKIP_REQUESTED = Boolean(process.env['SKIP_PG_TESTS']);
-const DOCKER_AVAILABLE = TEST_PG_URL ? true : isDockerAvailable();
 
-const shouldRunPgTests = !SKIP_REQUESTED && (Boolean(TEST_PG_URL) || DOCKER_AVAILABLE);
+/**
+ * Reachability, not presence.
+ *
+ * This used to treat a set `TEST_PG_URL` as proof a server was there. CI sets
+ * that variable unconditionally, so when the Postgres service did not come up
+ * the suite decided to run, and `beforeAll` died on ECONNREFUSED — failing the
+ * whole file while every test inside it was skipped. Postgres is optional for
+ * this project, so an absent one has to skip, not fail. The two sibling PG
+ * suites already probe; this one is brought in line with them.
+ */
+async function pgReachable(url: string): Promise<boolean> {
+  try {
+    const { Pool } = await import('pg');
+    const admin = new Pool({ connectionString: url, connectionTimeoutMillis: 3000 });
+    await admin.query('SELECT 1');
+    await admin.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const CONFIGURED_PG_URL = process.env['TEST_PG_URL'];
+const CONFIGURED_PG_REACHABLE = CONFIGURED_PG_URL ? await pgReachable(CONFIGURED_PG_URL) : false;
+const TEST_PG_URL = CONFIGURED_PG_REACHABLE ? CONFIGURED_PG_URL : undefined;
+
+// A configured-but-unreachable URL does NOT fall through to Docker. Quietly
+// starting a different database than the one that was asked for would hide the
+// misconfiguration and make the run mean something other than it claims.
+const shouldRunPgTests =
+  !SKIP_REQUESTED && (CONFIGURED_PG_URL ? CONFIGURED_PG_REACHABLE : isDockerAvailable());
 const describeWithPg = shouldRunPgTests ? describe : describe.skip;
 
 if (!shouldRunPgTests) {
-  console.info(
-    `[pg-roundtrip.test.ts] skipping: ${
-      SKIP_REQUESTED ? 'SKIP_PG_TESTS is set' : 'Docker is unavailable and TEST_PG_URL is not set'
-    }`
-  );
+  const reason = SKIP_REQUESTED
+    ? 'SKIP_PG_TESTS is set'
+    : CONFIGURED_PG_URL
+      ? `PostgreSQL is unreachable at ${CONFIGURED_PG_URL}`
+      : 'Docker is unavailable and TEST_PG_URL is not set';
+  console.info(`[pg-roundtrip.test.ts] skipping: ${reason}`);
 }
 
 // ─── small helpers ──────────────────────────────────────────────────────────
