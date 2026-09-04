@@ -17,9 +17,9 @@ The easiest way to get Engram into Claude Desktop — no manual JSON editing or 
 
 ### Via Smithery
 
-[![Install on Smithery](https://smithery.ai/badge/engram)](https://smithery.ai/server/engram)
+[![Install on Smithery](https://smithery.ai/badge/ayvazyan10/engram)](https://smithery.ai/skills/ayvazyan10/engram)
 
-Go to [smithery.ai/server/engram](https://smithery.ai/server/engram) and click **Install**. Smithery automatically configures Claude Desktop and prompts for optional settings (database path, namespace).
+Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan10/engram) and click **Install**. Smithery automatically configures Claude Desktop and prompts for optional settings (database path, namespace).
 
 ### Via .mcpb Desktop Extension
 
@@ -641,7 +641,10 @@ async function recall(query: string): Promise<string> {
 
 ## CLI Integration
 
-The `@engram-ai-memory/cli` package works directly with the database — no running server needed.
+The `@engram-ai-memory/cli` package talks to the REST API over HTTP, so **the server has to be
+running** for every data command below. It does not open the database itself, and it ignores
+`ENGRAM_DB_PATH` — the host and port come from `~/.engram/config.json`. Start one with
+`engram start` first.
 
 ```bash
 npm i -g @engram-ai-memory/cli
@@ -660,7 +663,10 @@ engram export > /backups/engram-$(date +%Y%m%d).json
 engram import < /backups/engram-20260325.json
 ```
 
-Set `ENGRAM_DB_PATH` to point at the same database your server uses.
+Point the CLI at a different server with `engram configure set host` / `set port`. Setting
+`ENGRAM_DB_PATH` in your shell has no effect on the CLI: the database path it hands to a server
+started by `engram start` comes from `dbPath` in `~/.engram/config.json` (`engram configure set
+dbPath <path>`), not from the ambient variable.
 
 ---
 

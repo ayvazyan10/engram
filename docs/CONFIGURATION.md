@@ -65,7 +65,8 @@ ENGRAM_EMBEDDING_MODEL=Xenova/bge-small-en-v1.5 \
 The MCP server runs as a stdio process — it shares a database file with the REST API server. Both must point to the same `ENGRAM_DB_PATH`.
 
 ```json
-// ~/.claude/settings.json
+// ~/.claude.json — NOT ~/.claude/settings.json, which is for Claude Code settings;
+// `engram doctor` warns when an mcpServers entry is found there.
 {
   "mcpServers": {
     "engram": {

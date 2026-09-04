@@ -91,7 +91,7 @@ Once configured, sync runs in the background:
 
 **Device identity:** each installation gets a unique `device_id`, generated once (a UUID) and persisted in a local-only table that never itself syncs. It's used purely to break ties during conflict resolution (see below) — it's not a user-facing identifier you need to manage.
 
-> One caveat worth knowing: if you clone or restore an `engram.db` file onto a second machine (disk image, backup restore, `cp`), that copy inherits the same `device_id` as the original. Two installations sharing one id can occasionally mis-resolve a tie between exactly those two devices. Treat a cloned database as sharing identity with its source until you've verified otherwise.
+> Copies do not inherit that identity. Each installation also records a fingerprint of the database file its id was minted for (hostname, resolved path, device and inode numbers), so cloning or restoring an `engram.db` onto a second machine — disk image, backup restore, plain `cp` — is detected on first use and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction. Left unhandled, a shared id stalls sync in **both** directions while reporting no error; see [Recovery / Troubleshooting](#10-recovery--troubleshooting) for the mechanism and why it errs toward re-minting.
 
 You can also drive sync manually instead of waiting on the interval — see [Recovery / Troubleshooting](#10-recovery--troubleshooting).
 

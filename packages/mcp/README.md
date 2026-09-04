@@ -10,6 +10,10 @@ MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to 
 npm install -g @engram-ai-memory/mcp
 ```
 
+Installs two binaries: `engram-mcp` (the stdio server) and
+`engram-store-session` (writes a session summary, used by the Claude Code
+session-end hook).
+
 ### Smithery (1-click — recommended for Claude Desktop)
 
 [![Install on Smithery](https://smithery.ai/badge/ayvazyan10/engram)](https://smithery.ai/skills/ayvazyan10/engram)
@@ -27,8 +31,8 @@ one of them:
 
 | Client | Config file |
 |---|---|
-| Claude Code (every session) | `~/.claude.json` |
-| Claude Code (one project) | `.mcp.json` in the project directory |
+| Claude Code (user scope) | `~/.claude.json` |
+| Claude Code (project scope) | `.mcp.json` in the project directory |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 
@@ -78,11 +82,19 @@ End of session → store_memory(session summary)
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
-| `ENGRAM_NAMESPACE_MODE` | `none` | `none`, `filter`, or `isolated` |
+| `ENGRAM_DB_PATH` | `~/.engram/engram.db` | SQLite database path. A blank value counts as unset — **not** as the current directory, where a desktop host would put a database nobody can find |
+| `ENGRAM_NAMESPACE_MODE` | `none` (`filter` when `ENGRAM_NAMESPACE` is set) | `none`, `filter`, or `isolated` |
 | `ENGRAM_NAMESPACE` | — | Namespace used by `filter`/`isolated` modes |
 | `ENGRAM_SOURCE` | `mcp-client` | AI client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
+| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model (must match the API server when sharing a database) |
+| `ENGRAM_SYNC_URL` | — | PostgreSQL connection string for multi-device sync. Unset = no sync engine is constructed |
+| `ENGRAM_SYNC_MODE` | `auto` | `auto`, `manual`, or `off` |
+| `ENGRAM_SYNC_INTERVAL` | — | Background sync interval, in milliseconds |
+| `ENGRAM_SYNC_ENCRYPTION_KEY` | — | Passphrase for end-to-end encryption of synced rows |
+
+The four sync variables are validated at startup: a bad mode or interval stops
+the server with a message naming the variable, rather than becoming a timer that
+never stops. See [Cloud Sync](https://github.com/ayvazyan10/engram/blob/master/docs/CLOUD-SYNC.md).
 
 ## Links
 
