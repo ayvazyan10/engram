@@ -11,6 +11,11 @@ import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
 import { timingSafeEqual } from 'crypto';
+import { installErrorHandler } from './lib/errorHandler.js';
+import { pathnameOf } from './lib/requestPath.js';
+import { installHostGuard, readHostPolicy } from './security/hostGuard.js';
+import { installRateLimit, readRateLimitConfig } from './security/rateLimit.js';
+import { installSecurityHeaders, readSecurityHeaderPolicy } from './security/securityHeaders.js';
 // Read the real release version instead of hardcoding it. This package has no
 // "type":"module", so tsc emits CommonJS here and __dirname is available;
 // ../package.json resolves from both src/ during dev and dist/ in the image.
@@ -59,8 +64,25 @@ const DEFAULT_ORIGINS = [
 
 const originAllowlist = ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_ORIGINS;
 
-/** Optional shared secret. When unset the API stays open (local-first default). */
-const API_KEY = process.env['ENGRAM_API_KEY'];
+/**
+ * Optional shared secret. When UNSET the API stays open (local-first default).
+ *
+ * Set-but-empty is refused rather than treated as unset. `if (API_KEY)` is
+ * false for '', so `ENGRAM_API_KEY=""` — exactly what a host templating an
+ * unset optional field produces — turned authentication off while every
+ * config file and dashboard still said a key was configured. Unset means "no
+ * auth wanted"; empty means "auth wanted, value lost", and only one of those
+ * is safe to guess at.
+ */
+const RAW_API_KEY = process.env['ENGRAM_API_KEY'];
+if (RAW_API_KEY !== undefined && RAW_API_KEY.trim() === '') {
+  throw new Error(
+    'ENGRAM_API_KEY is set but empty. Unset it to run without authentication ' +
+      '(the local-first default), or give it a real value — an empty value ' +
+      'used to disable authentication silently.'
+  );
+}
+const API_KEY = RAW_API_KEY;
 
 function isAllowedOrigin(origin: string | undefined): boolean {
   // Non-browser clients (CLI, MCP, curl) send no Origin header.
@@ -119,6 +141,20 @@ export let io: SocketIOServer;
 /**
  * The '/neural' namespace the dashboard connects to. All route broadcasts must
  * go through this — emitting on the default namespace silently reaches nobody.
+ *
+ * KNOWN LIMITATION — namespace scoping stops at the realtime surface.
+ * Every emit here reaches every connected socket. In 'filter' mode a
+ * POST /api/memory {"namespace":"other"} is broadcast to all of them, and
+ * `recall:chunk` streams one caller's recall results to every listener.
+ *
+ * This is not an IDOR under the current model: there is exactly one shared
+ * ENGRAM_API_KEY, so every socket is the same principal as every HTTP caller,
+ * and anything it sees on the socket it could also fetch over /api/. It is
+ * documented rather than fixed because scoping it properly needs a per-socket
+ * namespace claim in the handshake and a room per namespace — which means a
+ * matching change in the dashboard client, and a per-connection identity that
+ * a single shared key cannot express. Multi-tenant deployments must not treat
+ * '/neural' as a tenant boundary until both exist.
  */
 export let realtime: Namespace | undefined;
 
@@ -146,8 +182,28 @@ export function notifySyncWrite(): void {
  */
 export function setupRealtime(server: HttpServer): Namespace {
   io = new SocketIOServer(server, {
-    // Same allowlist as the REST API — '*' let any page open a socket and read
-    // every broadcast memory event.
+    // The Origin allowlist has to be enforced HERE, in allowRequest.
+    //
+    // `cors` cannot refuse a socket: returning false from its origin callback
+    // only makes the cors package omit the Access-Control-* headers and then
+    // call next() — the handshake still completes. And browsers do not apply
+    // CORS to WebSocket upgrades at all, so a disallowed page never even had
+    // to care about the missing headers. Any page the user visited could open
+    // a socket on '/neural' and read every broadcast memory event (content
+    // included). allowRequest runs before any namespace or transport is set
+    // up and aborts the engine.io handshake with a 403, for polling and
+    // websocket alike, which is the one place the connection can be refused.
+    allowRequest: (req, callback) => {
+      const origin = req.headers.origin;
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      console.warn(`WebSocket handshake refused: origin '${origin}' is not allowlisted`);
+      callback('Forbidden origin', false);
+    },
+    // Kept for the polling transport's response headers on allowed origins.
+    // This is a header policy, never an access control — see above.
     cors: {
       origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
       credentials: false,
@@ -197,17 +253,67 @@ export function setupRealtime(server: HttpServer): Namespace {
 export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   const app = Fastify({ logger: { level: 'warn' } });
 
+  // Sanitize 5xx bodies before anything can produce one. Fastify 5 ships no
+  // error handler of its own, so an uncaught throw returned err.message and
+  // err.code verbatim — see lib/errorHandler.ts.
+  installErrorHandler(app);
+
+  // Response headers for every reply, including the static bundle and the SPA
+  // fallback — see security/securityHeaders.ts.
+  installSecurityHeaders(app, readSecurityHeaderPolicy());
+
   // CORS — explicit allowlist, no credentials (the API uses no cookies).
   await app.register(cors, {
     origin: (origin, cb) => cb(null, isAllowedOrigin(origin ?? undefined)),
     credentials: false,
   });
 
+  // Hook order below is deliberate: reject a rebound Host before spending a
+  // rate-limit slot on it, and rate-limit before the key check so that a flood
+  // of wrong-key requests is bounded too.
+  //
+  // Host allowlist — the REST half of the DNS-rebinding defense the WebSocket
+  // half already had. See security/hostGuard.ts for why Origin cannot do this.
+  installHostGuard(app, readHostPolicy());
+
+  // Per-client request rate limiting on /api/*. See security/rateLimit.ts.
+  installRateLimit(app, readRateLimitConfig());
+
   // Optional API-key auth. Enabled only when ENGRAM_API_KEY is set, so the
   // local-first default is unchanged; health stays open for container probes.
+  //
+  // Only /api/* is gated. Everything else — the dashboard's built static
+  // bundle (@fastify/static, registered below) and its SPA fallback
+  // (setNotFoundHandler, also below) — is exempt by construction. A browser
+  // cannot attach X-API-Key to a top-level navigation, so if '/' required the
+  // key, the page that would let a user ever supply one could never load in
+  // the first place. Every real API route lives under /api/ (see the
+  // app.register(...routes, { prefix: '/api' }) calls below), so this is not
+  // an accidental narrowing of what's protected — and neither the static
+  // plugin nor the SPA fallback take the request path as a file path to
+  // read (the fallback always serves the same fixed index.html; the static
+  // plugin does its own traversal handling), so this exemption cannot become
+  // a way to read arbitrary files.
   if (API_KEY) {
     app.addHook('onRequest', async (req, reply) => {
-      if (req.url === '/api/health' || req.url.startsWith('/docs')) return;
+      // Compare the PATH, not the raw request target. `req.url` carries the
+      // query string, so the exact-match exemption below missed
+      // `/api/health?x=1` — any probe with a cache-buster got a 401 — and a
+      // prefix test on the raw URL is just as fragile.
+      const pathname = pathnameOf(req.url);
+
+      // The OpenAPI document describes every route, parameter and body shape
+      // on the server. The Swagger UI shell itself stays open (a browser
+      // cannot attach a key to a top-level navigation, same reason the
+      // dashboard is exempt), but the machine-readable spec is gated with the
+      // rest of the API surface.
+      if (pathname === '/docs/json' || pathname === '/docs/yaml') {
+        // fall through to the key check
+      } else if (!pathname.startsWith('/api/')) {
+        return;
+      } else if (pathname === '/api/health') {
+        return;
+      }
 
       const header = req.headers['authorization'];
       const bearer = typeof header === 'string' && header.startsWith('Bearer ')
@@ -293,6 +399,36 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   return app;
 }
 
+/**
+ * One tick of the auto-decay timer.
+ *
+ * Every failure path is contained here deliberately. The sweep runs against a
+ * policy PUT /api/decay/policy can change at runtime, so a single bad policy
+ * used to make it fail on every tick; and a synchronous throw escaping the
+ * setInterval callback surfaces as a process-level uncaughtException, which
+ * says nothing about which subsystem broke. Log it and leave the schedule
+ * intact — the next tick picks up a corrected policy without a restart.
+ */
+function runScheduledDecaySweep(neuralNs: Namespace): void {
+  try {
+    void brain
+      .runDecaySweep()
+      .then((result) => {
+        if (result.archivedCount > 0 || result.consolidatedCount > 0) {
+          console.info(
+            `Decay sweep: archived ${result.archivedCount}, decayed ${result.decayedCount}, consolidated ${result.consolidatedCount} (${result.durationMs}ms)`
+          );
+          neuralNs.emit('memory:decayed', result);
+        }
+      })
+      .catch((err: unknown) => {
+        console.error('[engram] decay sweep failed, schedule continues:', err);
+      });
+  } catch (err: unknown) {
+    console.error('[engram] decay sweep could not start, schedule continues:', err);
+  }
+}
+
 async function start() {
   // Initialize brain
   console.info('Initializing Engram brain...');
@@ -337,21 +473,7 @@ async function start() {
   // ─── Auto-decay timer ────────────────────────────────────────────────────
   const decayPolicy = brain.getDecayPolicy();
   if (decayPolicy.decayIntervalMs > 0) {
-    setInterval(() => {
-      brain
-        .runDecaySweep()
-        .then((result) => {
-          if (result.archivedCount > 0 || result.consolidatedCount > 0) {
-            console.info(
-              `Decay sweep: archived ${result.archivedCount}, decayed ${result.decayedCount}, consolidated ${result.consolidatedCount} (${result.durationMs}ms)`
-            );
-            neuralNs.emit('memory:decayed', result);
-          }
-        })
-        .catch((err: unknown) => {
-          console.error('Decay sweep failed:', err);
-        });
-    }, decayPolicy.decayIntervalMs);
+    setInterval(() => runScheduledDecaySweep(neuralNs), decayPolicy.decayIntervalMs);
     console.info(`Auto-decay enabled: every ${Math.round(decayPolicy.decayIntervalMs / 1000)}s`);
   }
 }

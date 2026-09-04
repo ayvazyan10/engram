@@ -14,7 +14,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         querystring: {
           type: 'object',
           properties: {
-            depth: { type: 'integer', default: 2, maximum: 4 },
+            depth: { type: 'integer', default: 2, minimum: 1, maximum: 4 },
           },
         },
       },
@@ -163,15 +163,34 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         deviceId: getDeviceId(),
       };
 
+      // A live duplicate is a conflict, not a server fault. Letting
+      // upsertConnection throw the UNIQUE violation produced a 500 whose body
+      // read "UNIQUE constraint failed: memory_connections.source_id, ..." —
+      // handing the caller the table and column names for an outcome they can
+      // legitimately provoke. Checked before the write rather than caught
+      // after it, so the answer does not depend on the driver's error text.
+      const [duplicate] = await db
+        .select({ id: schema.memoryConnections.id })
+        .from(schema.memoryConnections)
+        .where(
+          and(
+            eq(schema.memoryConnections.sourceId, connection.sourceId),
+            eq(schema.memoryConnections.targetId, connection.targetId),
+            eq(schema.memoryConnections.relationship, connection.relationship),
+            isNull(schema.memoryConnections.deletedAt)
+          )
+        )
+        .limit(1);
+      if (duplicate) {
+        reply.code(409);
+        return { error: 'Connection already exists' };
+      }
+
       // upsertConnection rather than a raw insert — see
       // graph/connectionStore.ts: it resurrects a tombstoned row that
       // occupies the same (source, target, relationship) slot instead of
       // throwing the UNIQUE constraint violation a naive insert would (e.g. a
-      // connection that was forgotten and is now being re-created). A LIVE
-      // duplicate still throws exactly as a raw insert always did — no route
-      // in apps/server/src/routes/ maps a conflict to 409 today, so this
-      // preserves the existing (unhandled -> 500) behavior rather than
-      // inventing a new error convention unilaterally.
+      // connection that was forgotten and is now being re-created).
       upsertConnection(db, connection);
       notifySyncWrite();
 

@@ -51,9 +51,18 @@ describe('contradictions', () => {
   });
 
   it('checks a specific memory', async () => {
+    // This used to call GET on a route registered as POST and accept
+    // [200, 404], so it passed on the router's own 404 without the handler
+    // ever running — a test that could not fail.
     const id = await store('The API listens on port 4901');
-    const res = await app.inject({ method: 'GET', url: `/api/contradictions/check/${id}` });
-    expect([200, 404]).toContain(res.statusCode);
+    const res = await app.inject({ method: 'POST', url: `/api/contradictions/check/${id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty('hasContradictions');
+  });
+
+  it('404s when checking a memory that does not exist', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/contradictions/check/no-such-memory' });
+    expect(res.statusCode).toBe(404);
   });
 
   it('exposes and updates detector config', async () => {
@@ -63,9 +72,10 @@ describe('contradictions', () => {
     const put = await app.inject({
       method: 'PUT',
       url: '/api/contradictions/config',
-      payload: { enabled: true },
+      payload: { enabled: true, similarityThreshold: 0.7 },
     });
-    expect([200, 400]).toContain(put.statusCode);
+    expect(put.statusCode).toBe(200);
+    expect(put.json().similarityThreshold).toBeCloseTo(0.7, 5);
   });
 });
 
@@ -114,7 +124,7 @@ describe('plugins', () => {
 
   it('404s for an unknown plugin', async () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/plugins/no-such-plugin' });
-    expect([200, 404]).toContain(res.statusCode);
+    expect(res.statusCode).toBe(404);
   });
 });
 
@@ -143,7 +153,8 @@ describe('lifecycle', () => {
       url: '/api/decay/policy',
       payload: { halfLifeDays: 14 },
     });
-    expect([200, 400]).toContain(put.statusCode);
+    expect(put.statusCode).toBe(200);
+    expect(put.json().halfLifeDays).toBe(14);
   });
 
   it('runs a decay sweep in dry-run mode', async () => {

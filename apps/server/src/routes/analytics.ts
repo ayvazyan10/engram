@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, getDeviceId, schema, embed, packFP16 } from '@engram-ai-memory/core';
 import type { MemoryType } from '@engram-ai-memory/core';
-import { isNull, and, eq, sql, gte, desc } from 'drizzle-orm';
+import { isNull, and, eq, inArray, sql, gte, desc } from 'drizzle-orm';
 import { brain, notifySyncWrite } from '../index.js';
+import { strictObjectBody } from '../lib/strictBody.js';
 
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Querystring: { days?: string } }>('/analytics', {
@@ -240,17 +241,55 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     schema: {
       tags: ['memory'],
       summary: 'Archive multiple memories at once',
+      // This was the only bulk endpoint with no body schema at all — no
+      // `required`, no types, no bound. Every one of those omissions was
+      // reachable: no body 500'd on the destructure; {"ids":"abc"} iterated
+      // the string's characters and reported three archives; {"ids":12} threw
+      // "ids is not iterable"; and a 1 MiB body holds ~25k ids, i.e. 25k
+      // sequential transactions and 25k webhook dispatches from one request.
+      // Bounds match /memory/bulk/tag, which loops the same way.
+      body: {
+        type: 'object',
+        required: ['ids'],
+        additionalProperties: false,
+        properties: {
+          ids: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 1000,
+            items: { type: 'string', minLength: 1 },
+          },
+        },
+      },
     },
+    // Runs before the schema: Fastify's ajv coerces a scalar into a
+    // single-element array and strips unknown keys, so neither {"ids":"abc"}
+    // nor a stray extra key would be reported without this.
+    preValidation: strictObjectBody(['ids'], ['ids']),
     handler: async (req) => {
+      const db = getDb();
       const { ids } = req.body;
-      let archived = 0;
 
-      for (const id of ids) {
+      // Resolve what is actually archivable first, in one query.
+      // brain.forget() only verifies existence in isolated mode, so unknown
+      // ids used to be counted as archived and — worse — fired a 'forgotten'
+      // webhook and an onForget plugin hook for a memory that never existed.
+      const unique = [...new Set(ids)];
+      const rows = await db
+        .select({ id: schema.memories.id, namespace: schema.memories.namespace })
+        .from(schema.memories)
+        .where(and(inArray(schema.memories.id, unique), isNull(schema.memories.archivedAt)));
+
+      let archived = 0;
+      for (const row of rows) {
+        if (!brain.canAccessNamespace(row.namespace)) continue;
         try {
-          await brain.forget(id);
+          await brain.forget(row.id);
           archived++;
-        } catch {
-          // skip missing
+        } catch (err: unknown) {
+          // A row can be archived by another caller between the lookup and
+          // this call; the rest of the batch must still go through.
+          req.log.warn({ err, id: row.id }, 'bulk archive skipped a memory');
         }
       }
       if (archived > 0) notifySyncWrite();

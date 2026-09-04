@@ -29,13 +29,26 @@ const TEST_API_KEY = 'socket-auth-test-key-9f3c2a';
 /** Track every client socket opened by a test so afterEach can force-close it. */
 const openSockets: ClientSocket[] = [];
 
-function connectClient(baseUrl: string, token?: string): ClientSocket {
+/**
+ * Open a client socket on '/neural'.
+ *
+ * `origin` sets a real Origin request header — engine.io-client forwards
+ * `extraHeaders` on both the polling handshake and, under Node, the WebSocket
+ * upgrade, which is how a browser page's socket looks on the wire.
+ */
+function connectClient(
+  baseUrl: string,
+  token?: string,
+  origin?: string,
+  transports: ('websocket' | 'polling')[] = ['websocket']
+): ClientSocket {
   const socket = ioClient(`${baseUrl}/neural`, {
     auth: token === undefined ? {} : { token },
     reconnection: false,
     forceNew: true,
-    transports: ['websocket'],
+    transports,
     timeout: 5000,
+    ...(origin ? { extraHeaders: { Origin: origin } } : {}),
   });
   openSockets.push(socket);
   return socket;
@@ -144,6 +157,73 @@ describe('Socket.io /neural namespace auth — ENGRAM_API_KEY unset', () => {
   });
 
   it('accepts a connection with no token (backward compatible)', async () => {
+    const socket = connectClient(baseUrl);
+    await expect(waitForConnect(socket)).resolves.toBeUndefined();
+    expect(socket.connected).toBe(true);
+  });
+});
+
+/**
+ * Origin allowlist coverage for the Socket.io handshake.
+ *
+ * The `cors` option alone never rejected anything: returning `false` from its
+ * origin callback only makes the `cors` package omit the CORS headers, and
+ * browsers do not apply CORS to WebSocket upgrades in the first place. So any
+ * page the user visited could open a socket on '/neural' and read every
+ * broadcast memory event. The handshake is now gated by `allowRequest`, which
+ * is the one place engine.io actually refuses a connection.
+ */
+describe('Socket.io handshake Origin allowlist', () => {
+  const dbPath = path.join(os.tmpdir(), `engram-socket-origin-${process.pid}.db`);
+  const ALLOWED_ORIGIN = 'http://localhost:4902';
+  let app: FastifyInstance;
+  let brain: typeof import('../index.js')['brain'];
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    delete process.env['ENGRAM_API_KEY'];
+    process.env['ENGRAM_DB_PATH'] = dbPath;
+    process.env['ENGRAM_DECAY_INTERVAL'] = '0';
+    process.env['ENGRAM_ALLOWED_ORIGINS'] = ALLOWED_ORIGIN;
+
+    const mod = await import('../index.js');
+    brain = mod.brain;
+    await brain.initialize();
+    app = await mod.buildApp();
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    mod.setupRealtime(app.server);
+
+    const address = app.server.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterAll(async () => {
+    await app?.close();
+    try { brain?.shutdown(); } catch { /* best effort */ }
+    cleanupTestDb(dbPath);
+    delete process.env['ENGRAM_ALLOWED_ORIGINS'];
+  });
+
+  it('refuses a websocket handshake from a disallowed Origin', async () => {
+    const socket = connectClient(baseUrl, undefined, 'https://evil.example.com');
+    await waitForRejection(socket);
+    expect(socket.connected).toBe(false);
+  });
+
+  it('refuses a polling handshake from a disallowed Origin', async () => {
+    const socket = connectClient(baseUrl, undefined, 'https://evil.example.com', ['polling']);
+    await waitForRejection(socket);
+    expect(socket.connected).toBe(false);
+  });
+
+  it('accepts a handshake from an allowed Origin', async () => {
+    const socket = connectClient(baseUrl, undefined, ALLOWED_ORIGIN);
+    await expect(waitForConnect(socket)).resolves.toBeUndefined();
+    expect(socket.connected).toBe(true);
+  });
+
+  it('accepts a handshake with no Origin (CLI, MCP, curl)', async () => {
     const socket = connectClient(baseUrl);
     await expect(waitForConnect(socket)).resolves.toBeUndefined();
     expect(socket.connected).toBe(true);

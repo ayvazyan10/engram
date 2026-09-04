@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { brain, realtime, notifySyncWrite } from '../index.js';
+import { runExclusive } from '../lib/exclusive.js';
 
 export const embeddingRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/embeddings/status — embedding model status and stale counts
@@ -34,9 +35,14 @@ export const embeddingRoutes: FastifyPluginAsync = async (app) => {
     handler: async (req) => {
       const { onlyStale = true, batchSize = 32 } = req.body ?? {};
 
-      const result = await brain.reEmbed(onlyStale, batchSize, (progress) => {
-        realtime?.emit('embedding:progress', progress);
-      });
+      // Single-flight: re-embedding walks the whole store and rewrites every
+      // vector, so two overlapping passes fight over the same rows and burn
+      // the embedder twice for no benefit.
+      const result = await runExclusive('re-embed', () =>
+        brain.reEmbed(onlyStale, batchSize, (progress) => {
+          realtime?.emit('embedding:progress', progress);
+        })
+      );
       if (result.processed > 0) notifySyncWrite();
 
       realtime?.emit('embedding:complete', result);
@@ -58,7 +64,9 @@ export const embeddingRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Tag legacy memories (no model ID) with the current model, without re-embedding',
     },
     handler: async () => {
-      const backfilled = await brain.backfillEmbeddingModel();
+      const backfilled = await runExclusive('embeddings-backfill', () =>
+        brain.backfillEmbeddingModel()
+      );
       if (backfilled > 0) notifySyncWrite();
       const status = await brain.embeddingStatus();
       return {

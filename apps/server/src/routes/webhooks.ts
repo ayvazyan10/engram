@@ -105,8 +105,15 @@ export const webhookRoutes: FastifyPluginAsync = async (app) => {
       tags: ['webhooks'],
       summary: 'Send a test event to a webhook',
     },
-    handler: async (req) => {
+    handler: async (req, reply) => {
       const result = await mgr.sendTest(req.params.id);
+      // sendTest() reports a missing webhook as a failed delivery, so an
+      // unknown id answered 200 {"success":false,"error":"Webhook not found"}
+      // — indistinguishable from a real endpoint that rejected the test.
+      if (!result.success && result.error === 'Webhook not found') {
+        reply.code(404);
+        return { error: 'Webhook not found' };
+      }
       return result;
     },
   });

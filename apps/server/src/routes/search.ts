@@ -21,8 +21,11 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         type: 'object',
         required: ['query'],
         properties: {
-          query: { type: 'string' },
-          topK: { type: 'integer', default: 10, maximum: 50 },
+          query: { type: 'string', minLength: 1 },
+          // A floor as well as a ceiling: VectorSearch slices with
+          // `slice(0, topK)`, and a negative topK makes that return everything
+          // above the threshold — the cap of 50 silently became "no cap".
+          topK: { type: 'integer', default: 10, minimum: 1, maximum: 50 },
           threshold: { type: 'number', default: 0.3, minimum: 0, maximum: 1 },
           types: {
             type: 'array',
@@ -71,8 +74,11 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         type: 'object',
         required: ['query'],
         properties: {
-          query: { type: 'string' },
-          maxTokens: { type: 'integer', default: 2000 },
+          query: { type: 'string', minLength: 1 },
+          // Unbounded in both directions while the SSE twin below was already
+          // 1..32000. A negative maxTokens disabled context truncation
+          // entirely, so one recall could return the whole store.
+          maxTokens: { type: 'integer', default: 2000, minimum: 1, maximum: 32000 },
           types: {
             type: 'array',
             items: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },

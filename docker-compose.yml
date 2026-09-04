@@ -9,11 +9,17 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     ports:
-      - '5432:5432'
+      # Bound to loopback. '5432:5432' published a database whose password is
+      # written three lines below on every interface of the host — on a laptop
+      # on a cafe network, that is an open database. Change the left-hand side
+      # to 0.0.0.0 only after setting POSTGRES_PASSWORD to something real.
+      - '127.0.0.1:5432:5432'
     environment:
       POSTGRES_DB: engram
       POSTGRES_USER: engram
-      POSTGRES_PASSWORD: dev_password
+      # Override with POSTGRES_PASSWORD in the environment or a .env file. The
+      # default stays weak on purpose — it is only reachable from this host.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,10 +34,25 @@ services:
       context: .
       dockerfile: apps/server/Dockerfile
     ports:
-      - '4901:4901'
+      # Bound to loopback. '4901:4901' published an API with no authentication
+      # on every interface of the host: anyone on the same network could read,
+      # write and delete every memory. To expose it deliberately, set
+      # ENGRAM_API_KEY below, add the public hostname to ENGRAM_ALLOWED_HOSTS,
+      # and then change this to '0.0.0.0:4901:4901'.
+      - '127.0.0.1:4901:4901'
     environment:
       ENGRAM_DB_PATH: /data/engram.db
       NODE_ENV: production
+      # Hostnames this API may be addressed by (DNS-rebinding defense). IP
+      # literals and localhost are always allowed; 'api' is the name the web
+      # container's proxy uses. Add your own hostname here when putting this
+      # behind a reverse proxy, or set '*' to turn the check off.
+      ENGRAM_ALLOWED_HOSTS: localhost,127.0.0.1,api
+      # Shared secret for the REST API and the WebSocket handshake. Deliberately
+      # NOT templated as ${ENGRAM_API_KEY}: an unset variable would expand to an
+      # empty string, which the server now refuses to start with rather than
+      # running unauthenticated. Uncomment and set a real value to enable auth.
+      # ENGRAM_API_KEY: change-me
     volumes:
       - api_data:/data
     # No depends_on postgres: this service always runs on SQLite
@@ -49,7 +70,9 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     ports:
-      - '4902:80'
+      # Loopback for the same reason as the API: the dashboard is the UI onto
+      # that same unauthenticated data.
+      - '127.0.0.1:4902:80'
     depends_on:
       - api
 

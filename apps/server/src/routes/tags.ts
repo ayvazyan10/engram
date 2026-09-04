@@ -1,5 +1,25 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { brain, notifySyncWrite } from '../index.js';
+import { isMemoryNotFound } from '../lib/notFound.js';
+
+/**
+ * Run a tag mutation, turning core's "memory not found" into a 404.
+ *
+ * Returns null when the memory is missing so the caller can send its own body;
+ * any other failure is re-thrown and handled as a genuine 500.
+ */
+async function withMemory(
+  reply: FastifyReply,
+  run: () => Promise<string[]>
+): Promise<string[] | null> {
+  try {
+    return await run();
+  } catch (err: unknown) {
+    if (!isMemoryNotFound(err)) throw err;
+    reply.code(404);
+    return null;
+  }
+}
 
 export const tagRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/tags — tag cloud with counts
@@ -25,8 +45,11 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       querystring: {
         type: 'object',
         properties: {
-          limit: { type: 'integer', default: 50, maximum: 200 },
-          offset: { type: 'integer', default: 0 },
+          // Floors as well as ceilings — see the note on GET /api/memory:
+          // SQLite treats LIMIT -1 as unlimited and a negative OFFSET is a
+          // syntax error.
+          limit: { type: 'integer', default: 50, minimum: 1, maximum: 200 },
+          offset: { type: 'integer', default: 0, minimum: 0 },
         },
       },
     },
@@ -68,8 +91,12 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
-    handler: async (req) => {
-      const tags = await brain.addTag(req.params.id, req.body.tag);
+    handler: async (req, reply) => {
+      // addTag/removeTag throw `Memory <id> not found` for an unknown id or one
+      // outside the namespace. Letting that escape produced a 500 for what is
+      // plainly a 404 — the caller named a resource that does not exist.
+      const tags = await withMemory(reply, () => brain.addTag(req.params.id, req.body.tag));
+      if (tags === null) return { error: 'Memory not found' };
       notifySyncWrite();
       return { id: req.params.id, tags };
     },
@@ -84,7 +111,8 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Remove a tag from a memory',
     },
     handler: async (req, reply) => {
-      const tags = await brain.removeTag(req.params.id, req.params.tag);
+      const tags = await withMemory(reply, () => brain.removeTag(req.params.id, req.params.tag));
+      if (tags === null) return { error: 'Memory not found' };
       notifySyncWrite();
       return { id: req.params.id, tags };
     },

@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { syncEngine } from '../index.js';
+import { runExclusive } from '../lib/exclusive.js';
 
 /**
  * Cloud sync status and manual control (Phase 3). `syncEngine` is null
@@ -31,11 +32,19 @@ export const syncRoutes: FastifyPluginAsync = async (app) => {
         return { error: 'Cloud sync is not configured' };
       }
       try {
-        const result = await syncEngine.sync();
+        // Single-flight: a sync cycle pushes and pulls the whole change set,
+        // and two overlapping cycles re-send the same rows against each other.
+        const result = await runExclusive('sync-trigger', () => syncEngine!.sync());
         return { success: true, ...result };
       } catch (err: unknown) {
+        // The conflict from runExclusive is the caller's answer, not a failure.
+        if (err instanceof Error && 'statusCode' in err) throw err;
+        // A sync failure's message carries remote endpoint detail (and, when
+        // the URL is malformed, credentials embedded in it). Log it, don't
+        // reflect it.
+        req.log.error({ err }, 'manual sync failed');
         reply.code(500);
-        return { error: (err as Error).message };
+        return { error: 'Sync failed. See the server log for details.' };
       }
     },
   });
