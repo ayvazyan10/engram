@@ -83,11 +83,30 @@ describe('pidAlive', () => {
 });
 
 describe('isPortOpen', () => {
-  it('is true while a server listens, false after it closes', async () => {
+  it('is true while a server listens', async () => {
     const { port, close } = await listenTcp();
-    expect(await isPortOpen('127.0.0.1', port, 500)).toBe(true);
-    await close();
-    expect(await isPortOpen('127.0.0.1', port, 500)).toBe(false);
+    try {
+      expect(await isPortOpen('127.0.0.1', port, 500)).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  /**
+   * The negative case probes a port nothing has ever bound, not one we bound
+   * and closed.
+   *
+   * Closing a listening socket does not reliably stop the kernel accepting on
+   * that port straight away — under WSL2 mirrored networking it keeps
+   * completing the handshake, so a connect succeeds for a while afterwards.
+   * That is the platform's behaviour, not ours: a never-bound port refuses
+   * immediately on the same machine. Asserting on the just-closed port tested
+   * the kernel's teardown timing and failed six runs out of six here.
+   */
+  it('is false when nothing is listening', async () => {
+    // Port 1 is reserved and unservable by an unprivileged process, so a
+    // refusal here is the connect path working, not a race with a teardown.
+    expect(await isPortOpen('127.0.0.1', 1, 500)).toBe(false);
   });
 });
 

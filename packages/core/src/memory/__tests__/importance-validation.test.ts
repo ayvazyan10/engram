@@ -128,9 +128,14 @@ describe('scorer clamping for legacy rows', () => {
   };
 
   it('scoreMemory cannot be dominated by an out-of-range importance', () => {
-    const sane = scoreMemory({ ...base, importance: 1 });
-    const absurd = scoreMemory({ ...base, importance: 100 });
-    expect(absurd).toBeCloseTo(sane, 10);
+    // Both calls take the same explicit `now`. Left to default, each reads the
+    // clock separately, so the recency term differs between them by however
+    // long the two calls are apart — which made the comparison drift into and
+    // out of tolerance depending on machine speed.
+    const now = new Date();
+    const sane = scoreMemory({ ...base, importance: 1 }, undefined, now);
+    const absurd = scoreMemory({ ...base, importance: 100 }, undefined, now);
+    expect(absurd).toBe(sane);
     expect(absurd).toBeLessThanOrEqual(1);
   });
 
