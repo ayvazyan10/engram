@@ -14,17 +14,30 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
-import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer } from './serverControl.js';
-import {
-  CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
-  readJson, installHookScript, registerHook,
-} from './claudeSetup.js';
+import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid } from './serverControl.js';
+import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, readJsonOrEmpty } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
+import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
+import { syncEngineOptions } from './syncOptions.js';
 import {
-  currentGlobalPrefix, globalInstallCommand, globalInstallAdvice, npmErrorLines,
-} from './globalInstall.js';
-import { installFailureHints } from './installFailure.js';
-import type { FetchFailure, RepoSyncResult } from './gitUpdate.js';
+  defaultConfig, normalizeConfig, isConfigKey, parseConfigValue, applyDbPathEnv, CONFIG_KEYS,
+} from './engramConfig.js';
+import { stopProcess, describeStopOutcome } from './stopServer.js';
+import {
+  resolveMcpClient, supportedClientList, KNOWN_CLIENT_IDS, LEGACY_GLOBAL_MCP_FILE,
+} from './mcpClients.js';
+import {
+  shortHead, checkPrerequisites, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode,
+  CLAUDE_PATHS,
+} from './setupSteps.js';
+import {
+  choosePassphraseSource, passphraseWarning, readHiddenLine, encryptionInstructions, PASSPHRASE_ENV,
+} from './passphrase.js';
+import { B, D, G, C, R, Y, X, ok, fail, step, warn, detail } from './ui.js';
+import {
+  reportSyncFailure, reportGlobalInstallFailure, reportInstallFailure,
+} from './reporters.js';
+import type { EngramConfig } from './engramConfig.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
 
@@ -32,53 +45,43 @@ const ENGRAM_HOME = process.env['ENGRAM_HOME'] ?? path.join(os.homedir(), '.engr
 const CONFIG_PATH = path.join(ENGRAM_HOME, 'config.json');
 const PID_PATH = path.join(ENGRAM_HOME, 'server.pid');
 const LOG_PATH = path.join(ENGRAM_HOME, 'logs', 'server.log');
+/** Records the revision a build last COMPLETED for — see buildState.ts. */
+const BUILD_STAMP_PATH = path.join(ENGRAM_HOME, 'build.json');
 const REPO = 'https://github.com/ayvazyan10/engram.git';
 /** Schema version of the `engram export` payload (independent of the package version). */
 const EXPORT_FORMAT_VERSION = '0.1.0';
 
-const NAMESPACE_MODES = ['none', 'filter', 'isolated'] as const;
-type NamespaceModeName = (typeof NAMESPACE_MODES)[number];
+const DEFAULT_CONFIG: EngramConfig = defaultConfig(ENGRAM_HOME);
 
-interface EngramConfig {
-  dbPath: string;
-  port: number;
-  host: string;
-  namespace: string | null;
-  namespaceMode: NamespaceModeName;
-  embeddingModel: string;
-  indexPath: string;
-  repoPath: string;
-  syncUrl?: string;
-  syncInterval?: number;
-  syncMode?: 'auto' | 'manual' | 'off';
-  deviceName?: string;
-}
+/** Config problems are worth saying once per run, not once per loadConfig(). */
+let configProblemsReported = false;
 
-const DEFAULT_CONFIG: EngramConfig = {
-  dbPath: path.join(ENGRAM_HOME, 'engram.db'),
-  port: 4901,
-  host: '127.0.0.1',
-  namespace: null,
-  namespaceMode: 'none',
-  embeddingModel: 'Xenova/all-MiniLM-L6-v2',
-  indexPath: path.join(ENGRAM_HOME, 'engram.db.index'),
-  repoPath: path.join(ENGRAM_HOME, 'repo'),
-};
-
+/**
+ * Read ~/.engram/config.json, validating every field.
+ *
+ * Anything the file cannot justify falls back to the default AND is reported —
+ * on stderr, so `engram export` and `--json` output stay machine-readable.
+ */
 function loadConfig(): EngramConfig {
   if (!fs.existsSync(CONFIG_PATH)) return DEFAULT_CONFIG;
+
+  let stored: unknown;
   try {
-    const stored = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Partial<EngramConfig>;
-    // A hand-edited config can carry an empty or bogus mode; fall back to the
-    // legacy derivation rather than exporting garbage into the child process
-    // env, where it would abort the MCP server on startup.
-    const namespaceMode = NAMESPACE_MODES.includes(stored.namespaceMode as NamespaceModeName)
-      ? (stored.namespaceMode as NamespaceModeName)
-      : stored.namespace ? 'filter' : 'none';
-    return { ...DEFAULT_CONFIG, ...stored, namespaceMode };
-  } catch {
+    stored = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  } catch (err) {
+    if (!configProblemsReported) {
+      configProblemsReported = true;
+      console.error(`  ! ${CONFIG_PATH} is not valid JSON (${err instanceof Error ? err.message : String(err)}) — using defaults`);
+    }
     return DEFAULT_CONFIG;
   }
+
+  const { config, problems } = normalizeConfig(stored, DEFAULT_CONFIG);
+  if (problems.length > 0 && !configProblemsReported) {
+    configProblemsReported = true;
+    for (const problem of problems) console.error(`  ! ${problem}`);
+  }
+  return config;
 }
 
 function saveConfig(config: EngramConfig): void {
@@ -125,175 +128,9 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json() as Promise<T>;
 }
 
-// ─── Colors ──────────────────────────────────────────────────────────────────
-
-const B = '\x1b[1m';
-const D = '\x1b[2m';
-const G = '\x1b[32m';
-const C = '\x1b[36m';
-const R = '\x1b[31m';
-const Y = '\x1b[33m';
-const X = '\x1b[0m';
-const ok = (msg: string) => console.log(`${G}  ✓${X} ${msg}`);
-const fail = (msg: string) => console.log(`${R}  ✗${X} ${msg}`);
-const step = (msg: string) => console.log(`${C}  →${X} ${msg}`);
-const warn = (msg: string) => console.log(`${Y}  !${X} ${msg}`);
-
-// ─── Repository sync ─────────────────────────────────────────────────────────
-
-/**
- * Explain a failed fetch. An auth failure is worth spelling out: this checkout
- * pulls a public repository over anonymous HTTPS, so the only way git ends up
- * sending credentials at all is a credential helper volunteering a stale entry
- * — which reads as a network problem unless we say otherwise.
- */
-function reportFetchFailure(failure: FetchFailure, repoPath: string): void {
-  switch (failure) {
-    case 'auth':
-      fail('The remote asked for credentials and rejected them.');
-      console.log('  Engram is a public repository — this checkout needs no credentials.');
-      console.log('  A stale entry in a git credential helper is the usual cause.');
-      console.log(`  Fix: ${C}git credential reject <<< $'protocol=https\\nhost=github.com\\n'${X}`);
-      console.log(`  Then check: ${D}grep github.com ~/.git-credentials${X} and ${D}git config --get-all credential.helper${X}`);
-      console.log(`  Verify the remote is HTTPS and public: ${D}cd ${repoPath} && git remote -v${X}`);
-      return;
-    case 'not-found':
-      fail('The remote repository does not exist — the URL is wrong or the repository moved.');
-      console.log(`  Check the remote: ${D}cd ${repoPath} && git remote -v${X}`);
-      console.log(`  Or start over: ${D}rm -rf ${repoPath}${X} and run ${C}engram setup${X}`);
-      return;
-    case 'network':
-      fail('Could not reach the remote repository. Check your connection.');
-      return;
-    default:
-      fail('Could not fetch from the remote repository.');
-      return;
-  }
-}
-
-/** Explain a failed sync and how to get past it. */
-function reportSyncFailure(result: RepoSyncResult, repoPath: string): void {
-  switch (result.status) {
-    case 'fetch-failed':
-      reportFetchFailure(result.failure, repoPath);
-      break;
-    case 'no-upstream':
-      fail(`No upstream branch is configured for ${repoPath}.`);
-      console.log(`  Fix: ${D}cd ${repoPath} && git branch --set-upstream-to=origin/master${X}`);
-      return;
-    case 'blocked': {
-      const named = result.blocked.length > 0 ? `: ${result.blocked.join(', ')}` : '';
-      if (result.failure === 'untracked-collision') {
-        fail(`Update blocked — untracked files clash with new files from upstream${named}`);
-      } else if (result.failure === 'local-changes') {
-        fail(`Update blocked — local edits to files the update replaces${named}`);
-      } else if (result.failure === 'diverged') {
-        fail('Update blocked — this checkout has commits that are not upstream.');
-      } else {
-        fail('Update failed.');
-      }
-      break;
-    }
-    default:
-      return;
-  }
-
-  if ('detail' in result && result.detail) {
-    for (const line of result.detail.split('\n')) console.log(`  ${D}${line}${X}`);
-  }
-  if (result.status === 'blocked') {
-    console.log(`  Fix: ${C}engram update --force${X} ${D}(stashes local changes, keeps commits on a backup branch)${X}`);
-  }
-}
-
-/**
- * Short HEAD of the updated checkout, or null when git cannot say. Only the
- * closing banner needs it, and the update has already happened by then — a git
- * hiccup at that point must not turn a successful update into a stack trace.
- */
-function shortHead(repoPath: string): string | null {
-  try {
-    return execSync('git rev-parse --short HEAD', { cwd: repoPath, encoding: 'utf8' }).trim();
-  } catch (err) {
-    warn(`Updated, but could not read the new revision: ${err instanceof Error ? err.message : String(err)}`);
-    return null;
-  }
-}
-
-// ─── Global CLI install ──────────────────────────────────────────────────────
-
-/**
- * Explain a failed `npm install -g` in npm's own words, and hand back a fix
- * line that targets the prefix this CLI actually lives under.
- *
- * Both call sites used to swallow the error whole: `stdio: 'pipe'` captures
- * npm's diagnosis and a bare catch dropped it, so an EACCES on a prefix the
- * user never chose surfaced as one warning line — followed by advice that
- * resolved that same wrong prefix and failed the same way.
- */
-function reportGlobalInstallFailure(err: unknown, prefix: string | null, verb: string): void {
-  warn(`Could not ${verb} the CLI globally.`);
-  for (const line of npmErrorLines(err)) console.log(`  ${D}${line}${X}`);
-  console.log(`  Fix: ${C}${globalInstallAdvice(prefix)}${X}`);
-}
-
-/**
- * Explain a failed dependency install. Shared by setup and update: the install
- * is the same command in both, and so is everything that goes wrong with it.
- *
- * pnpm ran with `stdio: 'inherit'`, so its output is already on screen and none
- * of it reached us — this adds the reading of it the user cannot do, not a
- * diagnosis we do not have.
- */
-function reportInstallFailure(): void {
-  fail('Install failed. Check the output above for details.');
-  for (const hint of installFailureHints()) {
-    console.log(`  ${D}${hint.cause}${X}`);
-    console.log(`  Fix: ${C}${hint.fix}${X}`);
-  }
-}
-
 // ─── Claude Code auto-memory ───────────────────────────────────────────────────
 
 const HOOKS_DIR = path.join(ENGRAM_HOME, 'hooks');
-
-/**
- * Wire Engram into Claude Code as automatic memory: register the MCP server at
- * user scope (loads in every session with no manual approval — a project-scope
- * ~/.mcp.json entry does not) and, for a full local install, install the recall
- * and session-end hooks. Best-effort: a malformed Claude config warns and is
- * skipped rather than aborting setup.
- */
-function setupClaudeCode(config: EngramConfig, engramServer: Record<string, unknown>, withHooks: boolean): void {
-  if (!fs.existsSync(CLAUDE_DIR)) {
-    warn('Claude Code not detected (~/.claude absent) — skipping auto-memory');
-    return;
-  }
-  try {
-    const claudeJson = readJson(CLAUDE_JSON);
-    const servers = claudeJson.mcpServers || (claudeJson.mcpServers = {});
-    servers.engram = engramServer;
-    fs.writeFileSync(CLAUDE_JSON, JSON.stringify(claudeJson, null, 2) + '\n');
-    ok('MCP registered at user scope (~/.claude.json) — loads in every session');
-
-    if (withHooks) {
-      const templateDir = path.join(config.repoPath, 'packages', 'cli', 'templates');
-      const apiBase = `http://localhost:${config.port}`;
-      const settings = readJson(CLAUDE_SETTINGS);
-      for (const h of CLAUDE_HOOKS) {
-        registerHook(settings, h.event, installHookScript(templateDir, HOOKS_DIR, h.file, apiBase), h.timeout);
-      }
-      fs.mkdirSync(CLAUDE_DIR, { recursive: true });
-      fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
-      ok('Recall + session-end hooks installed (~/.engram/hooks/)');
-    } else {
-      warn('npx mode has no local server — skipping recall/session-end hooks');
-    }
-    warn('Restart Claude Code (or run /mcp) to activate.');
-  } catch (err) {
-    warn(`Claude Code auto-memory skipped: ${err instanceof Error ? err.message : err}`);
-  }
-}
 
 // ─── Program ─────────────────────────────────────────────────────────────────
 
@@ -331,6 +168,11 @@ program
   .option('--non-interactive', 'Accepted for script compatibility — setup never prompts')
   .action(async (opts) => {
     console.log(`\n${B}  ⬡  Engram Setup${X}\n`);
+
+    // Before anything is written: a missing git or pnpm used to surface much
+    // later wearing somebody else's error message.
+    step('Checking prerequisites...');
+    if (!checkPrerequisites(!opts.npx)) process.exit(1);
 
     step('Creating ~/.engram/ directory...');
     fs.mkdirSync(path.join(ENGRAM_HOME, 'logs'), { recursive: true });
@@ -370,6 +212,10 @@ program
             stdio: ['ignore', 'pipe', 'pipe'],
             env: nonInteractiveEnv(process.env),
           });
+          // spawnSync reports "git is not installed" in `error`, not in
+          // `status` — reading only status turned an ENOENT into the
+          // uninterpretable "git exited with null".
+          if (clone.error) throw clone.error;
           if (clone.status !== 0) {
             throw new Error(clone.stderr?.toString().trim() || `git exited with ${clone.status}`);
           }
@@ -394,6 +240,8 @@ program
       step('Building all packages...');
       try {
         execSync('pnpm turbo run build', { cwd: config.repoPath, stdio: 'inherit', env: execEnv });
+        // Only now: the stamp certifies a build that ran to completion.
+        recordBuild(config.repoPath, BUILD_STAMP_PATH);
         ok('Build complete');
       } catch {
         fail('Build failed. Check the output above for details.');
@@ -425,27 +273,33 @@ program
       ? { command: 'npx', args: ['-y', '@engram-ai-memory/mcp@latest'], env: engramEnv }
       : { command: 'node', args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')], env: engramEnv };
 
+    // Every user config file setup declined to touch lands here. Setup still
+    // exits 0 — the rest of the install is usable — but the banner has to say
+    // so rather than reporting a success that did not happen.
+    const skipped: string[] = [];
+
     if (opts.mcp !== false) {
       step('Configuring MCP integration...');
-      const mcpPath = path.join(os.homedir(), '.mcp.json');
-      const mcpConfig = readJson(mcpPath);
-      const mcpServers = mcpConfig.mcpServers || (mcpConfig.mcpServers = {});
-      mcpServers.engram = engramServer;
-      fs.writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
-      ok(`MCP configured: ${mcpPath}`);
+      configureMcpClient(opts.source, engramServer, os.homedir(), skipped);
     }
 
     // Claude Code gets the full auto-memory wiring: user-scope MCP so it loads
     // without manual approval, plus recall/session-end hooks for a local install.
     if (opts.claudeHooks !== false) {
       step('Setting up Claude Code auto-memory...');
-      setupClaudeCode(config, engramServer, !opts.npx);
+      setupClaudeCode(config, engramServer, !opts.npx, HOOKS_DIR, CLAUDE_PATHS, skipped);
     }
 
-    console.log(`\n${B}${G}  Engram installed successfully!${X}\n`);
+    if (skipped.length > 0) {
+      console.log(`\n${B}${Y}  Engram installed, with ${skipped.length} step(s) skipped:${X}\n`);
+      for (const item of skipped) console.log(`  ${Y}!${X} ${item}`);
+      console.log();
+    } else {
+      console.log(`\n${B}${G}  Engram installed successfully!${X}\n`);
+    }
     if (opts.npx) {
       console.log(`  Restart your AI client to activate Engram.`);
-      console.log(`  MCP config:           ${D}~/.mcp.json${X}`);
+      console.log(`  MCP clients Engram configures: ${D}${supportedClientList()}${X}`);
     } else {
       console.log(`  Start the server:     ${D}engram start${X}`);
       console.log(`  Check health:         ${D}engram doctor${X}`);
@@ -508,7 +362,26 @@ program
     if (opts.foreground) {
       step(`Starting Engram (foreground) on :${config.port}...`);
       const child = spawn('node', [serverScript], { env, stdio: 'inherit', cwd: config.repoPath });
-      child.on('exit', (code) => process.exit(code ?? 0));
+      // A foreground server used to write no pidfile at all, so `engram status`
+      // reported "stopped" and `engram stop` had nothing to stop while the
+      // server was running in the next terminal. Same exclusive-create guard as
+      // the detached path, and the file goes away with the process.
+      if (child.pid !== undefined) {
+        try {
+          fs.writeFileSync(PID_PATH, String(child.pid), { flag: 'wx' });
+        } catch {
+          fail('Another Engram server is already starting or running (pidfile exists).');
+          try { process.kill(child.pid, 'SIGTERM'); } catch { /* already gone */ }
+          process.exit(1);
+        }
+      }
+      const release = (): void => releasePidFileIfOwnedBy(child.pid);
+      child.on('exit', (code) => { release(); process.exit(code ?? 0); });
+      // Ctrl-C reaches the child too; clean up rather than leaving a pidfile
+      // pointing at a PID the system is free to hand to somebody else.
+      for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+        process.on(signal, () => { release(); process.exit(0); });
+      }
       return;
     }
 
@@ -556,19 +429,38 @@ program
 
 // ─── stop ────────────────────────────────────────────────────────────────────
 
+/**
+ * Signal the server and wait for it to actually go, verifying first that the
+ * pidfile still points at OUR process. Shared by `stop` and `update --restart`.
+ */
+async function stopRunningServer(pid: number, host: string, port: number): Promise<boolean> {
+  const outcome = await stopProcess(pid, port, {
+    alive: pidAlive,
+    portOwner: portListenerPid,
+    portOpen: () => isPortOpen(host, port),
+    kill: (target, signal) => process.kill(target, signal),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  });
+
+  if (outcome.status === 'stopped') releasePidFileIfOwnedBy(pid);
+
+  const described = describeStopOutcome(outcome);
+  (described.ok ? ok : fail)(described.message);
+  for (const line of described.detail) console.log(`  ${D}${line}${X}`);
+  return described.ok;
+}
+
 program
   .command('stop')
   .description('Stop the running Engram server')
-  .action(() => {
+  .action(async () => {
+    const config = loadConfig();
     const { running, pid } = isServerRunning();
     if (!running) { warn('Server is not running.'); return; }
-    try {
-      process.kill(pid!, 'SIGTERM');
-      fs.unlinkSync(PID_PATH);
-      ok(`Server stopped (PID ${pid})`);
-    } catch (err) {
-      fail(`Failed to stop: ${err instanceof Error ? err.message : err}`);
-    }
+
+    // Exit code follows reality: the old command printed "Server stopped" and
+    // exited 0 the instant it had sent a signal, whether or not anything died.
+    if (!await stopRunningServer(pid!, config.host, config.port)) process.exit(1);
   });
 
 // ─── doctor ──────────────────────────────────────────────────────────────────
@@ -591,9 +483,16 @@ program
     else { fail('Config not found — run: engram setup'); issues++; }
 
     const config = loadConfig();
-    const serverScript = path.join(config.repoPath, 'apps', 'server', 'dist', 'index.js');
-    if (fs.existsSync(serverScript)) { ok(`Server built: ${config.repoPath}`); }
-    else { fail('Server not built — run: engram setup'); issues++; }
+    const build = currentBuildStatus(config.repoPath, BUILD_STAMP_PATH);
+    if (build.current) { ok(`Build current: ${config.repoPath}`); }
+    else {
+      // A repository that is up to date but not built is exactly what used to
+      // read as "Already up to date." from `engram update`.
+      fail('The checkout is not built, or was built from a different revision:');
+      detail(build.reasons);
+      console.log(`  Fix: ${C}engram update${X} ${D}(or ${C}engram setup${X}${D} if the repository is missing)${X}`);
+      issues++;
+    }
 
     if (fs.existsSync(config.dbPath)) {
       ok(`Database: ${config.dbPath} (${(fs.statSync(config.dbPath).size / 1024).toFixed(0)} KB)`);
@@ -609,29 +508,37 @@ program
       } catch { fail(`Server running but API not responding on :${config.port}`); issues++; }
     } else { warn('Server not running — start with: engram start'); }
 
-    const globalMcpPath = path.join(os.homedir(), '.mcp.json');
-    const legacyMcpPath = path.join(os.homedir(), '.claude', 'settings.json');
-    if (fs.existsSync(globalMcpPath)) {
-      try {
-        const mc = JSON.parse(fs.readFileSync(globalMcpPath, 'utf8'));
-        if (mc.mcpServers?.engram) { ok('MCP: configured in ~/.mcp.json'); }
-        else { warn('MCP: ~/.mcp.json exists but engram not configured — run: engram setup'); }
-      } catch { warn('MCP: ~/.mcp.json parse error'); }
-    } else { warn('MCP: ~/.mcp.json not found — run: engram setup'); }
-    if (fs.existsSync(legacyMcpPath)) {
-      try {
-        const mc = JSON.parse(fs.readFileSync(legacyMcpPath, 'utf8'));
-        if (mc.mcpServers?.engram) { warn('Legacy: engram found in ~/.claude/settings.json — migrate to ~/.mcp.json'); }
-      } catch {}
+    // Report the client config files that are actually loaded. ~/.mcp.json was
+    // reported as "MCP: configured" for a year and is read by nothing — Claude
+    // Code loads `.mcp.json` per PROJECT and user-scope servers from
+    // ~/.claude.json, and other clients have their own files.
+    let anyClientConfigured = false;
+    for (const id of KNOWN_CLIENT_IDS) {
+      const target = resolveMcpClient(id, os.homedir());
+      if (target.kind !== 'file' || !fs.existsSync(target.path)) continue;
+      if (readJsonOrEmpty(target.path).mcpServers?.engram) {
+        ok(`MCP: registered for ${target.label} (${target.path})`);
+        anyClientConfigured = true;
+      }
+    }
+    if (!anyClientConfigured) {
+      warn(`MCP: not registered for any client Engram knows (${supportedClientList()}) — run: engram setup --source <client>`);
+      issues++;
     }
 
-    // Claude Code auto-memory: user-scope MCP + the two hooks.
-    if (fs.existsSync(CLAUDE_DIR)) {
-      const userMcp = readJson(CLAUDE_JSON).mcpServers?.engram;
-      if (userMcp) { ok('Claude Code: MCP at user scope (auto-loads)'); }
-      else { warn('Claude Code: MCP not at user scope — run: engram setup'); }
+    const legacyGlobalMcp = path.join(os.homedir(), LEGACY_GLOBAL_MCP_FILE);
+    if (fs.existsSync(legacyGlobalMcp) && readJsonOrEmpty(legacyGlobalMcp).mcpServers?.engram) {
+      warn(`Legacy: ${legacyGlobalMcp} holds an engram entry, but no MCP client reads that file — it can be removed`);
+    }
+    const legacyClaudeSettings = path.join(os.homedir(), '.claude', 'settings.json');
+    if (fs.existsSync(legacyClaudeSettings) && readJsonOrEmpty(legacyClaudeSettings).mcpServers?.engram) {
+      warn('Legacy: engram found in ~/.claude/settings.json — Claude Code reads MCP servers from ~/.claude.json');
+    }
 
-      const settings = readJson(CLAUDE_SETTINGS);
+    // Claude Code auto-memory: the two hooks (its user-scope MCP entry is
+    // covered by the client loop above, which reads the same ~/.claude.json).
+    if (fs.existsSync(CLAUDE_DIR)) {
+      const settings = readJsonOrEmpty(CLAUDE_SETTINGS);
       for (const h of CLAUDE_HOOKS) {
         // Find the registered command for this event (by script basename, so a
         // custom install location still counts), then confirm the file exists.
@@ -648,6 +555,9 @@ program
 
     console.log();
     console.log(issues === 0 ? `${G}  All checks passed.${X}\n` : `${Y}  ${issues} issue(s) found.${X}\n`);
+    // The exit code has to agree with the report: doctor exited 0 no matter
+    // what it found, so no script could ever act on it.
+    if (issues > 0) process.exitCode = 1;
   });
 
 // ─── status ──────────────────────────────────────────────────────────────────
@@ -700,32 +610,20 @@ configCmd.command('show').description('Show current config').action(() => {
 });
 configCmd.command('set <key> <value>').description('Set a config value').action((key: string, value: string) => {
   const config = loadConfig();
-  if (!(key in config)) { fail(`Unknown key: ${key}\n  Valid: ${Object.keys(config).join(', ')}`); process.exit(1); }
-
-  let parsed: string | number | null;
-  if (key === 'port') {
-    // Previously an unparseable port became NaN, which JSON.stringify writes as
-    // null — loadConfig then spread null over the default, so every later
-    // command talked to http://127.0.0.1:null.
-    const port = Number(value);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      fail(`Invalid port: ${value} (expected an integer between 1 and 65535)`);
-      process.exit(1);
-    }
-    parsed = port;
-  } else if (key === 'namespaceMode') {
-    if (!NAMESPACE_MODES.includes(value as NamespaceModeName)) {
-      fail(`Invalid namespaceMode: ${value} (expected none, filter, or isolated)`);
-      process.exit(1);
-    }
-    parsed = value;
-  } else {
-    parsed = value === 'null' ? null : value;
+  // An explicit key list, not `key in config`: `in` walks the prototype chain,
+  // so `engram configure set constructor x` used to pass and get written to the
+  // file — and it answered false for optional keys the config did not yet have,
+  // so `configure set syncInterval 60000` was rejected as unknown.
+  if (!isConfigKey(key)) {
+    fail(`Unknown key: ${key}\n  Valid: ${CONFIG_KEYS.join(', ')}`);
+    process.exit(1);
   }
 
-  (config as unknown as Record<string, unknown>)[key] = parsed;
-  saveConfig(config);
-  ok(`${key} = ${parsed}`);
+  const parsed = parseConfigValue(key, value);
+  if (!parsed.ok) { fail(parsed.error); process.exit(1); }
+
+  saveConfig({ ...config, [key]: parsed.value });
+  ok(`${key} = ${parsed.value}`);
 });
 configCmd.command('path').description('Print config file path').action(() => console.log(CONFIG_PATH));
 configCmd.action(() => {
@@ -782,12 +680,14 @@ cloudCmd
     }
     const { redactSyncUrl, SyncEngine } = await import('@engram-ai-memory/core');
 
-    process.env['ENGRAM_DB_PATH'] = config.dbPath || undefined;
+    // Never `= config.dbPath || undefined`: assigning undefined to process.env
+    // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
+    applyDbPathEnv(process.env, config.dbPath);
     if (config.syncUrl.includes('sslmode=disable')) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
-    const engine = new SyncEngine({ syncUrl: config.syncUrl, mode: 'manual' });
+    const engine = new SyncEngine(syncEngineOptions({ syncUrl: config.syncUrl }));
     const status = engine.status();
     await engine.dispose();
 
@@ -814,13 +714,15 @@ cloudCmd
       process.exit(1);
     }
 
-    process.env['ENGRAM_DB_PATH'] = config.dbPath || undefined;
+    // Never `= config.dbPath || undefined`: assigning undefined to process.env
+    // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
+    applyDbPathEnv(process.env, config.dbPath);
     if (config.syncUrl.includes('sslmode=disable')) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
     const { SyncEngine } = await import('@engram-ai-memory/core');
-    const engine = new SyncEngine({ syncUrl: config.syncUrl, mode: 'manual' });
+    const engine = new SyncEngine(syncEngineOptions({ syncUrl: config.syncUrl }));
     try {
       console.log('Syncing…');
       const result = await engine.sync();
@@ -849,7 +751,9 @@ cloudCmd
     }
 
     const { getDeviceId } = await import('@engram-ai-memory/core');
-    process.env['ENGRAM_DB_PATH'] = config.dbPath || undefined;
+    // Never `= config.dbPath || undefined`: assigning undefined to process.env
+    // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
+    applyDbPathEnv(process.env, config.dbPath);
 
     const deviceId = getDeviceId();
     const deviceName = config.deviceName || os.hostname();
@@ -859,9 +763,11 @@ cloudCmd
   });
 
 cloudCmd
-  .command('encrypt <passphrase>')
-  .description('Initialize end-to-end encryption for cloud sync')
-  .action(async (passphrase: string) => {
+  // The passphrase is now optional: passing it on argv puts the key that
+  // decrypts every synced memory into the shell history and into `ps`.
+  .command('encrypt [passphrase]')
+  .description('Initialize end-to-end encryption for cloud sync (prompts if no passphrase is given)')
+  .action(async (passphraseArg: string | undefined) => {
     const config = loadConfig();
     if (!config.syncUrl) {
       console.error('Cloud sync is not configured. Run: engram cloud connect <postgres-url>');
@@ -870,6 +776,22 @@ cloudCmd
 
     if (config.syncUrl.includes('sslmode=disable')) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+    }
+
+    const source = choosePassphraseSource(passphraseArg, process.env, Boolean(process.stdin.isTTY));
+    if (source.kind === 'unavailable') {
+      console.error('No passphrase given, and there is no terminal to ask on.');
+      console.error(`Pass it in the environment instead: ${PASSPHRASE_ENV}='…' engram cloud encrypt`);
+      process.exit(1);
+    }
+    for (const line of passphraseWarning(source)) warn(line);
+
+    const passphrase = source.kind === 'prompt'
+      ? await readHiddenLine('Passphrase: ', process.stdin, process.stdout)
+      : source.value;
+    if (passphrase.length === 0) {
+      console.error('An empty passphrase would encrypt nothing. Aborted.');
+      process.exit(1);
     }
 
     const { createPgSyncConnection, PgSyncClient, EncryptionManager, EncryptionError } =
@@ -884,14 +806,9 @@ cloudCmd
 
       console.log('🔐 Encryption initialized successfully.');
       console.log('');
-      console.log('To enable encryption on every sync, set the environment variable:');
-      console.log(`  export ENGRAM_SYNC_ENCRYPTION_KEY="${passphrase}"`);
-      console.log('');
-      console.log('Or pass it when starting the server:');
-      console.log(`  ENGRAM_SYNC_ENCRYPTION_KEY="${passphrase}" engram start`);
-      console.log('');
-      console.log('⚠️  Use the same passphrase on all devices.');
-      console.log('⚠️  If you lose the passphrase, encrypted data cannot be recovered.');
+      // The passphrase itself is never echoed — printing it put it in the
+      // terminal scrollback of a command that already had it in shell history.
+      for (const line of encryptionInstructions()) console.log(line);
     } catch (err) {
       if (err instanceof EncryptionError && err.code === 'WRONG_PASSPHRASE') {
         console.error('❌ This database already has encryption configured with a different passphrase.');
@@ -976,20 +893,32 @@ program
     }
 
     const sync = syncRepo(repoPath, { force: opts.force === true, log: { step, warn } });
+    let repositoryMoved = true;
 
     if (sync.status === 'up-to-date') {
-      ok('Already up to date.');
-      console.log();
-      return;
-    }
-
-    if (sync.status !== 'updated') {
+      // Git having nothing to fetch is not the same as the machine being up to
+      // date. An update that fast-forwarded and then died in `pnpm install`
+      // leaves exactly this state, and the old early return answered
+      // "✓ Already up to date." with apps/server/dist missing or built from the
+      // previous commit — `engram start` then ran the old server or failed with
+      // "Server not found", and nothing said a rebuild was what was missing.
+      const build = currentBuildStatus(repoPath, BUILD_STAMP_PATH);
+      if (build.current) {
+        ok('Already up to date.');
+        console.log();
+        return;
+      }
+      repositoryMoved = false;
+      warn('The repository is up to date, but the build is not:');
+      detail(build.reasons);
+      step('Rebuilding...');
+    } else if (sync.status !== 'updated') {
       reportSyncFailure(sync, repoPath);
       console.log();
       process.exit(1);
+    } else {
+      ok('Repository updated');
     }
-
-    ok('Repository updated');
 
     const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
 
@@ -1005,9 +934,14 @@ program
     step('Rebuilding all packages...');
     try {
       execSync('pnpm turbo run build', { cwd: repoPath, stdio: 'inherit', env: execEnv });
+      // Written only here, after a build that ran to completion: the stamp is
+      // what lets the next run tell a finished update from an interrupted one.
+      recordBuild(repoPath, BUILD_STAMP_PATH);
       ok('Build complete');
     } catch {
       fail('Build failed. Check the output above.');
+      console.log(`  ${D}The checkout has moved but is not built — re-run ${C}engram update${X}${D} once the cause is fixed,${X}`);
+      console.log(`  ${D}or start over with ${C}engram setup${X}${D}.${X}`);
       process.exit(1);
     }
 
@@ -1031,12 +965,16 @@ program
       const { running, pid } = isServerRunning();
       if (running) {
         step('Restarting server...');
-        try {
-          process.kill(pid!, 'SIGTERM');
-          fs.unlinkSync(PID_PATH);
-        } catch {}
-
-        await new Promise((r) => setTimeout(r, 1000));
+        // Same verified, waited stop the `stop` command uses: the old code sent
+        // SIGTERM, unlinked the pidfile and slept a fixed second, so a server
+        // still holding the port met its own replacement on the way out — and a
+        // stale pidfile got an unrelated process signalled.
+        const stopped = await stopRunningServer(pid!, config.host, config.port);
+        if (!stopped) {
+          // Starting a second server against the same database and port while
+          // the first is still alive is worse than not restarting at all.
+          degraded.push('the old server did not stop — the new one was not started');
+        }
 
         const serverScript = path.join(repoPath, 'apps', 'server', 'dist', 'index.js');
         const env = {
@@ -1055,29 +993,39 @@ program
           ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
           ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
         };
-        fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
-        const logFd = fs.openSync(LOG_PATH, 'a');
-        const child = spawn('node', [serverScript], {
-          env,
-          detached: true,
-          stdio: ['ignore', logFd, logFd],
-          cwd: repoPath,
-        });
-        child.unref();
-        fs.writeFileSync(PID_PATH, String(child.pid));
+        if (stopped) {
+          fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
+          const logFd = fs.openSync(LOG_PATH, 'a');
+          const child = spawn('node', [serverScript], {
+            env,
+            detached: true,
+            stdio: ['ignore', logFd, logFd],
+            cwd: repoPath,
+          });
+          child.unref();
+          // Exclusive create, like `engram start`: a concurrent start would
+          // otherwise have its pidfile silently overwritten here.
+          try {
+            fs.writeFileSync(PID_PATH, String(child.pid), { flag: 'wx' });
+          } catch {
+            warn('Another `engram start` claimed the pidfile — leaving the restarted server unmanaged.');
+            if (child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch { /* already gone */ } }
+            degraded.push('the server was not restarted — another start was already in progress');
+          }
 
-        const result = await awaitServerHealthy(child, config.host, config.port, { attempts: 20 });
+          const result = await awaitServerHealthy(child, config.host, config.port, { attempts: 20 });
 
-        if (result.healthy) {
-          ok(`Server restarted (PID ${child.pid})`);
-        } else {
-          releasePidFileIfOwnedBy(child.pid);
-          if (!result.exited && child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
-          warn(result.exited
-            ? `Server exited during restart${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''}. Check logs:`
-            : 'Server may not have restarted cleanly. Check logs:');
-          console.log(`  ${D}cat ${LOG_PATH}${X}`);
-          degraded.push('the server did not come back up — Engram is not answering');
+          if (result.healthy) {
+            ok(`Server restarted (PID ${child.pid})`);
+          } else {
+            releasePidFileIfOwnedBy(child.pid);
+            if (!result.exited && child.pid) { try { process.kill(child.pid, 'SIGTERM'); } catch {} }
+            warn(result.exited
+              ? `Server exited during restart${result.exitCode !== null ? ` (exit code ${result.exitCode})` : ''}. Check logs:`
+              : 'Server may not have restarted cleanly. Check logs:');
+            console.log(`  ${D}cat ${LOG_PATH}${X}`);
+            degraded.push('the server did not come back up — Engram is not answering');
+          }
         }
       } else {
         // Not degraded — a stopped server is a choice, not a failure. It used
@@ -1097,7 +1045,11 @@ program
       process.exit(1);
     }
 
-    console.log(`\n${B}${G}  Engram updated${newRev ? ` to ${newRev}` : ''}${X}\n`);
+    console.log(repositoryMoved
+      ? `\n${B}${G}  Engram updated${newRev ? ` to ${newRev}` : ''}${X}\n`
+      // Nothing was pulled — this run existed to finish a build that had not
+      // completed, and saying "updated" would misdescribe it.
+      : `\n${B}${G}  Engram rebuilt${newRev ? ` at ${newRev}` : ''}${X}\n`);
   });
 
 // ─── store ───────────────────────────────────────────────────────────────────

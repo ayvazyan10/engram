@@ -3,12 +3,26 @@ import { describe, it, expect } from 'vitest';
 import {
   CLI_PACKAGE,
   derivePrefixFromModulePath,
+  derivePrefixFromInstalledLink,
+  findPackageRoot,
   currentGlobalPrefix,
   globalInstallArgs,
   globalInstallCommand,
   globalInstallAdvice,
   npmErrorLines,
 } from '../globalInstall.js';
+import type { InstallProbe } from '../globalInstall.js';
+
+/**
+ * A fake filesystem for the symlink-aware lookups: `links` maps a path to what
+ * it really resolves to, `packages` lists directories holding a package.json.
+ */
+function probeOf(links: Record<string, string>, packages: readonly string[] = []): InstallProbe {
+  return {
+    realpath: (p) => links[p] ?? null,
+    hasPackageJson: (dir) => packages.includes(dir),
+  };
+}
 
 // ─── Prefix derivation (pure — no filesystem) ────────────────────────────────
 
@@ -76,12 +90,149 @@ describe('derivePrefixFromModulePath', () => {
   });
 });
 
+// ─── The install boundary when the package directory is a SYMLINK ────────────
+
+/**
+ * `npm install -g .` — which is what `engram setup` and `engram update` run —
+ * does not copy the package: it symlinks
+ * `<prefix>/lib/node_modules/@engram-ai-memory/cli` at the repo checkout. Node
+ * resolves module paths through symlinks, so `import.meta.url` names the REPO,
+ * which has no node_modules segment and yields no prefix at all. The link's own
+ * location is the only thing left that names the prefix, and the bin the
+ * process was started from sits beside it.
+ */
+describe('findPackageRoot', () => {
+  it('finds the directory holding package.json', () => {
+    const root = findPackageRoot('/repo/packages/cli/dist/globalInstall.js', (dir) => dir === '/repo/packages/cli');
+    expect(root).toBe('/repo/packages/cli');
+  });
+
+  it('finds it from a source tree as well as a build output', () => {
+    const root = findPackageRoot('/repo/packages/cli/src/globalInstall.ts', (dir) => dir === '/repo/packages/cli');
+    expect(root).toBe('/repo/packages/cli');
+  });
+
+  it('takes the NEAREST package.json, not an outer workspace one', () => {
+    const has = (dir: string): boolean => dir === '/repo' || dir === '/repo/packages/cli';
+    expect(findPackageRoot('/repo/packages/cli/dist/globalInstall.js', has)).toBe('/repo/packages/cli');
+  });
+
+  it('walks up a Windows path too', () => {
+    const root = findPackageRoot('C:\\repo\\packages\\cli\\dist\\globalInstall.js', (dir) => dir === 'C:\\repo\\packages\\cli');
+    expect(root).toBe('C:\\repo\\packages\\cli');
+  });
+
+  it('is null when nothing above the file is a package', () => {
+    expect(findPackageRoot('/repo/packages/cli/dist/globalInstall.js', () => false)).toBeNull();
+  });
+});
+
+describe('derivePrefixFromInstalledLink', () => {
+  const repoPackage = '/home/me/.engram/repo/packages/cli';
+  const installed = `/home/me/.npm-global/lib/node_modules/${CLI_PACKAGE}`;
+
+  it('recovers the prefix from the bin beside a symlinked global install', () => {
+    const probe = probeOf({ [repoPackage]: repoPackage, [installed]: repoPackage });
+    expect(derivePrefixFromInstalledLink('/home/me/.npm-global/bin/engram', repoPackage, probe)).toBe(
+      '/home/me/.npm-global',
+    );
+  });
+
+  it('recovers a system prefix the same way', () => {
+    const sysInstalled = `/usr/local/lib/node_modules/${CLI_PACKAGE}`;
+    const probe = probeOf({ [repoPackage]: repoPackage, [sysInstalled]: repoPackage });
+    expect(derivePrefixFromInstalledLink('/usr/local/bin/engram', repoPackage, probe)).toBe('/usr/local');
+  });
+
+  it('recovers the Windows prefix, where the shim sits directly in the prefix', () => {
+    const winPackage = 'C:\\repo\\packages\\cli';
+    const winInstalled = `C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\${CLI_PACKAGE.replace('/', '\\')}`;
+    const probe = probeOf({ [winPackage]: winPackage, [winInstalled]: winPackage });
+    expect(derivePrefixFromInstalledLink('C:\\Users\\me\\AppData\\Roaming\\npm\\engram.cmd', winPackage, probe)).toBe(
+      'C:\\Users\\me\\AppData\\Roaming\\npm',
+    );
+  });
+
+  it('is null when the global install points at a DIFFERENT checkout', () => {
+    // Another clone linked into the same prefix must not be mistaken for ours.
+    const probe = probeOf({ [repoPackage]: repoPackage, [installed]: '/home/me/other-clone/packages/cli' });
+    expect(derivePrefixFromInstalledLink('/home/me/.npm-global/bin/engram', repoPackage, probe)).toBeNull();
+  });
+
+  it('is null when nothing is installed under the bin\'s prefix', () => {
+    const probe = probeOf({ [repoPackage]: repoPackage });
+    expect(derivePrefixFromInstalledLink('/home/me/.npm-global/bin/engram', repoPackage, probe)).toBeNull();
+  });
+
+  it('is null when the package root itself cannot be resolved', () => {
+    const probe = probeOf({ [installed]: repoPackage });
+    expect(derivePrefixFromInstalledLink('/home/me/.npm-global/bin/engram', repoPackage, probe)).toBeNull();
+  });
+
+  it('does not mistake a workspace root for an npm prefix', () => {
+    // A pnpm workspace links <repo>/node_modules/@engram-ai-memory/cli at
+    // packages/cli, which has the Windows install shape. A prefix never holds
+    // a package.json; a workspace root always does.
+    const workspaceLink = `/repo/node_modules/${CLI_PACKAGE}`;
+    const probe = probeOf({ '/repo/packages/cli': '/repo/packages/cli', [workspaceLink]: '/repo/packages/cli' }, ['/repo']);
+    expect(derivePrefixFromInstalledLink('/repo/engram.js', '/repo/packages/cli', probe)).toBeNull();
+  });
+
+  it('only treats the parent of a directory literally named bin as a POSIX prefix', () => {
+    const odd = `/home/me/scripts/lib/node_modules/${CLI_PACKAGE}`;
+    const probe = probeOf({ [repoPackage]: repoPackage, [odd]: repoPackage });
+    expect(derivePrefixFromInstalledLink('/home/me/scripts/tools/engram', repoPackage, probe)).toBeNull();
+  });
+});
+
 describe('currentGlobalPrefix', () => {
-  it('is null while the tests run from the repo checkout', () => {
-    // The suite imports src/globalInstall.ts straight out of the working tree,
-    // which is exactly the "not a global install" case — null means the call
-    // sites run `npm install -g .` with no --prefix, as they always did.
-    expect(currentGlobalPrefix()).toBeNull();
+  const repoPackage = '/home/me/.engram/repo/packages/cli';
+  const moduleUrl = `file://${repoPackage}/dist/globalInstall.js`;
+
+  it('recovers the prefix after `npm install -g .`, where the module path names the repo', () => {
+    // The regression that shipped: `engram update` is ALWAYS in this state
+    // after the first `engram setup`, so the prefix fix never applied to the
+    // command it was written for and the EACCES it fixed came straight back.
+    const installed = `/home/me/.npm-global/lib/node_modules/${CLI_PACKAGE}`;
+    const probe = probeOf(
+      { [`${repoPackage}/dist/globalInstall.js`]: `${repoPackage}/dist/globalInstall.js`, [repoPackage]: repoPackage, [installed]: repoPackage },
+      [repoPackage],
+    );
+    expect(currentGlobalPrefix(moduleUrl, '/home/me/.npm-global/bin/engram', probe)).toBe('/home/me/.npm-global');
+  });
+
+  it('and then BOTH the executed command and the printed advice carry --prefix', () => {
+    const installed = `/home/me/.npm-global/lib/node_modules/${CLI_PACKAGE}`;
+    const probe = probeOf(
+      { [`${repoPackage}/dist/globalInstall.js`]: `${repoPackage}/dist/globalInstall.js`, [repoPackage]: repoPackage, [installed]: repoPackage },
+      [repoPackage],
+    );
+    const prefix = currentGlobalPrefix(moduleUrl, '/home/me/.npm-global/bin/engram', probe);
+    expect(globalInstallCommand(prefix)).toBe('npm install -g --prefix /home/me/.npm-global .');
+    expect(globalInstallAdvice(prefix)).toBe(`npm install -g --prefix /home/me/.npm-global ${CLI_PACKAGE}@latest`);
+  });
+
+  it('still reads a registry install straight off the module path', () => {
+    const registryModule = `/usr/lib/node_modules/${CLI_PACKAGE}/dist/globalInstall.js`;
+    const probe = probeOf({ [registryModule]: registryModule });
+    expect(currentGlobalPrefix(`file://${registryModule}`, '/usr/bin/engram', probe)).toBe('/usr');
+  });
+
+  it('is null for a repo checkout that no global install points at', () => {
+    // Not "a checkout is never a global install" — that assumption is what
+    // broke `engram update`. It is null because no bin beside a matching
+    // installed package could be found.
+    const probe = probeOf({ [`${repoPackage}/dist/globalInstall.js`]: `${repoPackage}/dist/globalInstall.js`, [repoPackage]: repoPackage }, [repoPackage]);
+    expect(currentGlobalPrefix(moduleUrl, '/usr/bin/node', probe)).toBeNull();
+  });
+
+  it('is null when the process has no argv[1] to work from', () => {
+    const probe = probeOf({ [repoPackage]: repoPackage }, [repoPackage]);
+    expect(currentGlobalPrefix(moduleUrl, undefined, probe)).toBeNull();
+  });
+
+  it('runs against the real filesystem without throwing', () => {
+    expect(() => currentGlobalPrefix()).not.toThrow();
   });
 });
 

@@ -88,6 +88,10 @@ describe('contradiction tools', () => {
 });
 
 describe('tag tools', () => {
+  // These previously called tag_memory as { id, tags: [...] } while the tool
+  // takes { memoryId, tag }, and asserted only `typeof result === 'string'` —
+  // which the resulting VALIDATION ERROR also satisfies. The tag path was
+  // never actually exercised.
   it('tags a memory and lists it back', async () => {
     const stored = await call('store_memory', {
       content: 'Tagging target memory for MCP tests',
@@ -95,11 +99,28 @@ describe('tag tools', () => {
     });
     const id = (JSON.parse(stored) as { id: string }).id;
 
-    const tagged = await call('tag_memory', { id, tags: ['project:engram'], action: 'add' });
-    expect(typeof tagged).toBe('string');
+    const tagged = JSON.parse(await call('tag_memory', { memoryId: id, tag: 'project:engram', action: 'add' })) as {
+      id: string; tags: string[]; message: string;
+    };
+    expect(tagged.id).toBe(id);
+    expect(tagged.tags).toContain('project:engram');
 
-    const tags = await call('list_tags', {});
-    expect(typeof tags).toBe('string');
+    const byTag = JSON.parse(await call('list_tags', { tag: 'project:engram' })) as {
+      tag: string; count: number; memories: Array<{ id: string }>;
+    };
+    expect(byTag.count).toBeGreaterThan(0);
+    expect(byTag.memories.map((m) => m.id)).toContain(id);
+  });
+
+  it('removes a tag again', async () => {
+    const stored = await call('store_memory', { content: 'Untagging target memory for MCP tests', type: 'semantic' });
+    const id = (JSON.parse(stored) as { id: string }).id;
+
+    await call('tag_memory', { memoryId: id, tag: 'temporary', action: 'add' });
+    const removed = JSON.parse(await call('tag_memory', { memoryId: id, tag: 'temporary', action: 'remove' })) as {
+      tags: string[];
+    };
+    expect(removed.tags).not.toContain('temporary');
   });
 });
 

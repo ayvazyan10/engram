@@ -1,6 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import net from 'net';
 import http from 'http';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 
 import {
@@ -99,6 +102,31 @@ describe('portListenerPid', () => {
     const owner = portListenerPid(port);
     expect(owner === process.pid || owner === null).toBe(true);
     await close();
+  });
+
+  /**
+   * The port reaches this function from ~/.engram/config.json, which
+   * `loadConfig` never validated, and it used to be interpolated into a
+   * command string handed to a shell. A config holding
+   * `"port": "1; touch /tmp/pwned #"` ran the injected command on every
+   * `engram status`.
+   */
+  it('never lets a config value reach a shell', () => {
+    const marker = path.join(os.tmpdir(), `engram-portinject-${process.pid}-${Date.now()}`);
+    try {
+      // Exactly the shape a hand-edited config can carry.
+      expect(portListenerPid(`1; touch ${marker} #` as unknown as number)).toBeNull();
+      expect(portListenerPid(`$(touch ${marker})` as unknown as number)).toBeNull();
+      expect(fs.existsSync(marker), 'the injected command must never have run').toBe(false);
+    } finally {
+      try { fs.unlinkSync(marker); } catch { /* never created — the point of the test */ }
+    }
+  });
+
+  it('refuses a port that is not a port instead of asking the system about it', () => {
+    for (const bad of [0, -1, 65536, 1.5, NaN]) {
+      expect(portListenerPid(bad), String(bad)).toBeNull();
+    }
   });
 });
 

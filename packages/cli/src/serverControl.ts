@@ -6,7 +6,7 @@
  */
 
 import net from 'net';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
 
 /** 0.0.0.0 / :: are bind addresses, not connectable — map them to loopback. */
@@ -44,13 +44,25 @@ export function isPortOpen(host: string, port: number, timeoutMs = 1000): Promis
   });
 }
 
+/** A value we are willing to ask the operating system about. */
+export function isValidPort(port: unknown): port is number {
+  return Number.isInteger(port) && (port as number) >= 1 && (port as number) <= 65535;
+}
+
 /**
  * PID of the process listening on a TCP port, or null when it can't be
  * determined (nothing listening, or `lsof` unavailable). macOS + Linux.
+ *
+ * `execFileSync` with an argv array, never `execSync` with a command string.
+ * The port arrives from ~/.engram/config.json, and a config holding
+ * `"port": "1; touch /tmp/pwned #"` used to run that command through a shell on
+ * every `engram status`. The range check is the second half of the same fix:
+ * nothing that is not a port is worth asking about.
  */
 export function portListenerPid(port: number): number | null {
+  if (!isValidPort(port)) return null;
   try {
-    const out = execSync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`, {
+    const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();

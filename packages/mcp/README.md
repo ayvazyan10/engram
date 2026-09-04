@@ -22,7 +22,17 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 
 ## Setup
 
-Add to `~/.mcp.json` (global) or `.mcp.json` (per-project):
+Add the block below to the config file your client reads — `~/.mcp.json` is not
+one of them:
+
+| Client | Config file |
+|---|---|
+| Claude Code (every session) | `~/.claude.json` |
+| Claude Code (one project) | `.mcp.json` in the project directory |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+
+`engram setup --source <claude-code\|cursor\|windsurf>` writes the right one for you.
 
 ```json
 {

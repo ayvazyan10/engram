@@ -6,17 +6,24 @@
  * (Claude Code, Cursor, Windsurf, Cline, and any MCP-compatible client).
  *
  * Run: node dist/server.js
- * Or add to ~/.mcp.json:
+ * Or register it with a client — `~/.claude.json` for Claude Code at user
+ * scope, `.mcp.json` in a project root for project scope, `~/.cursor/mcp.json`,
+ * `~/.codeium/windsurf/mcp_config.json`. NOT `~/.mcp.json`: nothing reads it.
+ * `engram setup --source <client>` writes the right one.
  *   { "mcpServers": { "engram": { "command": "npx", "args": ["-y", "@engram-ai-memory/mcp@latest"] } } }
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
-import type { NamespaceMode } from '@engram-ai-memory/core';
+import type { DecayPolicyConfig } from '@engram-ai-memory/core';
 import { z } from 'zod';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { partitionByExistence, forgetReport, hasMissingIds } from './forget.js';
+import { resolveNamespaceSettings } from './namespaceEnv.js';
+import { readSyncSettings, syncEngineConfig } from './syncSettings.js';
 
 // Report the real release version instead of hardcoding it. This package has no
 // "type":"module", so tsc emits CommonJS here and __dirname is available;
@@ -26,36 +33,68 @@ const VERSION: string = (
 ).version;
 
 const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
-// `||`, not `??`: hosts that template an unset optional config field — the
-// Claude Desktop extension among them — pass an empty string rather than
-// omitting the variable, and `??` let that empty string through to the
-// validation below, so an untouched optional field killed the server.
-const namespaceMode = (
-  process.env['ENGRAM_NAMESPACE_MODE'] || (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
-) as NamespaceMode;
-if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
-  throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
+// Shared with the `engram-store-session` entrypoint (store-session.ts): both
+// write into the same database and must agree on which namespace that is.
+const { namespaceMode, namespace } = resolveNamespaceSettings(process.env);
+
+/**
+ * Where memories go when the host gave us no path.
+ *
+ * Same trap as ENGRAM_NAMESPACE_MODE above, with a far worse ending: hosts
+ * that template an unset optional config field pass an EMPTY STRING rather
+ * than omitting the variable, and better-sqlite3 reads '' as an ANONYMOUS
+ * TEMPORARY DATABASE that is deleted when the connection closes. The Claude
+ * Desktop extension's `db_path` defaults to "" and tells the user to leave it
+ * empty, so every install that followed the instructions reported memories as
+ * stored and threw all of them away on exit, with no .db file anywhere.
+ *
+ * The default is the one the manifest advertises (~/.engram/engram.db), not
+ * `process.cwd()/engram.db`: under Claude Desktop the cwd belongs to the app,
+ * so a database there is one nobody chose and nobody can find.
+ *
+ * A configured path is passed through byte-for-byte — only blank means unset.
+ */
+export function resolveDbPath(raw: string | undefined, home: string = os.homedir()): string {
+  if (raw && raw.trim().length > 0) return raw;
+  return path.join(home, '.engram', 'engram.db');
 }
 
+/**
+ * Create the directory the database file lives in. better-sqlite3 does not,
+ * and a missing parent surfaces as a bare SQLITE_CANTOPEN that names neither
+ * the path nor the cause.
+ */
+function ensureDbDirectory(dbPath: string): void {
+  const dir = path.dirname(dbPath);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Cannot create the Engram database directory ${dir}: ${reason}`);
+  }
+}
+
+const dbPath = resolveDbPath(process.env['ENGRAM_DB_PATH']);
+ensureDbDirectory(dbPath);
+// Write the resolved path back: getDeviceId(), the sync engine and any later
+// getDatabase() call read ENGRAM_DB_PATH from the environment directly, and
+// leaving '' in it hands every one of them the same temp-database trap.
+process.env['ENGRAM_DB_PATH'] = dbPath;
+
 const brain = new NeuralBrain({
-  dbPath: process.env['ENGRAM_DB_PATH'],
+  dbPath,
   defaultSource,
   namespaceMode,
-  namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
+  namespace,
 });
 
 // Cloud sync (Phase 3) — opt-in via ENGRAM_SYNC_URL. Left unset, none of this
 // runs: no SyncEngine is constructed and every `syncEngine?.notifyWrite()`
-// below is a no-op, so non-sync users pay zero overhead.
-const syncUrl = process.env['ENGRAM_SYNC_URL'];
-const syncMode = (process.env['ENGRAM_SYNC_MODE'] || 'auto') as 'auto' | 'manual' | 'off';
-const syncInterval = process.env['ENGRAM_SYNC_INTERVAL']
-  ? parseInt(process.env['ENGRAM_SYNC_INTERVAL'], 10)
-  : undefined;
-/** Passphrase for E2E encryption of synced rows. Read here so it is available
- * wherever the sync engine is constructed; SyncEngine itself is responsible
- * for using it once encryption is wired into the sync path. */
-const syncEncryptionKey = process.env['ENGRAM_SYNC_ENCRYPTION_KEY'];
+// below is a no-op, so non-sync users pay zero overhead. Mode, interval and
+// passphrase are validated here rather than cast, so a typo fails at startup
+// instead of becoming a sync timer that fires forever.
+const syncSettings = readSyncSettings(process.env);
+const syncUrl = syncSettings.syncUrl;
 
 let syncEngine: SyncEngine | null = null;
 
@@ -397,20 +436,23 @@ server.tool(
   async ({ ids, reason }) => {
     await ensureInitialized();
 
-    for (const id of ids) {
+    // Check first, archive second. `brain.forget` on an unknown id resolves
+    // without doing anything, so archiving blind and counting the request was
+    // how a hallucinated id came back as "Archived 1 memory(ies)".
+    const partition = partitionByExistence(brain, ids);
+    for (const id of partition.existing) {
       await brain.forget(id);
     }
-    syncEngine?.notifyWrite();
+    if (partition.existing.length > 0) syncEngine?.notifyWrite();
+
+    const report = forgetReport(partition, reason);
 
     return {
+      ...(hasMissingIds(partition) ? { isError: true } : {}),
       content: [
         {
           type: 'text',
-          text: JSON.stringify({
-            archived: ids.length,
-            reason: reason ?? 'not specified',
-            message: `Archived ${ids.length} memory(ies)`,
-          }),
+          text: JSON.stringify(report),
         },
       ],
     };
@@ -471,7 +513,7 @@ server.tool(
     await ensureInitialized();
 
     if (action === 'update') {
-      const updates: Record<string, unknown> = {};
+      const updates: Partial<DecayPolicyConfig> = {};
       if (halfLifeDays !== undefined) updates.halfLifeDays = halfLifeDays;
       if (archiveThreshold !== undefined) updates.archiveThreshold = archiveThreshold;
       if (importanceDecayRate !== undefined) updates.importanceDecayRate = importanceDecayRate;
@@ -484,7 +526,7 @@ server.tool(
           enabled: consolidationEnabled,
         };
       }
-      brain.updateDecayPolicy(updates as any);
+      brain.updateDecayPolicy(updates);
     }
 
     const policy = brain.getDecayPolicy();
@@ -946,21 +988,13 @@ async function ensureInitialized(): Promise<void> {
   await initPromise;
 
   if (syncUrl && !syncEngine) {
-    syncEngine = new SyncEngine({
-      syncUrl,
-      mode: syncMode,
-      intervalMs: syncInterval,
-      encryptionKey: syncEncryptionKey,
-      onIndexRebuildNeeded: async () => {
-        await brain.syncIndexFromStore();
-      },
-      onSyncError: (err: Error) => {
-        console.error(`[engram] Sync error: ${err.message}`);
-      },
-    });
+    syncEngine = new SyncEngine(syncEngineConfig(syncSettings, {
+      rebuildIndex: async () => { await brain.syncIndexFromStore(); },
+      logError: (message: string) => console.error(message),
+    }));
     syncEngine.start();
     console.error(`[engram] Cloud sync enabled: ${redactSyncUrl(syncUrl)}`);
-    if (syncEncryptionKey) {
+    if (syncSettings.encryptionKey) {
       console.error('🔐 E2E encryption enabled for cloud sync');
     }
   }

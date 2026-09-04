@@ -5,9 +5,12 @@
   "private": true,
   "scripts": {
     "pack": "bash scripts/pack.sh",
-    "validate": "mcpb validate manifest.json"
+    "validate": "mcpb validate manifest.json",
+    "lint": "eslint server"
   },
   "devDependencies": {
-    "@anthropic-ai/mcpb": "latest"
+    "@anthropic-ai/mcpb": "latest",
+    "@engram-ai-memory/eslint-config": "workspace:*",
+    "eslint": "^9.39.0"
   }
 }
