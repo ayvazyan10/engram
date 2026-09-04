@@ -55,3 +55,38 @@ export function strictObjectBody(
     return undefined;
   };
 }
+
+/**
+ * Reject unknown query-string parameters BEFORE schema validation.
+ *
+ * Exactly the trap `strictObjectBody` exists for, on the other half of the
+ * request: `additionalProperties: false` in a querystring schema does not
+ * refuse an unknown key, because Fastify's ajv runs with `removeAdditional`
+ * and strips it in silence. `GET /api/analytics?day=90` — one letter short of
+ * `days` — was therefore answered 200 with a 30-day window that the caller
+ * read as 90 days. A wrong number nobody was told about is worse than an
+ * error, so it is an error.
+ *
+ * The schema keeps `additionalProperties: false` anyway: it documents the
+ * contract and is what OpenAPI publishes. This hook is what enforces it.
+ *
+ * @param allowed parameter names the route accepts
+ */
+export function strictQueryString(allowed: readonly string[]): preValidationHookHandler {
+  const permitted = new Set(allowed);
+
+  return async (req, reply) => {
+    const query = req.query;
+    if (typeof query !== 'object' || query === null) return undefined;
+
+    const unknown = Object.keys(query).filter((key) => !permitted.has(key));
+    if (unknown.length > 0) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: `Unknown query parameter${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}.`,
+      });
+    }
+
+    return undefined;
+  };
+}
