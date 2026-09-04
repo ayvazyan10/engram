@@ -32,6 +32,17 @@ export type { DecaySweepResult } from './lifecycle/DecayEngine.js';
 export { DEFAULT_DECAY_POLICY, DEFAULT_PROTECTION_RULES, mergePolicy } from './lifecycle/DecayPolicy.js';
 export type { DecayPolicyConfig, ConsolidationConfig, ProtectionRule } from './lifecycle/DecayPolicy.js';
 
+// Environment configuration — the one place blank/NaN/unknown-enum are decided
+export {
+  EnvConfigError,
+  readEnvString,
+  requireConfiguredEnv,
+  readEnvNumber,
+  readEnvNumberOr,
+  readEnvEnum,
+} from './lifecycle/envConfig.js';
+export type { EnvSource, EnvNumberSpec } from './lifecycle/envConfig.js';
+
 // Contradiction detection
 export { ContradictionDetector, DEFAULT_CONTRADICTION_CONFIG } from './lifecycle/ContradictionDetector.js';
 export type {

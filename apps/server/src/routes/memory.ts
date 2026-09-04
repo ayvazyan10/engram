@@ -2,16 +2,22 @@ import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
 import { eq, isNull, desc, and, or } from 'drizzle-orm';
 import { brain, realtime, notifySyncWrite } from '../index.js';
+import { readEnvNumberOr } from '@engram-ai-memory/core';
 import { mapWithConcurrency } from '../lib/concurrency.js';
+import { strictQueryString } from '../lib/strictBody.js';
 
 /**
  * How many batched stores may embed at once. Override with
  * ENGRAM_BATCH_CONCURRENCY when the embedder is remote and latency-bound
  * rather than CPU-bound.
+ *
+ * A tuning knob, so a malformed value warns and keeps the default rather than
+ * aborting startup. `|| 16` already caught NaN, but it also caught a
+ * deliberate 0 and let a negative through to Math.max — and it said nothing
+ * either way, so a typo was indistinguishable from not setting the variable.
  */
-const BATCH_CONCURRENCY = Math.max(
-  1,
-  Number.parseInt(process.env['ENGRAM_BATCH_CONCURRENCY'] ?? '', 10) || 16
+const BATCH_CONCURRENCY = readEnvNumberOr(
+  process.env, 'ENGRAM_BATCH_CONCURRENCY', 16, { min: 1 }
 );
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
@@ -163,6 +169,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         summary: 'List memories',
         querystring: {
           type: 'object',
+          additionalProperties: false,
           properties: {
             type: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
             source: { type: 'string' },
@@ -175,6 +182,11 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           },
         },
       },
+      // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+      // above documents the contract without enforcing it — an unknown key is
+      // stripped in silence and the caller is answered 200 for a request that was
+      // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+      preValidation: strictQueryString(['type', 'source', 'limit', 'offset']),
       handler: async (req) => {
         const db = getDb();
         const { type, source, limit = 50, offset = 0 } = req.query;

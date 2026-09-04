@@ -150,6 +150,15 @@ describe('scorer clamping for legacy rows', () => {
   });
 
   it('treats a negative stored importance as the floor, not a penalty', () => {
-    expect(scoreMemory({ ...base, importance: -5 })).toBeCloseTo(scoreMemory({ ...base, importance: 0 }), 10);
+    // One explicit `now` for both calls, for the reason given above: left to
+    // default, the two recency terms are computed from two different clock
+    // reads and drift apart by however long the calls are apart. Under
+    // coverage instrumentation that drift exceeded a 1e-10 tolerance. With the
+    // same instant on both sides the two scores are identical, not merely
+    // close, so this asserts equality rather than a tolerance.
+    const now = new Date();
+    expect(scoreMemory({ ...base, importance: -5 }, undefined, now)).toBe(
+      scoreMemory({ ...base, importance: 0 }, undefined, now)
+    );
   });
 });

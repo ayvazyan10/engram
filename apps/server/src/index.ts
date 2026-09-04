@@ -1,5 +1,8 @@
 import Fastify from 'fastify';
-import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
+import {
+  NeuralBrain, SyncEngine, redactSyncUrl,
+  readEnvString, readEnvNumber, readEnvNumberOr, readEnvEnum, requireConfiguredEnv,
+} from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 import { Server as SocketIOServer } from 'socket.io';
 import type { Namespace } from 'socket.io';
@@ -38,8 +41,18 @@ import { reflectionRoutes } from './routes/reflection.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { syncRoutes } from './routes/sync.js';
 
-const PORT = parseInt(process.env['PORT'] ?? '4901', 10);
-const HOST = process.env['HOST'] ?? '127.0.0.1';
+/**
+ * Where the API listens.
+ *
+ * Both read through the shared env helpers rather than `parseInt(x ?? d)` and
+ * `x ?? d`. A blank HOST — what a host templating an untouched optional field
+ * passes — is `''`, and `listen({ host: '' })` binds every interface, which is
+ * the same defect the Ollama proxy's ENGRAM_PROXY_HOST had; blank now means
+ * unset and the loopback default stands. A malformed PORT was `NaN`, which
+ * survives `??` and reaches listen() as a request for an arbitrary port.
+ */
+const PORT = readEnvNumber(process.env, 'PORT', { min: 0, max: 65535 }) ?? 4901;
+const HOST = readEnvString(process.env, 'HOST') ?? '127.0.0.1';
 
 /**
  * Browser origins allowed to call the API.
@@ -75,15 +88,12 @@ const originAllowlist = ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_O
  * auth wanted"; empty means "auth wanted, value lost", and only one of those
  * is safe to guess at.
  */
-const RAW_API_KEY = process.env['ENGRAM_API_KEY'];
-if (RAW_API_KEY !== undefined && RAW_API_KEY.trim() === '') {
-  throw new Error(
-    'ENGRAM_API_KEY is set but empty. Unset it to run without authentication ' +
-      '(the local-first default), or give it a real value — an empty value ' +
-      'used to disable authentication silently.'
-  );
-}
-const API_KEY = RAW_API_KEY;
+const API_KEY = requireConfiguredEnv(
+  process.env,
+  'ENGRAM_API_KEY',
+  'Unset it to run without authentication (the local-first default), or give ' +
+    'it a real value — an empty value used to disable authentication silently.'
+);
 
 function isAllowedOrigin(origin: string | undefined): boolean {
   // Non-browser clients (CLI, MCP, curl) send no Origin header.
@@ -98,41 +108,76 @@ function secretsMatch(a: string, b: string): boolean {
   if (bufA.length !== bufB.length) return false;
   return timingSafeEqual(bufA, bufB);
 }
-const DECAY_INTERVAL = parseInt(process.env['ENGRAM_DECAY_INTERVAL'] ?? '', 10);
-const DECAY_THRESHOLD = parseFloat(process.env['ENGRAM_DECAY_THRESHOLD'] ?? '');
-// `||`, not `??`: an empty ENGRAM_NAMESPACE_MODE — what a host templating an
-// unset optional field passes — would otherwise reach the validation below and
-// abort startup.
-const namespaceMode = (
-  process.env['ENGRAM_NAMESPACE_MODE'] || (process.env['ENGRAM_NAMESPACE'] ? 'filter' : 'none')
-) as NamespaceMode;
-if (!['none', 'filter', 'isolated'].includes(namespaceMode)) {
-  throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
-}
+/**
+ * Decay tuning. Knobs, not controls: a malformed value warns on stderr and
+ * leaves the engine's own default in place rather than aborting startup. The
+ * previous `Number.isFinite` guard reached the same outcome but said nothing,
+ * so a typo looked exactly like not having set the variable at all.
+ */
+const DECAY_INTERVAL = readEnvNumberOr(process.env, 'ENGRAM_DECAY_INTERVAL', undefined, { min: 0 });
+const DECAY_THRESHOLD = readEnvNumberOr(
+  process.env, 'ENGRAM_DECAY_THRESHOLD', undefined, { min: 0, max: 1, integer: false }
+);
+// Blank means unset — what a host templating an untouched optional field
+// passes — so it falls back to the namespace-derived default rather than
+// reaching the enum check and aborting startup. An unrecognised value still
+// aborts, which is what readEnvEnum does.
+const NAMESPACE = readEnvString(process.env, 'ENGRAM_NAMESPACE');
+const namespaceMode: NamespaceMode =
+  readEnvEnum(process.env, 'ENGRAM_NAMESPACE_MODE', ['none', 'filter', 'isolated'] as const) ??
+  (NAMESPACE ? 'filter' : 'none');
 
 /**
  * Cloud sync (Phase 3). Unset ENGRAM_SYNC_URL means sync stays fully off —
  * no SyncEngine is constructed and every write path pays zero overhead.
  */
-const SYNC_URL = process.env['ENGRAM_SYNC_URL'];
-const SYNC_MODE = (process.env['ENGRAM_SYNC_MODE'] || 'auto') as 'auto' | 'manual' | 'off';
-const SYNC_INTERVAL = process.env['ENGRAM_SYNC_INTERVAL']
-  ? parseInt(process.env['ENGRAM_SYNC_INTERVAL'], 10)
-  : undefined;
-/** Passphrase for E2E encryption of synced rows. Read here so it is available
- * wherever the sync engine is constructed; SyncEngine itself is responsible
- * for using it once encryption is wired into the sync path. */
-const SYNC_ENCRYPTION_KEY = process.env['ENGRAM_SYNC_ENCRYPTION_KEY'];
+const SYNC_URL = readEnvString(process.env, 'ENGRAM_SYNC_URL');
+
+/**
+ * Sync mode and interval, validated the way the MCP server validates them
+ * (packages/mcp/src/syncSettings.ts) — the same two variables answered to two
+ * different standards until now.
+ *
+ * The mode was cast with `as`, so an unrecognised value reached SyncEngine
+ * intact and `start()`'s `mode !== 'auto'` check turned the scheduler off:
+ * a typo silently disabled sync instead of complaining. The interval went
+ * through `parseInt` with nothing reading the result, and `NaN ?? default`
+ * keeps the NaN because NaN is not nullish — `setInterval(NaN)` degenerates
+ * into a timer firing about every millisecond, i.e. a loop against the user's
+ * own Postgres. Both are startup errors now.
+ */
+const SYNC_MODE = readEnvEnum(process.env, 'ENGRAM_SYNC_MODE', ['auto', 'manual', 'off'] as const) ?? 'auto';
+const SYNC_INTERVAL = readEnvNumber(process.env, 'ENGRAM_SYNC_INTERVAL', { min: 1 });
+
+/**
+ * Passphrase for E2E encryption of synced rows.
+ *
+ * Set-but-empty is refused rather than read as "no encryption configured" —
+ * the same rule ENGRAM_API_KEY follows above, for the same reason. `''` is
+ * falsy, so SyncEngine's `if (!encryptionKey)` took it as "never encrypt" and
+ * pushed the whole store in the clear while the config that set the variable
+ * still said encryption was on. Core refuses to push plaintext at a database
+ * that already holds ciphertext, but a fresh sync target has no such history
+ * to check against, and that is the case worth failing on. Unset still means
+ * "no encryption wanted"; empty means "wanted, value lost".
+ */
+const SYNC_ENCRYPTION_KEY = requireConfiguredEnv(
+  process.env,
+  'ENGRAM_SYNC_ENCRYPTION_KEY',
+  'Unset it to sync without end-to-end encryption, or give it the passphrase ' +
+    'the sync database was encrypted with — an empty value used to sync in ' +
+    'plaintext silently.'
+);
 
 // Shared brain instance (initialized once)
 export const brain = new NeuralBrain({
-  dbPath: process.env['ENGRAM_DB_PATH'],
+  dbPath: readEnvString(process.env, 'ENGRAM_DB_PATH'),
   defaultSource: 'rest-api',
   namespaceMode,
-  namespace: process.env['ENGRAM_NAMESPACE'] || undefined,
+  namespace: NAMESPACE,
   decayPolicy: {
-    ...(Number.isFinite(DECAY_INTERVAL) ? { decayIntervalMs: DECAY_INTERVAL } : {}),
-    ...(Number.isFinite(DECAY_THRESHOLD) ? { archiveThreshold: DECAY_THRESHOLD } : {}),
+    ...(DECAY_INTERVAL !== undefined ? { decayIntervalMs: DECAY_INTERVAL } : {}),
+    ...(DECAY_THRESHOLD !== undefined ? { archiveThreshold: DECAY_THRESHOLD } : {}),
   },
 });
 
@@ -442,8 +487,10 @@ async function start() {
     syncEngine = new SyncEngine({
       syncUrl: SYNC_URL,
       mode: SYNC_MODE,
-      intervalMs: SYNC_INTERVAL,
-      encryptionKey: SYNC_ENCRYPTION_KEY,
+      // Omitted rather than passed as undefined, so SyncEngine's own documented
+      // defaults apply instead of an explicit `undefined` overriding them.
+      ...(SYNC_INTERVAL !== undefined ? { intervalMs: SYNC_INTERVAL } : {}),
+      ...(SYNC_ENCRYPTION_KEY !== undefined ? { encryptionKey: SYNC_ENCRYPTION_KEY } : {}),
       // Wrapped so the callback's return type is exactly Promise<void> — the
       // count syncIndexFromStore() resolves with isn't needed here.
       onIndexRebuildNeeded: async () => {

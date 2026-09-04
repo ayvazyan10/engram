@@ -12,3 +12,13 @@ export type {
   ContradictionConfig,
   ResolutionStrategy,
 } from './ContradictionDetector.js';
+
+export {
+  EnvConfigError,
+  readEnvString,
+  requireConfiguredEnv,
+  readEnvNumber,
+  readEnvNumberOr,
+  readEnvEnum,
+} from './envConfig.js';
+export type { EnvSource, EnvNumberSpec } from './envConfig.js';

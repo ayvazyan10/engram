@@ -27,11 +27,26 @@ describe('syncEncryptionKey', () => {
     expect(syncEncryptionKey({})).toBeUndefined();
   });
 
-  it('treats a blank value as unset rather than as an empty passphrase', () => {
-    // Same class of bug as the empty ENGRAM_DB_PATH: hosts template an unset
-    // optional field as ''. An empty passphrase must never look configured.
-    expect(syncEncryptionKey({ ENGRAM_SYNC_ENCRYPTION_KEY: '' })).toBeUndefined();
-    expect(syncEncryptionKey({ ENGRAM_SYNC_ENCRYPTION_KEY: '   ' })).toBeUndefined();
+  it('refuses a blank value instead of reading it as "no encryption wanted"', () => {
+    // Hosts and shells template an untouched optional field as ''. Reading
+    // that as unset made `engram cloud sync` push the whole local database in
+    // plaintext while the config that set the variable still said encryption
+    // was on — and the last-write-wins upsert then overwrote ciphertext rows
+    // encrypted peers had already pushed. Absent means "not wanted"; empty
+    // means "wanted, value lost", and only the first is safe to act on. This
+    // is the rule ENGRAM_API_KEY adopted on the REST server.
+    expect(() => syncEncryptionKey({ ENGRAM_SYNC_ENCRYPTION_KEY: '' })).toThrow(
+      /ENGRAM_SYNC_ENCRYPTION_KEY is set but empty/
+    );
+    expect(() => syncEncryptionKey({ ENGRAM_SYNC_ENCRYPTION_KEY: '   ' })).toThrow(
+      /ENGRAM_SYNC_ENCRYPTION_KEY is set but empty/
+    );
+  });
+
+  it('says what unsetting it would mean, so the operator can act on the message', () => {
+    expect(() => syncEncryptionKey({ ENGRAM_SYNC_ENCRYPTION_KEY: '' })).toThrow(
+      /Unset it to sync without end-to-end encryption/
+    );
   });
 
   it('keeps a passphrase byte-for-byte — trimming one would derive a different key', () => {
@@ -54,6 +69,12 @@ describe('syncEngineOptions', () => {
       mode: 'manual',
       encryptionKey: 'shared-passphrase',
     });
+  });
+
+  it('refuses to build a config from a blank passphrase', () => {
+    expect(() => syncEngineOptions(config, { ENGRAM_SYNC_ENCRYPTION_KEY: '' })).toThrow(
+      /ENGRAM_SYNC_ENCRYPTION_KEY is set but empty/
+    );
   });
 
   it('omits encryptionKey entirely when nothing is configured', () => {
@@ -92,5 +113,34 @@ describe('cli.ts SyncEngine call sites', () => {
 
   it('never inlines a SyncEngine config that omits the passphrase', () => {
     expect(source).not.toMatch(/new SyncEngine\(\{\s*syncUrl:/);
+  });
+
+  /**
+   * ENGRAM_DEVICE_NAME was written into the server's environment by both
+   * `engram start` and `engram update`, and no process has ever read it: the
+   * server identifies itself by the per-install device id core mints in
+   * sync/deviceId.ts, and `deviceName` is a CLI-side display label read
+   * straight from this config file. A setting that looks configurable and
+   * reaches nothing is worse than no setting, so the write was removed rather
+   * than wired up.
+   */
+  it('does not export a device name nothing reads', () => {
+    expect(source).not.toContain('ENGRAM_DEVICE_NAME:');
+  });
+
+  /**
+   * Loading core costs ~110ms of module evaluation, and the CLI's whole point
+   * is that data commands speak HTTP to the server instead. syncOptions.ts
+   * reads the passphrase through core's env helpers, so it has to arrive
+   * through a dynamic import inside the cloud commands, not at the top of the
+   * file where `engram store` would pay for it.
+   */
+  it('never imports syncOptions (and through it, core) at module scope', () => {
+    expect(source).not.toMatch(/^import .*from '\.\/syncOptions\.js'/m);
+    expect(source).toMatch(/await import\('\.\/syncOptions\.js'\)/);
+  });
+
+  it('never imports core at module scope either', () => {
+    expect(source).not.toMatch(/^import .*from '@engram-ai-memory\/core'/m);
   });
 });

@@ -15,6 +15,7 @@
  * skip the rows, and advance their pull cursor past them.
  */
 
+import { requireConfiguredEnv } from '@engram-ai-memory/core';
 import type { SyncConfig } from '@engram-ai-memory/core';
 
 /** The subset of the CLI config a sync needs. */
@@ -30,14 +31,24 @@ export type SyncEnv = Readonly<Record<string, string | undefined>>;
  * `engram cloud encrypt` prints and the MCP server reads
  * (packages/mcp/src/server.ts).
  *
- * Blank means unset, not "encrypt with an empty passphrase": a host or shell
- * that exports an untouched optional field hands over '' rather than omitting
- * it. The value is otherwise passed through byte-for-byte — trimming it would
- * derive a different key and make every previously-encrypted row unreadable.
+ * Set-but-empty is REFUSED rather than read as "no encryption configured".
+ * Blank is what a host or shell exporting an untouched optional field hands
+ * over, and treating it as unset means `engram cloud sync` pushes the whole
+ * local database in plaintext while the config that set the variable still
+ * says encryption is on. That is the same reading ENGRAM_API_KEY rejected on
+ * the REST server: absent means "not wanted", empty means "wanted, value
+ * lost", and only the first is safe to act on. A non-blank value is passed
+ * through byte-for-byte — trimming it would derive a different key and make
+ * every previously-encrypted row unreadable.
  */
 export function syncEncryptionKey(env: SyncEnv = process.env): string | undefined {
-  const key = env['ENGRAM_SYNC_ENCRYPTION_KEY'];
-  return key && key.trim().length > 0 ? key : undefined;
+  return requireConfiguredEnv(
+    env,
+    'ENGRAM_SYNC_ENCRYPTION_KEY',
+    'Unset it to sync without end-to-end encryption, or export the passphrase ' +
+      '`engram cloud encrypt` printed — an empty value used to sync in plaintext ' +
+      'silently.'
+  );
 }
 
 /**

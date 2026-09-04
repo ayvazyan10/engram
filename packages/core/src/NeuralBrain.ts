@@ -33,6 +33,7 @@ import { DecayEngine } from './lifecycle/DecayEngine.js';
 import type { DecaySweepResult } from './lifecycle/DecayEngine.js';
 import type { DecayPolicyConfig } from './lifecycle/DecayPolicy.js';
 import { mergePolicy } from './lifecycle/DecayPolicy.js';
+import { readEnvString } from './lifecycle/envConfig.js';
 import { ContradictionDetector } from './lifecycle/ContradictionDetector.js';
 import { decideResolution, planAutoResolution, writeResolution } from './lifecycle/contradictionResolution.js';
 import type {
@@ -2434,9 +2435,12 @@ export class NeuralBrain {
 
   /** Resolve the index file path from config or env. */
   private resolveIndexPath(): string | null {
+    // Blank means unset for the env var too, so a templated-but-empty
+    // ENGRAM_INDEX_PATH falls through to the dbPath-derived default instead of
+    // resolving to '' and quietly disabling index persistence.
     const basePath = (
       this.config.indexPath ??
-      process.env['ENGRAM_INDEX_PATH'] ??
+      readEnvString(process.env, 'ENGRAM_INDEX_PATH') ??
       (this.config.dbPath ? this.config.dbPath + '.index' : null)
     );
     if (!basePath || this.namespaceMode !== 'isolated') return basePath;

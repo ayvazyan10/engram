@@ -12,11 +12,13 @@
  *
  * Request shaping, response parsing and upstream I/O live in sibling modules
  * (messages / parse / headers / upstream) so they can be unit-tested; this file
- * is the wiring and the server lifecycle.
+ * is the wiring and the server lifecycle. Configuration is read and validated
+ * in ./env.ts, which also documents which variables refuse to start on a bad
+ * value and which fall back with a warning.
  *
  * Environment:
  *   OLLAMA_PROXY_PORT=11435       (default: 11435)
- *   ENGRAM_PROXY_HOST=127.0.0.1   (default: loopback only — see below)
+ *   ENGRAM_PROXY_HOST=127.0.0.1   (default: loopback only — see ./env.ts)
  *   OLLAMA_TARGET=http://localhost:11434
  *   ENGRAM_API=http://localhost:4901
  *   ENGRAM_MAX_TOKENS=1500
@@ -32,31 +34,37 @@ import { extractUserQuery, injectContext, buildRetryBody, validateChatBody } fro
 import { parseOllamaResponse, parseOpenAIResponse } from './parse.js';
 import { buildForwardHeaders, isChatPath, isOpenAIPath } from './headers.js';
 import { makeBufferedRequest, streamRequest, passthrough, type UpstreamTarget } from './upstream.js';
+import { readProxyConfig, DEFAULT_LISTEN_HOST, type ProxyConfig } from './env.js';
 
 /**
- * Loopback by default. This proxy has no authentication and drives the user's
- * GPU, and Ollama itself only listens on loopback — binding every interface
- * handed any LAN peer an open endpoint. Set ENGRAM_PROXY_HOST to widen it.
+ * Read the configuration, or refuse to run.
+ *
+ * A misconfigured security control is a startup failure here rather than a
+ * default silently substituted at request time: `ENGRAM_MAX_BODY_BYTES=10mb`
+ * used to yield NaN and delete the body cap while the banner below still
+ * printed one. Exiting non-zero is also what a supervisor can see — the same
+ * reason a failed bind exits 1 further down.
  */
-const DEFAULT_LISTEN_HOST = '127.0.0.1';
+function loadConfig(): ProxyConfig {
+  try {
+    return readProxyConfig(process.env);
+  } catch (err: unknown) {
+    console.error(`[Engram] ${err instanceof Error ? err.message : String(err)}`);
+    console.error('[Engram] Refusing to start with an invalid configuration.');
+    process.exit(1);
+  }
+}
 
-/**
- * Ceiling on a buffered request body. Anything above it is refused with 413:
- * the handler reads the whole body into memory, so without a cap a single
- * client streaming an endless upload grows RSS until the process is killed.
- */
-const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+const config = loadConfig();
 
-const PROXY_PORT = parseInt(process.env['OLLAMA_PROXY_PORT'] ?? '11435', 10);
-const LISTEN_HOST = process.env['ENGRAM_PROXY_HOST'] ?? DEFAULT_LISTEN_HOST;
-const OLLAMA_TARGET = process.env['OLLAMA_TARGET'] ?? 'http://localhost:11434';
-const ENGRAM_API = process.env['ENGRAM_API'] ?? 'http://localhost:4901';
-const MAX_TOKENS = parseInt(process.env['ENGRAM_MAX_TOKENS'] ?? '1500', 10);
-const MAX_BODY_BYTES = parseInt(
-  process.env['ENGRAM_MAX_BODY_BYTES'] ?? String(DEFAULT_MAX_BODY_BYTES), 10
-);
-const TOOL_RETRY = process.env['ENGRAM_TOOL_RETRY'] !== 'false';
-const UPSTREAM_TIMEOUT_MS = parseInt(process.env['ENGRAM_UPSTREAM_TIMEOUT_MS'] ?? '300000', 10);
+const PROXY_PORT = config.port;
+const LISTEN_HOST = config.listenHost;
+const OLLAMA_TARGET = config.ollamaTarget;
+const ENGRAM_API = config.engramApi;
+const MAX_TOKENS = config.maxTokens;
+const MAX_BODY_BYTES = config.maxBodyBytes;
+const TOOL_RETRY = config.toolRetry;
+const UPSTREAM_TIMEOUT_MS = config.upstreamTimeoutMs;
 
 const target: UpstreamTarget = {
   url: new URL(OLLAMA_TARGET),

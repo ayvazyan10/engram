@@ -19,6 +19,7 @@ import { getDb, schema, unpackFP16 } from '@engram-ai-memory/core';
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { brain } from '../index.js';
 import { fitToBox, pca3, type Vec3 } from '../lib/pca.js';
+import { strictQueryString } from '../lib/strictBody.js';
 
 /**
  * Half-width of the world box every projection is scaled into.
@@ -372,6 +373,12 @@ export const sceneRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
+    // `additionalProperties: false` above documents the contract and is what
+    // OpenAPI publishes, but it does not enforce it: Fastify's ajv runs with
+    // removeAdditional and strips an unknown key in silence, so
+    // ?minStrenght=0.9 (a typo) was answered 200 with every edge in the store
+    // and read as a filtered set. Same guard, same reason, as /api/analytics.
+    preValidation: strictQueryString(['minStrength', 'limit']),
     handler: async (req) => {
       const minStrength = req.query.minStrength ?? 0;
       const limit = req.query.limit ?? EDGE_LIMIT_MAX;

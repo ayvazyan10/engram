@@ -239,6 +239,66 @@ describe('listen host', () => {
   });
 });
 
+describe('empty ENGRAM_PROXY_HOST', () => {
+  const external = externalIPv4();
+
+  it.skipIf(external === null)('still binds loopback only', async () => {
+    // The read was `process.env['ENGRAM_PROXY_HOST'] ?? DEFAULT_LISTEN_HOST`,
+    // and `??` only falls back for an ABSENT variable. An empty string — what a
+    // templating host produces for an untouched optional field, and what has
+    // already cost this project the extension's database path, the namespace
+    // mode and the API key — reached `listen(port, '')`, which binds every
+    // interface. The default that exists precisely to keep an unauthenticated
+    // proxy off the LAN was defeated by leaving a field blank.
+    const proxy = await startProxyForChat({ ENGRAM_PROXY_HOST: '' });
+
+    expect(await canConnect('127.0.0.1', proxy.port)).toBe(true);
+    expect(await canConnect(external as string, proxy.port), 'proxy is reachable off-host').toBe(false);
+    // The banner must also report the default, not a blank host.
+    expect(proxy.output()).toContain('http://127.0.0.1:');
+  });
+});
+
+describe('invalid configuration', () => {
+  it('exits non-zero for a body cap parseInt would have turned into NaN', async () => {
+    // `parseInt('10mb')` is 10 and `parseInt('lots')` is NaN; `size > NaN` is
+    // false for every size, so a malformed value did not raise the cap, it
+    // deleted it — while the startup banner still printed a limit.
+    const proxy = spawnProxy({
+      OLLAMA_PROXY_PORT: '0',
+      ENGRAM_MAX_BODY_BYTES: 'lots',
+      ENGRAM_API: `http://127.0.0.1:${DEAD_PORT}`,
+    });
+
+    const code = await new Promise<number | null>((resolve) => proxy.child.on('exit', resolve));
+    expect(code).toBe(1);
+    expect(proxy.output()).toContain('ENGRAM_MAX_BODY_BYTES');
+    expect(proxy.output()).toContain('Refusing to start');
+  });
+
+  it('exits non-zero for a port that is not a port', async () => {
+    const proxy = spawnProxy({
+      OLLAMA_PROXY_PORT: 'eleven-thousand',
+      ENGRAM_API: `http://127.0.0.1:${DEAD_PORT}`,
+    });
+
+    const code = await new Promise<number | null>((resolve) => proxy.child.on('exit', resolve));
+    expect(code).toBe(1);
+    expect(proxy.output()).toContain('OLLAMA_PROXY_PORT');
+  });
+
+  it('starts anyway for a malformed tuning knob, warning on stderr', async () => {
+    // ENGRAM_MAX_TOKENS bounds how much recalled context is injected: a wrong
+    // value costs context, not safety, so the documented default applies and
+    // the operator is told. A dead proxy would be the worse answer.
+    const proxy = await startProxyForChat({ ENGRAM_MAX_TOKENS: 'plenty' });
+
+    expect(proxy.child.exitCode).toBeNull();
+    expect(proxy.output()).toContain('ENGRAM_MAX_TOKENS');
+    expect(proxy.output()).toContain('using the default (1500)');
+  });
+});
+
 describe('listen failure', () => {
   it('exits non-zero when the port is already taken', async () => {
     const blocker = net.createServer();

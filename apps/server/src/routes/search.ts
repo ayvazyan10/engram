@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { brain, realtime } from '../index.js';
 import type { MemoryType } from '@engram-ai-memory/core';
+import { strictQueryString } from '../lib/strictBody.js';
 
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/search — semantic search
@@ -120,6 +121,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Streaming recall via Server-Sent Events — memories arrive progressively',
       querystring: {
         type: 'object',
+        additionalProperties: false,
         required: ['query'],
         properties: {
           query: { type: 'string' },
@@ -130,6 +132,11 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
+    // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+    // above documents the contract without enforcing it — an unknown key is
+    // stripped in silence and the caller is answered 200 for a request that was
+    // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+    preValidation: strictQueryString(['query', 'maxTokens', 'types', 'sources', 'crossNamespace']),
     handler: async (req, reply) => {
       const { query, maxTokens, types, sources, crossNamespace } = req.query;
 

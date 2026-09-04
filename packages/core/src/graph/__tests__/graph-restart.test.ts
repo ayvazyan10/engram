@@ -71,16 +71,27 @@ describe('KnowledgeGraph.addEdge', () => {
     graph.addNode({ id: 'b', type: 'semantic' });
 
     graph.addEdge({ sourceId: 'a', targetId: 'b', relationship: 'relates_to', strength: 0.5, bidirectional: true });
-    expect(graph.edgeCount).toBe(2); // forward + mirror
+    // One connection. The mirrored pair of adjacency entries is what makes it
+    // traversable from either end, and the adjacency lists are what prove the
+    // mirror exists — edgeCount reports connections, not directions.
+    expect(graph.edgeCount).toBe(1);
+    expect(graph.getNeighbors('a')).toHaveLength(1);
+    expect(graph.getNeighbors('b')).toHaveLength(1);
 
     graph.addEdge({ sourceId: 'a', targetId: 'b', relationship: 'relates_to', strength: 0.9, bidirectional: true });
-    expect(graph.edgeCount).toBe(2);
+    expect(graph.edgeCount).toBe(1);
+    // Replaced in place, in BOTH directions — an appended duplicate would show
+    // up here even though the folded count could not see it.
+    expect(graph.getNeighbors('a')).toHaveLength(1);
+    expect(graph.getNeighbors('b')).toHaveLength(1);
     // The later edge wins, rather than shadowing the first forever.
     expect(graph.getNeighbors('a')[0]!.strength).toBe(0.9);
 
     // A different relationship between the same pair is a different edge.
     graph.addEdge({ sourceId: 'a', targetId: 'b', relationship: 'contradicts', strength: 0.4, bidirectional: true });
-    expect(graph.edgeCount).toBe(4);
+    expect(graph.edgeCount).toBe(2);
+    expect(graph.getNeighbors('a')).toHaveLength(2);
+    expect(graph.getNeighbors('b')).toHaveLength(2);
   });
 });
 

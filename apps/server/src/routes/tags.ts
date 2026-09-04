@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { brain, notifySyncWrite } from '../index.js';
 import { isMemoryNotFound } from '../lib/notFound.js';
+import { strictQueryString } from '../lib/strictBody.js';
 
 /**
  * Run a tag mutation, turning core's "memory not found" into a 404.
@@ -44,6 +45,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Get all memories with a specific tag',
       querystring: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           // Floors as well as ceilings — see the note on GET /api/memory:
           // SQLite treats LIMIT -1 as unlimited and a negative OFFSET is a
@@ -53,6 +55,11 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
+    // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+    // above documents the contract without enforcing it — an unknown key is
+    // stripped in silence and the caller is answered 200 for a request that was
+    // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+    preValidation: strictQueryString(['limit', 'offset']),
     handler: async (req) => {
       const memories = await brain.getByTag(
         req.params.tag,

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { brain } from '../index.js';
 import { UnsafeWebhookUrlError } from '@engram-ai-memory/core';
 import type { WebhookEvent } from '@engram-ai-memory/core';
+import { strictQueryString } from '../lib/strictBody.js';
 
 export const webhookRoutes: FastifyPluginAsync = async (app) => {
   const mgr = brain.getWebhookManager();
@@ -13,11 +14,17 @@ export const webhookRoutes: FastifyPluginAsync = async (app) => {
       summary: 'List all webhook subscriptions',
       querystring: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           activeOnly: { type: 'boolean', default: false },
         },
       },
     },
+    // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+    // above documents the contract without enforcing it — an unknown key is
+    // stripped in silence and the caller is answered 200 for a request that was
+    // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+    preValidation: strictQueryString(['activeOnly']),
     handler: async (req) => {
       const { activeOnly } = req.query as { activeOnly?: boolean };
       const hooks = await mgr.list(activeOnly);

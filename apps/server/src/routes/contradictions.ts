@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { brain, realtime, notifySyncWrite } from '../index.js';
 import { isMemoryNotFound } from '../lib/notFound.js';
-import { strictObjectBody } from '../lib/strictBody.js';
+import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
 
 export const contradictionRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/contradictions — list all unresolved contradictions
@@ -11,6 +11,7 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
       summary: 'List unresolved contradictions',
       querystring: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           // Bounded: an established brain can hold thousands of contradicts
           // edges, and returning all of them made the dashboard flag nearly
@@ -19,6 +20,11 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     },
+    // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+    // above documents the contract without enforcing it — an unknown key is
+    // stripped in silence and the caller is answered 200 for a request that was
+    // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+    preValidation: strictQueryString(['limit']),
     handler: async (req) => {
       const contradictions = await brain.getContradictions(undefined, req.query.limit ?? 200);
       return {

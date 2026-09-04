@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { ReflectionType } from '@engram-ai-memory/core';
 import { brain } from '../index.js';
-import { strictObjectBody } from '../lib/strictBody.js';
+import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
 
 /** The reflection types the engine understands. Mirrors core's ReflectionType. */
 const REFLECTION_TYPES = ['pattern', 'knowledge_gap', 'trend', 'contradiction_summary'] as const;
@@ -18,12 +18,18 @@ export const reflectionRoutes: FastifyPluginAsync = async (app) => {
       // unknown ?type= reached the SQL filter as an unvalidated string.
       querystring: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           limit: { type: 'integer', default: 20, minimum: 1, maximum: 200 },
           type: { type: 'string', enum: [...REFLECTION_TYPES] },
         },
       },
     },
+    // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+    // above documents the contract without enforcing it — an unknown key is
+    // stripped in silence and the caller is answered 200 for a request that was
+    // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+    preValidation: strictQueryString(['limit', 'type']),
     handler: async (req) => {
       // Filter by type in SQL so LIMIT is applied after the filter.
       const filtered = await brain.getReflections(req.query.limit ?? 20, req.query.type);

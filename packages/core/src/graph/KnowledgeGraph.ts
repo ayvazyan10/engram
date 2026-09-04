@@ -28,6 +28,23 @@ export interface GraphNeighbor {
   depth: number;
 }
 
+/**
+ * Identity of one connection, shared by both halves of a mirrored pair.
+ *
+ * The endpoints of a bidirectional edge are ordered so that the edge and its
+ * mirror produce the same key; a directed edge keeps its own orientation,
+ * because A→B and B→A are two different connections when neither is
+ * bidirectional. NUL separates the parts so an id containing the separator
+ * cannot forge a collision.
+ */
+function canonicalEdgeKey(edge: GraphEdge): string {
+  const [first, second] =
+    edge.bidirectional && edge.targetId < edge.sourceId
+      ? [edge.targetId, edge.sourceId]
+      : [edge.sourceId, edge.targetId];
+  return `${first}\u0000${second}\u0000${edge.relationship}`;
+}
+
 export class KnowledgeGraph {
   // Adjacency list: nodeId → array of edges
   private adjacency = new Map<string, GraphEdge[]>();
@@ -161,10 +178,29 @@ export class KnowledgeGraph {
     return this.nodes.size;
   }
 
+  /**
+   * How many CONNECTIONS the graph holds — one per link, not one per direction.
+   *
+   * `addEdge` stores a bidirectional link as a mirrored pair of directed
+   * adjacency entries (see `link`), so summing the adjacency lists counted
+   * every bidirectional connection twice. The number surfaced as
+   * `stats().graphEdges`, which the dashboard prints beside
+   * `GET /api/graph/edges`'s own `stored` count of connection rows: on a real
+   * store those read 16,984 and 8,492 — two numbers for one noun, on one
+   * screen, differing by exactly the mirror.
+   *
+   * A connection is one edge regardless of which way it can be traversed, so
+   * the mirror is folded away here. Directed links still count once each, and
+   * a bidirectional self-loop occupies a single slot (its mirror overwrites
+   * it), so it counts once too — which is why this is a set of canonical keys
+   * rather than `entries - mirrors / 2`.
+   */
   get edgeCount(): number {
-    let total = 0;
-    for (const [, edges] of this.adjacency) total += edges.length;
-    return total;
+    const seen = new Set<string>();
+    for (const [, edges] of this.adjacency) {
+      for (const edge of edges) seen.add(canonicalEdgeKey(edge));
+    }
+    return seen.size;
   }
 
   /** Clear the entire graph. */

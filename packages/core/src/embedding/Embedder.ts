@@ -5,6 +5,8 @@
  * No server round-trip required; runs entirely in Node.js via ONNX/WASM.
  */
 
+import { readEnvString } from '../lifecycle/envConfig.js';
+
 // Dynamic import to support both CommonJS and ESM environments
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let pipeline: any = null;
@@ -15,8 +17,15 @@ let embedder: any = null;
 const DEFAULT_MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
 const DEFAULT_EMBEDDING_DIM = 384;
 
-/** Active model ID (resolved at first embed call). */
-let activeModelId: string = process.env['ENGRAM_EMBEDDING_MODEL'] ?? DEFAULT_MODEL_ID;
+/**
+ * Active model ID (resolved at first embed call).
+ *
+ * `readEnvString`, not `??`: a blank ENGRAM_EMBEDDING_MODEL is what a host
+ * templating an untouched optional field passes, and `'' ?? DEFAULT` keeps the
+ * empty string — which would be handed to the transformers pipeline as a model
+ * name and stamped onto every row as the embedding model that produced it.
+ */
+let activeModelId: string = readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL') ?? DEFAULT_MODEL_ID;
 
 /** Known model → dimension mappings. */
 const MODEL_DIMENSIONS: Record<string, number> = {

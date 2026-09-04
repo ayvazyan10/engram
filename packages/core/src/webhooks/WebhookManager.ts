@@ -21,6 +21,8 @@ import http from 'http';
 import https from 'https';
 import net from 'net';
 import { getDb, schema } from '../db/index.js';
+import { readEnvNumberOr } from '../lifecycle/envConfig.js';
+import type { EnvSource } from '../lifecycle/envConfig.js';
 import type { Webhook } from '../db/schema.js';
 import {
   assertSafeWebhookTarget,
@@ -85,11 +87,42 @@ const MAX_FAIL_COUNT = 10;
 /** Max retry attempts per delivery. */
 const MAX_RETRIES = 3;
 
-/** Upper bound on concurrent background dispatches (see fire()). */
-const MAX_CONCURRENT_DISPATCH = parseInt(
-  process.env['ENGRAM_WEBHOOK_MAX_CONCURRENCY'] ?? '32',
-  10
-);
+/** Upper bound on concurrent background dispatches when nothing overrides it. */
+const DEFAULT_MAX_CONCURRENT_DISPATCH = 32;
+
+/**
+ * Resolve the dispatch ceiling from the environment.
+ *
+ * This was `parseInt(env ?? '32', 10)` with nothing looking at the result, so
+ * `ENGRAM_WEBHOOK_MAX_CONCURRENCY=many` produced `NaN` — and `this.inFlight >=
+ * NaN` is false for every value of `inFlight`, which removed the bound
+ * entirely. The limit that exists to stop a single batch-store from stacking
+ * hundreds of detached deliveries disappeared exactly when someone had tried
+ * to configure it.
+ *
+ * A tuning knob rather than a security control: the safe reading of a
+ * malformed value is the documented default, announced on stderr, not a dead
+ * process. `readEnvNumberOr` is what makes that choice explicit — the same
+ * parse and the same bounds as the strict readers, a different answer to
+ * "and then what".
+ *
+ * Exported so the branches are testable without re-importing the module for
+ * each one; `fire()` reads the module constant below.
+ */
+export function resolveMaxConcurrentDispatch(
+  env: EnvSource,
+  warn?: (message: string) => void
+): number {
+  return readEnvNumberOr(
+    env,
+    'ENGRAM_WEBHOOK_MAX_CONCURRENCY',
+    DEFAULT_MAX_CONCURRENT_DISPATCH,
+    { min: 1 },
+    warn
+  );
+}
+
+const MAX_CONCURRENT_DISPATCH = resolveMaxConcurrentDispatch(process.env);
 
 /** Base delay for exponential backoff (ms). */
 const RETRY_BASE_MS = 500;

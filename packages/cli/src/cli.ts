@@ -18,7 +18,6 @@ import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid
 import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, readJsonOrEmpty } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
-import { syncEngineOptions } from './syncOptions.js';
 import {
   defaultConfig, normalizeConfig, isConfigKey, parseConfigValue, applyDbPathEnv, CONFIG_KEYS,
 } from './engramConfig.js';
@@ -41,7 +40,14 @@ import type { EngramConfig } from './engramConfig.js';
 
 // ─── Config & State ──────────────────────────────────────────────────────────
 
-const ENGRAM_HOME = process.env['ENGRAM_HOME'] ?? path.join(os.homedir(), '.engram');
+// `||`, not `??`: blank means unset here too. `'' ?? default` keeps the empty
+// string, and every path below would then resolve relative to the process's
+// cwd — `config.json`, `server.pid` — instead of to ~/.engram. This is the
+// rule core's readEnvString states (packages/core/src/lifecycle/envConfig.ts),
+// applied inline because this line runs on every `engram` invocation and a
+// static core import costs ~110ms of startup for commands that only ever speak
+// HTTP to the server.
+const ENGRAM_HOME = process.env['ENGRAM_HOME'] || path.join(os.homedir(), '.engram');
 const CONFIG_PATH = path.join(ENGRAM_HOME, 'config.json');
 const PID_PATH = path.join(ENGRAM_HOME, 'server.pid');
 const LOG_PATH = path.join(ENGRAM_HOME, 'logs', 'server.log');
@@ -354,7 +360,6 @@ program
       ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
       ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
       ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
-      ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
       ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
       ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
     };
@@ -679,6 +684,11 @@ cloudCmd
       return;
     }
     const { redactSyncUrl, SyncEngine } = await import('@engram-ai-memory/core');
+    // Loaded here rather than at the top of the file: syncOptions reads the
+    // encryption passphrase through core's env helpers, and a static import
+    // would pull the whole core barrel — ~110ms — into `engram store` and
+    // every other command that never touches sync.
+    const { syncEngineOptions } = await import('./syncOptions.js');
 
     // Never `= config.dbPath || undefined`: assigning undefined to process.env
     // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
@@ -691,6 +701,14 @@ cloudCmd
     const status = engine.status();
     await engine.dispose();
 
+    // `deviceName` is a CLI-side display label and nothing more: it is read
+    // from this config file here and in `cloud devices`, and no other process
+    // consumes it. `engram start`/`engram update` used to export it as
+    // ENGRAM_DEVICE_NAME into the server's environment, where nothing ever
+    // read it — the server's identity is the per-install device id minted in
+    // core (sync/deviceId.ts), which is what `status.deviceId` below shows.
+    // The export was removed rather than wired up, because a name the server
+    // does not use is a setting that only looks like it does something.
     const deviceName = config.deviceName || os.hostname();
     console.log(`Device:       ${deviceName} (${status.deviceId.slice(0, 8)}…)`);
     console.log(`Sync URL:     ${redactSyncUrl(config.syncUrl)}`);
@@ -722,6 +740,8 @@ cloudCmd
     }
 
     const { SyncEngine } = await import('@engram-ai-memory/core');
+    // See `cloud status` above for why this is not a top-level import.
+    const { syncEngineOptions } = await import('./syncOptions.js');
     const engine = new SyncEngine(syncEngineOptions({ syncUrl: config.syncUrl }));
     try {
       console.log('Syncing…');
@@ -989,7 +1009,6 @@ program
           ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
           ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
           ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
-          ...(config.deviceName ? { ENGRAM_DEVICE_NAME: config.deviceName } : {}),
           ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
           ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
         };

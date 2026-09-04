@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { getDb, getDeviceId, schema, upsertConnection } from '@engram-ai-memory/core';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { brain, notifySyncWrite } from '../index.js';
+import { strictQueryString } from '../lib/strictBody.js';
 
 export const graphRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/graph/:id — get connections for a memory node
@@ -13,11 +14,17 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         summary: 'Get knowledge graph neighborhood for a memory',
         querystring: {
           type: 'object',
+          additionalProperties: false,
           properties: {
             depth: { type: 'integer', default: 2, minimum: 1, maximum: 4 },
           },
         },
       },
+      // Fastify's ajv runs with removeAdditional, so `additionalProperties: false`
+      // above documents the contract without enforcing it — an unknown key is
+      // stripped in silence and the caller is answered 200 for a request that was
+      // plainly a typo. This is what enforces it; see lib/strictBody.ts.
+      preValidation: strictQueryString(['depth']),
       handler: async (req, reply) => {
         const db = getDb();
         const { id } = req.params;
