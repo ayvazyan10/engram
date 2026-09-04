@@ -59,6 +59,12 @@ jobs:
       - name: Typecheck
         run: pnpm turbo run typecheck
 
+      # A real gate: eslint exits non-zero on any error and the step fails the
+      # job. No continue-on-error — lint went unrun for the life of this repo
+      # precisely because nothing forced it.
+      - name: Lint
+        run: pnpm turbo run lint
+
       - name: Build
         run: pnpm turbo run build
 
@@ -69,8 +75,13 @@ jobs:
         env:
           ENGRAM_DB_PATH: /tmp/engram-test.db
 
-      - name: Test
-        run: pnpm turbo run test
+      # test:coverage, not test: it runs the same suites and additionally fails
+      # on a package that drops below its own thresholds. Running plain `test`
+      # here as well would only double the wall clock for the same assertions.
+      # The gate went unenforced for the life of this repo, and by the time it
+      # was first run two packages were already under their own thresholds.
+      - name: Test with coverage
+        run: pnpm turbo run test:coverage
         env:
           ENGRAM_DB_PATH: /tmp/engram-test.db
           TEST_PG_URL: 'postgres://engram_test:engram_test_pass@localhost:5432/engram_test?sslmode=disable'
