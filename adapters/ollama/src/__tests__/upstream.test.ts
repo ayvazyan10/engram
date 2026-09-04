@@ -10,8 +10,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 
-import { makeBufferedRequest, streamRequest, passthrough, type UpstreamTarget } from '../upstream.js';
-import { buildForwardHeaders, isChatPath, isOpenAIPath } from '../headers.js';
+import { makeBufferedRequest, streamRequest, passthrough, upstreamPort, type UpstreamTarget } from '../upstream.js';
+import { buildForwardHeaders, buildResponseHeaders, isChatPath, isOpenAIPath } from '../headers.js';
 
 const servers: http.Server[] = [];
 
@@ -28,7 +28,7 @@ function startServer(handler: http.RequestListener): Promise<{ target: UpstreamT
 
 /** A target pointing at a port with nothing listening. */
 async function deadTarget(): Promise<UpstreamTarget> {
-  const { target, port } = await startServer(() => {});
+  const { port } = await startServer(() => {});
   await new Promise<void>((r) => servers.pop()!.close(() => r()));
   return { url: new URL(`http://127.0.0.1:${port}`), timeoutMs: 1000 };
 }
@@ -36,7 +36,7 @@ async function deadTarget(): Promise<UpstreamTarget> {
 /** Drive a handler through a real client request and capture the raw response. */
 function callThrough(
   handler: (req: http.IncomingMessage, res: http.ServerResponse) => void
-): Promise<{ status: number; body: string }> {
+): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const proxyServer = http.createServer(handler);
     servers.push(proxyServer);
@@ -46,7 +46,9 @@ function callThrough(
       const req = http.request({ hostname: '127.0.0.1', port, path: '/api/chat', method: 'POST', agent: false }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }));
+        res.on('end', () =>
+          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString(), headers: res.headers })
+        );
       });
       req.on('error', reject);
       req.end('{}');
@@ -232,5 +234,152 @@ describe('path classification', () => {
   it('recognises the OpenAI surface', () => {
     expect(isOpenAIPath('/v1/chat/completions')).toBe(true);
     expect(isOpenAIPath('/api/chat')).toBe(false);
+  });
+});
+
+describe('upstreamPort', () => {
+  it('uses the explicit port when the target URL carries one', () => {
+    expect(upstreamPort(new URL('http://localhost:11434'))).toBe(11434);
+    expect(upstreamPort(new URL('https://ollama.example.com:8443'))).toBe(8443);
+  });
+
+  it('falls back to 443 for an https target with no port', () => {
+    // `new URL('https://host').port` is '', so `parseInt('') || 11434` used to
+    // send TLS traffic to Ollama's plaintext port instead of the TLS default.
+    expect(upstreamPort(new URL('https://ollama.example.com'))).toBe(443);
+  });
+
+  it("keeps Ollama's default port for an http target with no port", () => {
+    expect(upstreamPort(new URL('http://localhost'))).toBe(11434);
+  });
+});
+
+describe('passthrough header hygiene', () => {
+  it('strips hop-by-hop request headers on non-chat paths', async () => {
+    let seen: http.IncomingHttpHeaders | null = null;
+    const { target } = await startServer((req, res) => {
+      seen = req.headers;
+      req.resume();
+      req.on('end', () => res.end('{}'));
+    });
+
+    // A synthetic request: a real Node client normalises the very headers this
+    // test is about, so the inbound header set is supplied directly.
+    const inbound = {
+      url: '/api/tags',
+      method: 'POST',
+      headers: {
+        'transfer-encoding': 'chunked',
+        connection: 'upgrade',
+        upgrade: 'h2c',
+        te: 'trailers',
+        'keep-alive': 'timeout=5',
+        'proxy-authorization': 'Basic c2VjcmV0',
+        'content-length': '999',
+        authorization: 'Bearer keep-me',
+        'x-custom': 'keep-me',
+      },
+    } as unknown as http.IncomingMessage;
+
+    await callThrough((_req, res) => {
+      passthrough(target, inbound, res, Buffer.from('{}'));
+    });
+
+    // Forwarding the client's `transfer-encoding` next to a recomputed
+    // `content-length` is the double-framing shape strict upstreams reject —
+    // when that happens the request never arrives at all.
+    expect(seen, 'upstream received no well-framed request').not.toBeNull();
+    const headers = seen as unknown as http.IncomingHttpHeaders;
+
+    for (const dropped of ['transfer-encoding', 'upgrade', 'te', 'keep-alive', 'proxy-authorization']) {
+      expect(headers, dropped).not.toHaveProperty(dropped);
+    }
+    // Node's own client always sets `connection`; what must not survive is the
+    // client's value, which is what turns a proxied request into an upgrade.
+    expect(headers['connection']).not.toBe('upgrade');
+    // Framing is recomputed from the body we actually forward, never copied.
+    expect(headers['content-length']).toBe('2');
+    // Deliberate: the upstream host is fixed from env, so Authorization is ours to forward.
+    expect(headers['authorization']).toBe('Bearer keep-me');
+    expect(headers['x-custom']).toBe('keep-me');
+  });
+
+  it('strips hop-by-hop headers from the response it forwards', async () => {
+    const { target } = await startServer((_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'keep-alive': 'timeout=5',
+        'proxy-authenticate': 'Basic realm="x"',
+        upgrade: 'h2c',
+        trailer: 'x-trace',
+        'x-keep': 'yes',
+      });
+      res.end('{}');
+    });
+
+    const response = await callThrough((req, res) => {
+      passthrough(target, req, res, Buffer.from(''));
+    });
+
+    for (const dropped of ['keep-alive', 'proxy-authenticate', 'upgrade', 'trailer']) {
+      expect(response.headers, dropped).not.toHaveProperty(dropped);
+    }
+    expect(response.headers['x-keep']).toBe('yes');
+  });
+});
+
+describe('response header hygiene', () => {
+  it('strips hop-by-hop headers on the streaming path', async () => {
+    const { target } = await startServer((_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/x-ndjson',
+        'keep-alive': 'timeout=5',
+        upgrade: 'h2c',
+        trailer: 'x-trace',
+        'x-keep': 'yes',
+      });
+      res.end('{"message":{"content":"a"},"done":true}\n');
+    });
+
+    const response = await callThrough((_req, res) => {
+      void streamRequest(target, '/api/chat', 'POST', {}, Buffer.from('{}'), res).catch(() => {});
+    });
+
+    for (const dropped of ['keep-alive', 'upgrade', 'trailer']) {
+      expect(response.headers, dropped).not.toHaveProperty(dropped);
+    }
+    expect(response.headers['x-keep']).toBe('yes');
+    expect(response.body).toContain('"a"');
+  });
+
+  it('filters the buffered response headers the caller forwards', async () => {
+    const { target } = await startServer((_req, res) => {
+      res.writeHead(200, { 'keep-alive': 'timeout=5', upgrade: 'h2c', 'x-keep': 'yes' });
+      res.end('{}');
+    });
+
+    const result = await makeBufferedRequest(target, '/api/chat', 'POST', {}, Buffer.from('{}'));
+    for (const dropped of ['keep-alive', 'upgrade', 'connection']) {
+      expect(result.headers, dropped).not.toHaveProperty(dropped);
+    }
+    expect(result.headers['x-keep']).toBe('yes');
+  });
+
+  it('buildResponseHeaders keeps end-to-end headers and array values', () => {
+    const filtered = buildResponseHeaders({
+      connection: 'keep-alive',
+      'transfer-encoding': 'chunked',
+      'Proxy-Authenticate': 'Basic',
+      'content-length': '2',
+      'set-cookie': ['a=1', 'b=2'],
+      'content-type': 'application/json',
+    } as never);
+
+    for (const dropped of ['connection', 'transfer-encoding', 'Proxy-Authenticate']) {
+      expect(filtered, dropped).not.toHaveProperty(dropped);
+    }
+    expect(filtered['content-length']).toBe('2');
+    expect(filtered['set-cookie']).toEqual(['a=1', 'b=2']);
+    expect(filtered['content-type']).toBe('application/json');
   });
 });

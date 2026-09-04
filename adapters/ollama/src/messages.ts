@@ -7,7 +7,71 @@
 
 export type MessageContent = string | Array<{ type: string; text?: string }>;
 
-/** The most recent user message, flattened to plain text. */
+/** Outcome of structural validation: either a usable body, or why it is not one. */
+export type ChatBodyValidation =
+  | { readonly ok: true; readonly body: Record<string, unknown> }
+  | { readonly ok: false; readonly reason: string };
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Describe what is wrong with one message entry, or null when it is usable. */
+function messageProblem(entry: unknown, index: number): string | null {
+  if (!isPlainObject(entry)) return `messages[${index}] is not an object`;
+  if (typeof entry['role'] !== 'string') return `messages[${index}].role is not a string`;
+
+  const content = entry['content'];
+  // Absent or null content is legitimate: OpenAI assistant messages that carry
+  // only tool_calls have `content: null`.
+  if (content === undefined || content === null || typeof content === 'string') return null;
+  if (!Array.isArray(content)) return `messages[${index}].content is neither a string nor an array`;
+
+  for (const [i, part] of content.entries()) {
+    if (!isPlainObject(part)) return `messages[${index}].content[${i}] is not an object`;
+    const text = part['text'];
+    if (text !== undefined && typeof text !== 'string') {
+      return `messages[${index}].content[${i}].text is not a string`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check that a decoded request body is shaped like a chat request.
+ *
+ * `JSON.parse` happily returns `null`, a string or a number, and casting any of
+ * those to `Record<string, unknown>` only postpones the failure to the first
+ * dereference — which happens inside an async handler, where a TypeError is
+ * fatal to the process. This is the gate that turns "attacker kills the proxy"
+ * into a 400: nothing downstream reads a body that has not passed through here.
+ */
+export function validateChatBody(value: unknown): ChatBodyValidation {
+  if (!isPlainObject(value)) return { ok: false, reason: 'body is not a JSON object' };
+
+  const messages = value['messages'];
+  if (messages !== undefined) {
+    if (!Array.isArray(messages)) return { ok: false, reason: 'messages is not an array' };
+    for (const [i, entry] of messages.entries()) {
+      const problem = messageProblem(entry, i);
+      if (problem) return { ok: false, reason: problem };
+    }
+  }
+
+  const prompt = value['prompt'];
+  if (prompt !== undefined && prompt !== null && typeof prompt !== 'string') {
+    return { ok: false, reason: 'prompt is not a string' };
+  }
+
+  return { ok: true, body: value };
+}
+
+/**
+ * The most recent user message, flattened to plain text.
+ *
+ * Callers must pass a body that has cleared `validateChatBody` — the casts
+ * below are only sound because of it.
+ */
 export function extractUserQuery(body: Record<string, unknown>): string {
   if (Array.isArray(body['messages'])) {
     const messages = body['messages'] as Array<{ role: string; content: MessageContent }>;

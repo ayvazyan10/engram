@@ -24,12 +24,44 @@ export const STRIPPED_REQUEST_HEADERS = new Set([
   'accept-encoding',
 ]);
 
+/**
+ * Headers never forwarded back to the client.
+ *
+ * The hop-by-hop set is per-connection in both directions: an upstream's
+ * `connection` / `keep-alive` describe *its* socket, not ours, and copying its
+ * `transfer-encoding` next to the framing Node computes for our own response is
+ * the same duplicated-framing shape guarded against above. `content-length` is
+ * kept: every path here forwards the upstream body byte-for-byte.
+ */
+export const STRIPPED_RESPONSE_HEADERS = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
 /** Flatten and filter inbound request headers for forwarding upstream. */
 export function buildForwardHeaders(headers: http.IncomingHttpHeaders): Record<string, string> {
   return Object.fromEntries(
     Object.entries(headers)
       .filter(([k]) => !STRIPPED_REQUEST_HEADERS.has(k.toLowerCase()))
       .map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : (v ?? '')])
+  );
+}
+
+/**
+ * Filter an upstream response's headers before they are written to the client.
+ *
+ * Array values are kept as arrays — `set-cookie` is legitimately repeated and
+ * joining it with commas would corrupt it.
+ */
+export function buildResponseHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([k]) => !STRIPPED_RESPONSE_HEADERS.has(k.toLowerCase()))
   );
 }
 
