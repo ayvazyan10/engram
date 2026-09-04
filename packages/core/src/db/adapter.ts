@@ -7,6 +7,7 @@
  */
 
 import path from 'path';
+import type { Database as SqliteHandle } from 'better-sqlite3';
 import * as schema from './schema.js';
 
 /** Database dialect. SQLite is the only supported primary backend. */
@@ -20,8 +21,26 @@ export interface AdapterConfig {
 }
 
 export interface DatabaseConnection {
-  /** The drizzle ORM instance */
+  /**
+   * The drizzle ORM instance.
+   *
+   * Deliberately `any`: naming drizzle's real type here
+   * (`BetterSQLite3Database<typeof schema>`) would pin the schema generic
+   * into the public surface of every consumer that holds a connection, and
+   * the instance itself comes back from an untyped lazy `require` below.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see above
   db: any;
+  /**
+   * Path of the SQLite file backing this connection.
+   *
+   * Exposed because a database file's identity is not the same thing as the
+   * installation's identity: `sync/deviceId.ts` fingerprints this path (with
+   * the file's inode) to notice that `engram.db` has been copied onto a
+   * second machine, which otherwise leaves two installations sharing one
+   * `device_id` and silently exchanging nothing.
+   */
+  path: string;
   /** Close the connection */
   close: () => void;
   /** Force WAL checkpoint so reads see external writes */
@@ -44,12 +63,27 @@ export interface DatabaseConnection {
 let _connection: DatabaseConnection | null = null;
 
 /**
+ * A path only counts as configured when it is not blank.
+ *
+ * `??` is not enough here: hosts that template an unset optional config field
+ * (the Claude Desktop extension's `db_path` among them) pass an EMPTY STRING
+ * rather than omitting the variable, and better-sqlite3 reads '' as an
+ * ANONYMOUS TEMPORARY DATABASE that is deleted when the connection closes —
+ * so every write was reported as stored and silently discarded on exit.
+ *
+ * A non-blank value is returned byte-for-byte; only blank means "unset".
+ */
+function configuredPath(value: string | undefined): string | undefined {
+  return value && value.trim().length > 0 ? value : undefined;
+}
+
+/**
  * Resolve config from explicit options, env vars, and defaults.
  */
 function resolveConfig(config?: AdapterConfig): { sqlitePath: string } {
   const sqlitePath =
-    config?.sqlitePath ??
-    process.env['ENGRAM_DB_PATH'] ??
+    configuredPath(config?.sqlitePath) ??
+    configuredPath(process.env['ENGRAM_DB_PATH']) ??
     path.join(process.cwd(), 'engram.db');
 
   return { sqlitePath };
@@ -105,7 +139,14 @@ export function getDialect(): DatabaseDialect {
 // ─── SQLite Adapter ──────────────────────────────────────────────────────────
 
 function createSqliteConnection(dbPath: string): DatabaseConnection {
+  // Lazy, deliberately `require`: better-sqlite3 is a native addon and this
+  // module is imported by every process that merely *talks about* a database.
+  // Hoisting these to static imports would load the addon at import time
+  // rather than at first connection, which is a behaviour change, not a
+  // style one.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- see above
   const Database = require('better-sqlite3');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- see above
   const { drizzle } = require('drizzle-orm/better-sqlite3');
 
   const sqlite = new Database(dbPath);
@@ -130,6 +171,7 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
 
   return {
     db,
+    path: dbPath,
     close: () => {
       sqlite.close();
     },
@@ -150,9 +192,42 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
 // existence check below must stay a single cheap read, and every DDL
 // statement must be gated so it executes at most once per database file
 // rather than re-running on every open.
+//
+// NULLABLE PRIMARY KEYS, deliberately left alone. `webhooks.id`,
+// `local_meta.key` and `sync_state.id` are declared `TEXT PRIMARY KEY`
+// without `NOT NULL`, and SQLite honours that literally: a non-STRICT rowid
+// table genuinely accepts a NULL primary key. The v0.1.0-era tables above all
+// say `NOT NULL`; these three were added later and did not.
+//
+// Tightening them looks like a one-word fix and is not. SQLite cannot add
+// `NOT NULL` to an existing column, so every database that already has these
+// tables keeps the loose declaration — and a fresh database would then stop
+// matching an upgraded one, which is precisely the equivalence
+// `__tests__/migration-v050.test.ts` pins byte-for-byte (it reconstructs a
+// real v0.4.0 database, nullable `webhooks.id` and all). Closing this
+// properly means rebuilding three tables on upgrade; until someone decides
+// that is worth it, `__tests__/sqlite-schema-parity.test.ts` exempts exactly
+// these three by name. Nothing in the codebase has ever written a NULL there.
+//
+// TIMESTAMP DEFAULTS. `DEFAULT (CURRENT_TIMESTAMP)` below produces SQLite's
+// own format, `2026-01-01 12:00:00` — space-separated, no timezone, no
+// milliseconds. Every timestamp Engram compares is compared as a STRING
+// (sync's last-write-wins, the push cursor's `updated_at > ?`), and a
+// space-separated value sorts BEFORE any ISO `2026-01-01T…Z` value on the
+// same date, because ' ' < 'T'. A row stamped by the default would therefore
+// read as older than every ISO row from the same day and could sit below the
+// push cursor forever.
+//
+// This is documented rather than normalised, deliberately. Every writer in
+// this repo stamps an explicit `new Date().toISOString()`, so the default is
+// only ever reached by an external process writing to `engram.db` directly.
+// Changing a column default in SQLite means rebuilding the table, and doing
+// it for fresh databases only would break the fresh-vs-upgraded schema
+// equivalence that `__tests__/migration-v050.test.ts` pins. If you add a
+// write path here, stamp ISO-8601 explicitly — do not rely on the default.
 
 /** Whether `column` exists on `table` in this SQLite database. */
-function columnExists(sqlite: any, table: string, column: string): boolean {
+function columnExists(sqlite: SqliteHandle, table: string, column: string): boolean {
   const row = sqlite
     .prepare('SELECT COUNT(*) as cnt FROM pragma_table_info(?) WHERE name = ?')
     .get(table, column) as { cnt: number };
@@ -160,7 +235,7 @@ function columnExists(sqlite: any, table: string, column: string): boolean {
 }
 
 /** Whether `table` exists in this SQLite database. */
-function tableExists(sqlite: any, table: string): boolean {
+function tableExists(sqlite: SqliteHandle, table: string): boolean {
   const row = sqlite
     .prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name=?")
     .get(table) as { cnt: number };
@@ -168,7 +243,7 @@ function tableExists(sqlite: any, table: string): boolean {
 }
 
 /** Whether `index` exists in this SQLite database. */
-function indexExists(sqlite: any, index: string): boolean {
+function indexExists(sqlite: SqliteHandle, index: string): boolean {
   const row = sqlite
     .prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='index' AND name=?")
     .get(index) as { cnt: number };
@@ -181,13 +256,13 @@ function indexExists(sqlite: any, index: string): boolean {
  * or default. Safe and cheap to call unconditionally on every connection
  * open: it no-ops (one read, no write) once the column is present.
  */
-function addColumnIfMissing(sqlite: any, table: string, column: string, type: string): void {
+function addColumnIfMissing(sqlite: SqliteHandle, table: string, column: string, type: string): void {
   if (!columnExists(sqlite, table, column)) {
     sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 }
 
-function runSqliteMigrations(sqlite: any): void {
+function runSqliteMigrations(sqlite: SqliteHandle): void {
   // v0.1.0: Create base tables if they don't exist (fresh database)
   if (!tableExists(sqlite, 'memories')) {
     sqlite.exec(`
@@ -225,6 +300,7 @@ function runSqliteMigrations(sqlite: any): void {
       CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories (archived_at);
       CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace);
       CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at);
+      CREATE INDEX IF NOT EXISTS idx_memories_sync_push ON memories (device_id, updated_at, id);
 
       CREATE TABLE IF NOT EXISTS memory_connections (
         id TEXT PRIMARY KEY NOT NULL,
@@ -245,6 +321,7 @@ function runSqliteMigrations(sqlite: any): void {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_unique_pair ON memory_connections (source_id, target_id, relationship);
       CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at);
       CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at);
+      CREATE INDEX IF NOT EXISTS idx_connections_sync_push ON memory_connections (device_id, updated_at, id);
 
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY NOT NULL,
@@ -261,6 +338,7 @@ function runSqliteMigrations(sqlite: any): void {
       CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions (started_at);
       CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace);
       CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_sync_push ON sessions (device_id, updated_at, id);
 
       CREATE TABLE IF NOT EXISTS context_assemblies (
         id TEXT PRIMARY KEY NOT NULL,
@@ -387,6 +465,40 @@ function runSqliteMigrations(sqlite: any): void {
   }
 
   addColumnIfMissing(sqlite, 'sessions', 'device_id', 'text');
+
+  // The sync push query selects only rows this device owns and pages on a
+  // composite boundary:
+  //
+  //   WHERE (device_id IS NULL OR device_id = ?)
+  //     AND (updated_at > ? OR (updated_at = ? AND id > ?))
+  //   ORDER BY updated_at, id LIMIT ?
+  //
+  // On `(updated_at)` alone SQLite can only seek by timestamp and then
+  // discard every peer-written row it lands on, so a device that has pulled
+  // a lot from its peers walks most of the table to fill one page. Leading
+  // with `device_id` lets the MULTI-INDEX OR seek straight into this
+  // device's own rows: measured at 19.3 ms -> 2.7 ms for one 500-row page of
+  // a 200k-row table that is 90% peer-written.
+  //
+  // `(updated_at, id)` WITHOUT the device_id prefix is actively worse than
+  // what we have — SQLite abandons the OR optimization for a full index scan
+  // (~1000x slower in the same measurement) — so this must stay a
+  // three-column index, not a two-column one.
+  //
+  // Gated on the index's own existence: `device_id` was added above and may
+  // already have existed, so there is no "column just added" event to hang
+  // this off, and it must not re-run on every connection open.
+  for (const [indexName, table] of [
+    ['idx_memories_sync_push', 'memories'],
+    ['idx_connections_sync_push', 'memory_connections'],
+    ['idx_sessions_sync_push', 'sessions'],
+  ] as const) {
+    if (!indexExists(sqlite, indexName)) {
+      sqlite.exec(
+        `CREATE INDEX IF NOT EXISTS ${indexName} ON ${table} (device_id, updated_at, id)`
+      );
+    }
+  }
 
   if (!tableExists(sqlite, 'local_meta')) {
     sqlite.exec(`

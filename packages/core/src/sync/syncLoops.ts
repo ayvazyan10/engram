@@ -20,18 +20,37 @@ export function maxNullable(a: string | null, b: string | null): string | null {
 }
 
 /**
+ * Composite push cursor: `updated_at` plus the row id that timestamp was
+ * last seen on. The persisted cursor (`sync_state.last_push_at`) is a bare
+ * timestamp, so `id` is `null` on the first page of a drain and non-null
+ * only while paging inside one drain.
+ */
+export interface PushCursor {
+  ts: string;
+  id: string | null;
+}
+
+/**
  * Drains one table's local push queue in `batchSize` pages, starting from
  * `startCursor`. Stops on a partial page, or if the cursor fails to advance
  * (an all-null `updatedAt` tail) — the latter would otherwise loop forever.
+ *
+ * Pages resume on `(updated_at, id)`, not on `updated_at` alone. A bare
+ * `> updated_at` boundary silently drops every remaining row that shares the
+ * page's final timestamp, and bulk writers produce exactly that shape:
+ * `DecayEngine.sweep` computes `new Date()` once and stamps every decayed
+ * row with it, so a sweep larger than one page loses its tail. The pull side
+ * already cursors this way (`drainPullBatches`).
  */
 export async function drainPushBatches<T>(
-  select: (cursor: string | null) => T[],
+  select: (cursor: PushCursor | null) => T[],
   push: (rows: T[]) => Promise<number>,
   getUpdatedAt: (row: T) => string | null,
+  getId: (row: T) => string,
   startCursor: string | null,
   batchSize: number
 ): Promise<{ count: number; maxUpdatedAt: string | null }> {
-  let cursor = startCursor;
+  let cursor: PushCursor | null = startCursor === null ? null : { ts: startCursor, id: null };
   let maxUpdatedAt = startCursor;
   let count = 0;
 
@@ -43,13 +62,18 @@ export async function drainPushBatches<T>(
     for (const row of rows) {
       maxUpdatedAt = maxNullable(maxUpdatedAt, getUpdatedAt(row));
     }
+    if (rows.length < batchSize) break;
 
     const last = rows[rows.length - 1];
     const lastUpdatedAt = last ? getUpdatedAt(last) : null;
-    if (rows.length < batchSize || lastUpdatedAt === null || lastUpdatedAt === cursor) {
-      break;
-    }
-    cursor = lastUpdatedAt;
+    // A null `updated_at` sorts first and gives nothing to resume from
+    // (pre-Phase-0 connections/sessions rows) — stop rather than re-select
+    // the same page forever.
+    if (last === undefined || lastUpdatedAt === null) break;
+
+    const next: PushCursor = { ts: lastUpdatedAt, id: getId(last) };
+    if (cursor !== null && cursor.ts === next.ts && cursor.id === next.id) break;
+    cursor = next;
   }
 
   return { count, maxUpdatedAt };
@@ -59,6 +83,22 @@ export async function drainPushBatches<T>(
 export interface PullCursor {
   ts: string;
   id: string | null;
+}
+
+/** One server-side page of pulled rows, plus the cursor state it advances to. */
+export interface PullPage<TRow> {
+  rows: TRow[];
+  /** Highest `server_updated_at` in the page, at full precision. */
+  maxServerUpdatedAt: string | null;
+  /** `id` of the page's last row — the `(ts, id)` tiebreak. */
+  lastId: string | null;
+  hasMore: boolean;
+  /**
+   * Set when the page held a row that could not be decrypted. The cursor
+   * must not move past such a row (see `./syncCrypto.ts`), so the drain
+   * stops here and `SyncEngine` leaves the persisted pull cursor alone.
+   */
+  blocked?: boolean;
 }
 
 /**
@@ -72,21 +112,22 @@ export interface PullCursor {
  * timestamp — only the intra-drain loop uses the composite.
  */
 export async function drainPullBatches<TRow>(
-  pull: (cursorTs: string | null, cursorId: string | null) => Promise<{
-    rows: TRow[];
-    maxServerUpdatedAt: string | null;
-    lastId: string | null;
-    hasMore: boolean;
-  }>,
+  pull: (cursorTs: string | null, cursorId: string | null) => Promise<PullPage<TRow>>,
   shouldApply: (row: TRow) => boolean,
   apply: (row: TRow) => ApplyOutcome,
   startCursor: string | null
-): Promise<{ applied: number; conflicts: number; maxServerUpdatedAt: string | null }> {
+): Promise<{
+  applied: number;
+  conflicts: number;
+  maxServerUpdatedAt: string | null;
+  blocked: boolean;
+}> {
   let cursorTs = startCursor;
   let cursorId: string | null = null;
   let maxServerUpdatedAt: string | null = null;
   let applied = 0;
   let conflicts = 0;
+  let blocked = false;
 
   for (;;) {
     const batch = await pull(cursorTs, cursorId);
@@ -95,6 +136,10 @@ export async function drainPullBatches<TRow>(
       const outcome = apply(row);
       if (outcome.applied) applied++;
       if (outcome.conflict) conflicts++;
+    }
+    if (batch.blocked === true) {
+      blocked = true;
+      break;
     }
 
     if (batch.maxServerUpdatedAt !== null) {
@@ -112,5 +157,5 @@ export async function drainPullBatches<TRow>(
     if (!batch.hasMore) break;
   }
 
-  return { applied, conflicts, maxServerUpdatedAt };
+  return { applied, conflicts, maxServerUpdatedAt, blocked };
 }

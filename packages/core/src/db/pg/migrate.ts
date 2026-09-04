@@ -9,6 +9,18 @@
  * ../adapter.ts — so every statement here must stay idempotent and cheap
  * to no-op on repeat.
  *
+ * `sync_metadata` used to be created here too, out of band, because the
+ * drizzle snapshot didn't know about it. It is now part of the generated
+ * migration set (see ./migrations/0001_square_the_professor.sql), so the
+ * out-of-band CREATE is gone: two descriptions of one table is exactly the
+ * drift this module kept re-introducing. The 0001 SQL is hand-edited to say
+ * `CREATE TABLE IF NOT EXISTS`, which is what makes it safe on the databases
+ * that already got the table the old way — that comment is load-bearing, not
+ * decoration.
+ *
+ * The `server_updated_at` triggers stay out of band: drizzle-kit cannot
+ * express a trigger, so there is nothing to converge them with.
+ *
  * Neither this module nor its imports touch the `pg` package at load
  * time: `drizzle-orm/node-postgres/migrator` only reads SQL files and
  * drives `db.dialect.migrate(...)`, it never imports the driver itself.
@@ -52,7 +64,6 @@ export async function runPgSyncMigrations(
   }
 
   await createServerUpdatedAtTriggers(pool);
-  await createSyncMetadataTable(pool);
 }
 
 /**
@@ -96,27 +107,5 @@ async function createServerUpdatedAtTriggers(pool: Pool): Promise<void> {
         `PostgreSQL sync migration failed creating trigger "${triggerName}" on "${table}": ${errorMessage(err)}`
       );
     }
-  }
-}
-
-/**
- * Creates the `sync_metadata` key-value table if it doesn't already exist.
- * Stores the encryption salt and sentinel used by E2E encryption (Phase 6).
- * Idempotent — this runs on every connect alongside the rest of this module.
- */
-async function createSyncMetadataTable(pool: Pool): Promise<void> {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sync_metadata (
-        key            TEXT PRIMARY KEY,
-        value          TEXT NOT NULL,
-        created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-      );
-    `);
-  } catch (err) {
-    throw new Error(
-      `PostgreSQL sync migration failed creating "sync_metadata" table: ${errorMessage(err)}`
-    );
   }
 }

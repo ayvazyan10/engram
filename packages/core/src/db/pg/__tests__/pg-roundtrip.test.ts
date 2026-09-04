@@ -48,7 +48,6 @@ const shouldRunPgTests = !SKIP_REQUESTED && (Boolean(TEST_PG_URL) || DOCKER_AVAI
 const describeWithPg = shouldRunPgTests ? describe : describe.skip;
 
 if (!shouldRunPgTests) {
-  // eslint-disable-next-line no-console
   console.info(
     `[pg-roundtrip.test.ts] skipping: ${
       SKIP_REQUESTED ? 'SKIP_PG_TESTS is set' : 'Docker is unavailable and TEST_PG_URL is not set'
@@ -155,8 +154,8 @@ describeWithPg('PostgreSQL sync schema — round-trip integration', () => {
         embedding,
         embeddingDim: 5,
         embeddingModel: 'text-embedding-3-small',
-        importance: 0.5,
-        confidence: 0.75,
+        importance: 0.7,
+        confidence: 0.123456789012345,
         accessCount: 3,
         lastAccessedAt: '2026-08-20T10:00:00.000Z',
         eventAt: '2026-08-19T09:00:00.000Z',
@@ -186,8 +185,12 @@ describeWithPg('PostgreSQL sync schema — round-trip integration', () => {
       expect(Buffer.compare(row.embedding as Buffer, embedding)).toBe(0);
       expect(row.embeddingDim).toBe(5);
       expect(row.embeddingModel).toBe(record.embeddingModel);
-      expect(row.importance).toBeCloseTo(0.5, 5);
-      expect(row.confidence).toBeCloseTo(0.75, 5);
+      // Exact, not toBeCloseTo: `real` is float4 in Postgres (unlike SQLite,
+      // where it is 8-byte), so 0.7 used to come back as 0.699999988079071.
+      // A tolerant assertion here is what let that hide — see the
+      // "float precision" suite below.
+      expect(row.importance).toBe(0.7);
+      expect(row.confidence).toBe(0.123456789012345);
       expect(row.accessCount).toBe(3);
       expect(row.lastAccessedAt).toBe(record.lastAccessedAt);
       expect(row.eventAt).toBe(record.eventAt);
@@ -240,7 +243,7 @@ describeWithPg('PostgreSQL sync schema — round-trip integration', () => {
         sourceId,
         targetId,
         relationship: 'relates_to',
-        strength: 0.8,
+        strength: 0.30000000000000004,
         bidirectional: true,
         metadata: JSON.stringify({ note: 'linked during test' }),
         createdAt: '2026-08-19T09:00:00.000Z',
@@ -259,7 +262,7 @@ describeWithPg('PostgreSQL sync schema — round-trip integration', () => {
       expect(row.sourceId).toBe(sourceId);
       expect(row.targetId).toBe(targetId);
       expect(row.relationship).toBe('relates_to');
-      expect(row.strength).toBeCloseTo(0.8, 5);
+      expect(row.strength).toBe(0.30000000000000004);
       expect(row.bidirectional).toBe(true);
       expect(row.metadata).toBe(record.metadata);
       expect(row.createdAt).toBe(record.createdAt);
@@ -316,6 +319,84 @@ describeWithPg('PostgreSQL sync schema — round-trip integration', () => {
         .where(eq(pgMemoryConnections.id, connectionId));
       expect(rows).toHaveLength(0);
     });
+  });
+
+  // ─── float precision ──────────────────────────────────────────────────────
+  //
+  // SQLite's `real` is an 8-byte double; Postgres' `real` is a 4-byte float4.
+  // Mirroring the SQLite column type name rather than its width silently
+  // rounded every score on the way through sync: 0.7 came back as
+  // 0.699999988079071, and a device that pulled it wrote that back as its own
+  // "newer" value. These three columns are therefore `double precision` on
+  // the Postgres side. The values below are all exactly representable in
+  // float8 and NOT in float4, so this suite fails the moment one of them
+  // narrows again.
+
+  describe('float precision', () => {
+    const UNREPRESENTABLE_IN_FLOAT4 = [0.7, 0.1, 0.30000000000000004, 0.123456789012345] as const;
+
+    it('declares importance, confidence and strength as double precision, not real', async () => {
+      // 0.7 and 0.1 above survive a float4 round-trip anyway, because Postgres
+      // prints the shortest decimal that round-trips within float4 and JS
+      // re-parses it to the same double. So assert the declared width itself —
+      // otherwise half this suite would keep passing on a narrowed column.
+      const { rows } = await conn.pool.query<{ table_name: string; column_name: string; data_type: string }>(
+        `SELECT table_name, column_name, data_type
+           FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND (   (table_name = 'memories' AND column_name IN ('importance', 'confidence'))
+                 OR (table_name = 'memory_connections' AND column_name = 'strength'))
+          ORDER BY table_name, column_name`
+      );
+
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        expect(row.data_type, `${row.table_name}.${row.column_name}`).toBe('double precision');
+      }
+    });
+
+    it.each(UNREPRESENTABLE_IN_FLOAT4)(
+      'round-trips %p through memories.importance and memories.confidence unchanged',
+      async (value) => {
+        const id = randomUUID();
+        await conn.db
+          .insert(pgMemories)
+          .values(buildMinimalMemory(id, { importance: value, confidence: value }));
+
+        const row = firstRow(await conn.db.select().from(pgMemories).where(eq(pgMemories.id, id)));
+        expect(row.importance).toBe(value);
+        expect(row.confidence).toBe(value);
+      }
+    );
+
+    it.each(UNREPRESENTABLE_IN_FLOAT4)(
+      'round-trips %p through memory_connections.strength unchanged',
+      async (value) => {
+        const sourceId = randomUUID();
+        const targetId = randomUUID();
+        const connectionId = randomUUID();
+
+        await conn.db
+          .insert(pgMemories)
+          .values([buildMinimalMemory(sourceId), buildMinimalMemory(targetId)]);
+        await conn.db.insert(pgMemoryConnections).values({
+          id: connectionId,
+          sourceId,
+          targetId,
+          relationship: 'relates_to',
+          strength: value,
+          createdAt: new Date().toISOString(),
+        });
+
+        const row = firstRow(
+          await conn.db
+            .select()
+            .from(pgMemoryConnections)
+            .where(eq(pgMemoryConnections.id, connectionId))
+        );
+        expect(row.strength).toBe(value);
+      }
+    );
   });
 
   // ─── sessions ─────────────────────────────────────────────────────────────

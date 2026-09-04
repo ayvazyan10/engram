@@ -7,12 +7,17 @@
 export { SyncEngine } from './SyncEngine.js';
 export type { SyncConfig, SyncStatus, SyncResult } from './SyncEngine.js';
 
-export { getDeviceId } from './deviceId.js';
+export { getDeviceId, resetDeviceId } from './deviceId.js';
 
 export { PgSyncClient } from './PgSyncClient.js';
 export type { PushBatch, PullBatch, PgSyncClientOptions } from './PgSyncClient.js';
 
-export { EncryptionManager, type EncryptableRow } from './encryption.js';
+export {
+  EncryptionManager,
+  type EncryptableRow,
+  type EncryptableSession,
+  type EncryptableConnection,
+} from './encryption.js';
 export { EncryptionError, isEncrypted } from './crypto.js';
 
 // Re-exported for testing/extension — conflict resolution and cursor

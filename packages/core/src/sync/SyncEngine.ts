@@ -22,13 +22,14 @@
  */
 
 import { getDb } from '../db/index.js';
-import type { Memory } from '../db/schema.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import { createPgSyncConnection, redactSyncUrl } from '../db/pg/connection.js';
 import type { PgSyncConnection } from '../db/pg/connection.js';
 import { getEmbeddingModelId } from '../embedding/Embedder.js';
 import { getDeviceId } from './deviceId.js';
-import { computeSyncId, pullCursorWithOverlap, readCursor, writeCursor } from './cursor.js';
+import {
+  computeSyncId, migrateLegacySyncState, pullCursorWithOverlap, readCursor, writeCursor,
+} from './cursor.js';
 import { shouldApplyPulledRow } from './conflict.js';
 import { PgSyncClient } from './PgSyncClient.js';
 import { EncryptionManager } from './encryption.js';
@@ -36,8 +37,14 @@ import {
   countPendingPush, selectConnectionsBatch, selectMemoriesBatch, selectSessionsBatch,
 } from './syncLocalReads.js';
 import type { SyncDb } from './syncLocalReads.js';
-import { applyPulledConnection, applyPulledMemory, applyPulledSession } from './syncApply.js';
+import {
+  applyMergedAccessCounters, applyPulledConnection, applyPulledMemory, applyPulledSession,
+} from './syncApply.js';
 import { drainPullBatches, drainPushBatches, maxNullable } from './syncLoops.js';
+import {
+  decryptPulledConnections, decryptPulledMemories, decryptPulledSessions,
+  encryptConnectionsForPush, encryptMemoriesForPush, encryptSessionsForPush,
+} from './syncCrypto.js';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_DEBOUNCE_MS = 2_000;
@@ -128,6 +135,11 @@ export class SyncEngine {
     this.syncId = computeSyncId(config.syncUrl);
     this.deviceId = getDeviceId();
     this.db = getDb();
+    // `computeSyncId` stopped hashing the password (see cursor.ts), which
+    // re-keys the row. Carry an existing one across before anything reads
+    // it, or the first cycle mistakes "never synced" for a fresh target and
+    // re-pushes/re-pulls the whole database.
+    migrateLegacySyncState(this.db, config.syncUrl);
     process.once('beforeExit', this.onBeforeExit);
   }
 
@@ -170,7 +182,7 @@ export class SyncEngine {
     return {
       state,
       lastSyncAt: cursor?.lastSyncAt ?? null,
-      pendingPushCount: countPendingPush(this.db, cursor?.lastPushAt ?? null, LOCAL_BATCH_SIZE),
+      pendingPushCount: countPendingPush(this.db, cursor?.lastPushAt ?? null, LOCAL_BATCH_SIZE, this.deviceId),
       lastError: cursor?.lastError ?? null,
       pullCursor: cursor?.pullCursor ?? null,
       deviceId: this.deviceId,
@@ -338,11 +350,31 @@ export class SyncEngine {
   /**
    * Derives the E2E encryption key once per connection lifetime (scrypt key
    * derivation is expensive, so this must not run on every sync cycle — see
-   * `./encryption.ts`). A no-op when `config.encryptionKey` isn't set, which
-   * keeps push/pull byte-for-byte unchanged from before encryption existed.
+   * `./encryption.ts`).
+   *
+   * With no passphrase configured this is a no-op *only* against a database
+   * that was never encrypted, which keeps push/pull byte-for-byte unchanged
+   * from before encryption existed. Against an encrypted one it refuses to
+   * connect: pushing would send this device's whole database in plaintext,
+   * and the last-write-wins upsert would overwrite ciphertext rows that
+   * encrypted peers had already pushed — silently and irreversibly
+   * downgrading the store for everyone.
    */
   private async initializeEncryption(): Promise<void> {
-    if (!this.config.encryptionKey || !this.pgClient) return;
+    if (!this.pgClient) return;
+
+    if (!this.config.encryptionKey) {
+      if (await this.pgClient.hasEncryptionMetadata()) {
+        throw new Error(
+          'This sync database has end-to-end encryption enabled, but this process has no ' +
+            'passphrase configured. Set ENGRAM_SYNC_ENCRYPTION_KEY to the passphrase the ' +
+            'database was encrypted with — syncing without it would overwrite encrypted rows ' +
+            'with plaintext.'
+        );
+      }
+      return;
+    }
+
     const manager = new EncryptionManager(this.pgClient);
     await manager.initialize(this.config.encryptionKey);
     this.encryptionManager = manager;
@@ -380,23 +412,36 @@ export class SyncEngine {
     const startCursor = cursor?.lastPushAt ?? null;
 
     const memories = await drainPushBatches(
-      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE),
-      (rows) => client.pushMemories(this.encryptMemoriesForPush(rows)),
+      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId),
+      // `pushMemoriesMerging` rather than `pushMemories`: the MAX merge on
+      // access bookkeeping happens server-side, and a device that wins
+      // last-write-wins never pulls its own row back, so this is the only
+      // point at which it can learn the merged counters.
+      async (rows) => {
+        const result = await client.pushMemoriesMerging(
+          encryptMemoriesForPush(this.encryptionManager, rows)
+        );
+        applyMergedAccessCounters(this.db, rows, result.merged);
+        return result.applied;
+      },
       (row) => row.updatedAt,
+      (row) => row.id,
       startCursor,
       LOCAL_BATCH_SIZE
     );
     const connections = await drainPushBatches(
-      (c) => selectConnectionsBatch(this.db, c, LOCAL_BATCH_SIZE),
-      (rows) => client.pushConnections(rows),
+      (c) => selectConnectionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId),
+      (rows) => client.pushConnections(encryptConnectionsForPush(this.encryptionManager, rows)),
       (row) => row.updatedAt,
+      (row) => row.id,
       startCursor,
       LOCAL_BATCH_SIZE
     );
     const sessions = await drainPushBatches(
-      (c) => selectSessionsBatch(this.db, c, LOCAL_BATCH_SIZE),
-      (rows) => client.pushSessions(rows),
+      (c) => selectSessionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId),
+      (rows) => client.pushSessions(encryptSessionsForPush(this.encryptionManager, rows)),
       (row) => row.updatedAt,
+      (row) => row.id,
       startCursor,
       LOCAL_BATCH_SIZE
     );
@@ -412,41 +457,6 @@ export class SyncEngine {
     return { memories: memories.count, connections: connections.count, sessions: sessions.count };
   }
 
-  /**
-   * Encrypts a batch of local memory rows before they're sent to Postgres.
-   * Returns new row objects — `rows` (and the SQLite rows within it) are
-   * never mutated. A no-op (returns `rows` unchanged) when encryption isn't
-   * configured, so push behaves exactly as before when `encryptionKey` is
-   * unset. Only `memories` carries the encryptable fields (content/summary/
-   * metadata/tags/embedding) — `memory_connections` and `sessions` are
-   * pushed as-is.
-   */
-  private encryptMemoriesForPush(rows: Memory[]): Memory[] {
-    const manager = this.encryptionManager;
-    if (!manager?.initialized) return rows;
-
-    return rows.map((row) => {
-      const encrypted = manager.encryptRow({
-        content: row.content,
-        summary: row.summary,
-        metadata: row.metadata,
-        tags: row.tags,
-        embedding: row.embedding,
-      });
-      return {
-        ...row,
-        content: encrypted.content,
-        summary: encrypted.summary,
-        // `metadata`/`tags` are NOT NULL columns; encryptRow's signature
-        // allows null only for shared-shape reasons (decryptRow reuses it
-        // too) — encrypting a non-null string never actually yields null.
-        metadata: encrypted.metadata ?? row.metadata,
-        tags: encrypted.tags ?? row.tags,
-        embedding: encrypted.embedding,
-      };
-    });
-  }
-
   // ─── pull ─────────────────────────────────────────────────────────────
 
   private async doPull(): Promise<{ pulled: SyncResult['pulled']; conflicts: number }> {
@@ -455,36 +465,25 @@ export class SyncEngine {
     const cursor = readCursor(this.db, this.syncId);
     const baseCursor = pullCursorWithOverlap(cursor?.pullCursor ?? null);
     const shouldApply = (deviceId: string | null): boolean => shouldApplyPulledRow(deviceId, this.deviceId);
+    const manager = this.encryptionManager;
 
     const memories = await drainPullBatches<PgMemory>(
-      (ts, id) => client.pullMemories(ts, id, this.deviceId).then((b) => ({
-        rows: this.decryptPulledMemories(b.memories),
-        maxServerUpdatedAt: b.maxServerUpdatedAt,
-        lastId: b.lastId,
-        hasMore: b.hasMore,
-      })),
+      (ts, id) => client.pullMemories(ts, id, this.deviceId).then((b) =>
+        decryptPulledMemories(manager, { ...b, rows: b.memories })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledMemory(this.db, row),
       baseCursor
     );
     const connections = await drainPullBatches<PgMemoryConnection>(
-      (ts, id) => client.pullConnections(ts, id, this.deviceId).then((b) => ({
-        rows: b.connections,
-        maxServerUpdatedAt: b.maxServerUpdatedAt,
-        lastId: b.lastId,
-        hasMore: b.hasMore,
-      })),
+      (ts, id) => client.pullConnections(ts, id, this.deviceId).then((b) =>
+        decryptPulledConnections(manager, { ...b, rows: b.connections })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledConnection(this.db, row),
       baseCursor
     );
     const sessions = await drainPullBatches<PgSession>(
-      (ts, id) => client.pullSessions(ts, id, this.deviceId).then((b) => ({
-        rows: b.sessions,
-        maxServerUpdatedAt: b.maxServerUpdatedAt,
-        lastId: b.lastId,
-        hasMore: b.hasMore,
-      })),
+      (ts, id) => client.pullSessions(ts, id, this.deviceId).then((b) =>
+        decryptPulledSessions(manager, { ...b, rows: b.sessions })),
       (row) => shouldApply(row.deviceId),
       (row) => applyPulledSession(this.db, row),
       baseCursor
@@ -494,7 +493,13 @@ export class SyncEngine {
       maxNullable(memories.maxServerUpdatedAt, connections.maxServerUpdatedAt),
       sessions.maxServerUpdatedAt
     );
-    if (overallMax !== null) {
+    // One cursor covers all three tables, so a table that stopped on an
+    // undecryptable row can still be jumped over by another table's
+    // progress. When anything is blocked, hold the cursor entirely — the
+    // page is re-pulled next cycle (loudly), rather than the blocked row
+    // and everything near it ageing out of the 5-minute overlap unnoticed.
+    const blocked = memories.blocked || connections.blocked || sessions.blocked;
+    if (overallMax !== null && !blocked) {
       writeCursor(this.db, this.syncId, { pullCursor: overallMax });
     }
 
@@ -506,44 +511,5 @@ export class SyncEngine {
       pulled: { memories: memories.applied, connections: connections.applied, sessions: sessions.applied },
       conflicts: memories.conflicts + connections.conflicts + sessions.conflicts,
     };
-  }
-
-  /**
-   * Decrypts a batch of remote memory rows right after they're pulled from
-   * Postgres, before conflict resolution / apply ever sees them. A no-op
-   * (returns `rows` unchanged) when encryption isn't configured. Rows that
-   * fail to decrypt (wrong passphrase, corrupted ciphertext, or — in a
-   * mixed-key rollout — data encrypted under a different key) are dropped
-   * with a warning rather than aborting the sync; they stay on the server
-   * and are simply not applied locally.
-   */
-  private decryptPulledMemories(rows: PgMemory[]): PgMemory[] {
-    const manager = this.encryptionManager;
-    if (!manager?.initialized) return rows;
-
-    const decrypted: PgMemory[] = [];
-    for (const row of rows) {
-      const result = manager.tryDecryptRow({
-        content: row.content,
-        summary: row.summary,
-        metadata: row.metadata,
-        tags: row.tags,
-        embedding: row.embedding,
-      });
-      if (!result) {
-        console.warn(`[engram] Could not decrypt memory ${row.id} — skipping`);
-        continue;
-      }
-      decrypted.push({
-        ...row,
-        content: result.content,
-        summary: result.summary,
-        // See encryptMemoriesForPush for why the `?? row.x` fallback is safe.
-        metadata: result.metadata ?? row.metadata,
-        tags: result.tags ?? row.tags,
-        embedding: result.embedding,
-      });
-    }
-    return decrypted;
   }
 }

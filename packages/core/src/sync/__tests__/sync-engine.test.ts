@@ -18,7 +18,7 @@
  * (or re-synced) right after activating the device it should act as.
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -32,31 +32,98 @@ import { getDeviceId, _resetMemoizedDeviceIdForTests } from '../deviceId.js';
 import { getEmbeddingModelId } from '../../embedding/Embedder.js';
 import { createPgSyncConnection, type PgSyncConnection } from '../../db/pg/connection.js';
 import { SyncEngine, type SyncResult } from '../SyncEngine.js';
+import { PgSyncClient } from '../PgSyncClient.js';
+import { EncryptionManager, type EncryptableRow } from '../encryption.js';
+import { computeSyncId, readCursor } from '../cursor.js';
+import { drainPullBatches } from '../syncLoops.js';
 import { deriveKey, encryptField, generateSalt, isEncrypted } from '../crypto.js';
+import type { FieldBinding } from '../crypto.js';
 
-// ─── availability guard ─────────────────────────────────────────────────────
+/** Binding for a `memories.content` value — see `crypto.ts`'s `FieldBinding`. */
+function memoryContentBinding(id: string): FieldBinding {
+  return { table: 'memories', id, column: 'content' };
+}
 
-const PG_URL =
+// ─── availability guard + database isolation ────────────────────────────────
+//
+// This suite needs a Postgres database to itself, for two reasons that both
+// showed up as order-dependent flakes:
+//
+//  1. It establishes E2E encryption metadata (`encryption_salt` /
+//     `encryption_sentinel` in `sync_metadata`). Once those exist, a
+//     `SyncEngine` built WITHOUT a passphrase correctly refuses to connect
+//     (see `SyncEngine.initializeEncryption`) — so any leftover from an
+//     encryption test, or from a previous aborted run, makes the plaintext
+//     convergence tests below fail with "this sync database has end-to-end
+//     encryption enabled".
+//  2. It blanket-clears the three synced tables between tests, and
+//     `db/pg/__tests__/pg-roundtrip.test.ts` does the same on the same
+//     database from a parallel worker.
+//
+// So: create a private database per run, and fall back to the shared one if
+// the role can't CREATE DATABASE. The `resetServerState` hooks below keep
+// reason (1) impossible on either path; only reason (2) needs the private
+// database.
+
+const BASE_PG_URL =
   process.env['TEST_PG_URL'] ??
   'postgres://postgres:engram_test_pass@localhost:5432/engram_sync_test?sslmode=disable';
 const SKIP_REQUESTED = Boolean(process.env['SKIP_PG_TESTS']);
 
+/** `url` with its database swapped for `name`. */
+function withDatabase(url: string, name: string): string {
+  const parsed = new URL(url);
+  parsed.pathname = `/${name}`;
+  return parsed.toString();
+}
+
 let pgAvailable = false;
+let isolatedDbName: string | null = null;
+let resolvedPgUrl = BASE_PG_URL;
+
 try {
   const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 3000 });
-  await pool.query('SELECT 1');
-  await pool.end();
+  const admin = new Pool({ connectionString: BASE_PG_URL, connectionTimeoutMillis: 3000 });
+  await admin.query('SELECT 1');
   pgAvailable = true;
+
+  // Identifier is built here, never from input — only [a-z0-9_].
+  const candidate = `engram_sync_test_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    await admin.query(`CREATE DATABASE "${candidate}"`);
+    isolatedDbName = candidate;
+    resolvedPgUrl = withDatabase(BASE_PG_URL, candidate);
+  } catch {
+    // No CREATEDB privilege (or the server disallows it) — share the base
+    // database. Still correct, just not immune to a parallel suite.
+  }
+  await admin.end();
 } catch {
   // unavailable — describeWithPg below skips the whole suite
 }
 
+const PG_URL = resolvedPgUrl;
+
 const shouldRun = !SKIP_REQUESTED && pgAvailable;
 const describeWithPg = shouldRun ? describe : describe.skip;
 
+/** Drops the private database created above, if there is one. */
+async function dropIsolatedDatabase(): Promise<void> {
+  if (isolatedDbName === null) return;
+  const { Pool } = await import('pg');
+  const admin = new Pool({ connectionString: BASE_PG_URL, connectionTimeoutMillis: 3000 });
+  try {
+    // FORCE (PG 13+) terminates any connection this suite failed to close,
+    // so a leaked pool can't leave the database behind.
+    await admin.query(`DROP DATABASE IF EXISTS "${isolatedDbName}" WITH (FORCE)`);
+  } catch (err) {
+    console.warn(`[sync-engine.test.ts] could not drop ${isolatedDbName}: ${String(err)}`);
+  } finally {
+    await admin.end();
+  }
+}
+
 if (!shouldRun) {
-  // eslint-disable-next-line no-console
   console.info(
     `[sync-engine.test.ts] skipping: ${
       SKIP_REQUESTED ? 'SKIP_PG_TESTS is set' : `PostgreSQL is unavailable at ${PG_URL}`
@@ -131,6 +198,46 @@ async function syncAsDevice(
   }
 }
 
+
+/** Inserts one session row directly into the currently active local SQLite db. */
+function insertSession(overrides: Partial<schema.NewSession> & { id: string; deviceId: string }): void {
+  const now = new Date().toISOString();
+  getDb()
+    .insert(schema.sessions)
+    .values({ source: 'test-client', startedAt: now, updatedAt: now, ...overrides })
+    .run();
+}
+
+/** Inserts one connection row directly into the currently active local SQLite db. */
+function insertConnection(
+  overrides: Partial<schema.NewMemoryConnection> & {
+    id: string;
+    sourceId: string;
+    targetId: string;
+    deviceId: string;
+  }
+): void {
+  const now = new Date().toISOString();
+  getDb()
+    .insert(schema.memoryConnections)
+    .values({
+      relationship: 'relates_to',
+      strength: 1.0,
+      bidirectional: false,
+      metadata: '{}',
+      createdAt: now,
+      updatedAt: now,
+      ...overrides,
+    })
+    .run();
+}
+
+/** The pull cursor device `d` has persisted for this suite's Postgres target. */
+function pullCursorOf(d: Device): string | null {
+  activateDevice(d);
+  return readCursor(getDb(), computeSyncId(PG_URL))?.pullCursor ?? null;
+}
+
 // ─── suite ──────────────────────────────────────────────────────────────────
 
 describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
@@ -143,21 +250,23 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
   });
 
   afterAll(async () => {
-    await pgConn.pool.query('DELETE FROM memory_connections');
-    await pgConn.pool.query('DELETE FROM sessions');
-    await pgConn.pool.query('DELETE FROM memories');
-    await pgConn.pool.query('DELETE FROM sync_metadata');
+    await resetServerState();
     await pgConn.close();
+    await dropIsolatedDatabase();
     delete process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'];
   });
 
+  // Clearing BEFORE each test, not only after, is what makes this suite
+  // order-independent: an `afterEach` can be skipped entirely (a previous
+  // run killed mid-suite) or abandoned partway (an earlier statement
+  // throwing), and either leaves `sync_metadata` populated — at which point
+  // the next passphrase-less test trips SyncEngine's encrypted-store guard.
+  beforeEach(async () => {
+    await resetServerState();
+  });
+
   afterEach(async () => {
-    await pgConn.pool.query('DELETE FROM memory_connections');
-    await pgConn.pool.query('DELETE FROM sessions');
-    await pgConn.pool.query('DELETE FROM memories');
-    // encryption tests (below) persist a salt/sentinel here — clear it so
-    // every test starts from "no passphrase established yet".
-    await pgConn.pool.query('DELETE FROM sync_metadata');
+    await resetServerState();
 
     closeDatabase();
     delete process.env['ENGRAM_DB_PATH'];
@@ -167,6 +276,20 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
       fs.rmSync(device.dir, { recursive: true, force: true });
     }
   });
+
+  /**
+   * Clears every row this suite can create on the server, atomically.
+   *
+   * One multi-statement simple query is one implicit transaction, so this
+   * either clears everything or nothing — it can never half-succeed and
+   * leave the encryption salt behind after the memory rows are already
+   * gone, which is the exact state that made a later plaintext test fail.
+   */
+  async function resetServerState(): Promise<void> {
+    await pgConn.pool.query(
+      'DELETE FROM memory_connections; DELETE FROM sessions; DELETE FROM memories; DELETE FROM sync_metadata;'
+    );
+  }
 
   function device(): Device {
     const d = createDevice();
@@ -399,6 +522,114 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
     expect(merged?.accessCount).toBe(10); // access_count is MAX'd, never overwritten down
   });
 
+  it('MAX-merges access_count even when the pusher LOSES last-write-wins on content', async () => {
+    // The GREATEST() merge used to sit inside `DO UPDATE SET ... WHERE <lww>`,
+    // so a pusher that lost the content comparison had its whole assignment
+    // list suppressed — counters included. A device that had read a memory
+    // 25 times handed that over to whichever device happened to have the
+    // newer edit.
+    const a = device();
+    const b = device();
+    const older = '2026-04-01T00:00:00.000Z';
+    const newer = '2026-04-01T00:05:00.000Z';
+
+    const deviceIdA = activateDevice(a);
+    insertMemory({
+      id: 'mem-loser', deviceId: deviceIdA, content: 'content from A',
+      accessCount: 3, createdAt: older, updatedAt: newer,
+    });
+    await syncAsDevice(a);
+
+    const deviceIdB = activateDevice(b);
+    insertMemory({
+      id: 'mem-loser', deviceId: deviceIdB, content: 'content from B',
+      accessCount: 25, lastAccessedAt: '2026-04-02T00:00:00.000Z',
+      createdAt: older, updatedAt: older,
+    });
+    await syncAsDevice(b); // loses LWW on content, but still owns the higher count
+
+    const onServer = await pgConn.pool.query<{ access_count: number; content: string; last_accessed_at: string | null }>(
+      'SELECT access_count, content, last_accessed_at FROM memories WHERE id = $1',
+      ['mem-loser']
+    );
+    expect(onServer.rows[0]?.content).toBe('content from A'); // LWW still decides content
+    expect(onServer.rows[0]?.access_count).toBe(25); // but the counter is MAX'd
+    expect(onServer.rows[0]?.last_accessed_at).toBe('2026-04-02T00:00:00.000Z');
+  });
+
+  it('applies the MAX-merged counters on pull even when the LOCAL row wins last-write-wins', async () => {
+    // `applyPulledMemory` returned early on a local win and threw away the
+    // merged counters `resolveMemoryConflict` had already computed, so a
+    // peer's higher count never landed locally.
+    const a = device();
+    const b = device();
+    const older = '2026-04-10T00:00:00.000Z';
+    const newer = '2026-04-10T00:05:00.000Z';
+
+    const deviceIdA = activateDevice(a);
+    insertMemory({
+      id: 'mem-local-wins', deviceId: deviceIdA, content: 'old content, many reads',
+      accessCount: 99, lastAccessedAt: '2026-04-11T00:00:00.000Z',
+      createdAt: older, updatedAt: older,
+    });
+    await syncAsDevice(a);
+
+    const deviceIdB = activateDevice(b);
+    insertMemory({
+      id: 'mem-local-wins', deviceId: deviceIdB, content: 'new content, few reads',
+      accessCount: 1, createdAt: older, updatedAt: newer,
+    });
+
+    // Pull only: B's local row is newer, so it wins content — but it must
+    // still take A's higher counter.
+    activateDevice(b);
+    const engine = new SyncEngine({ syncUrl: PG_URL, mode: 'manual' });
+    try {
+      await engine.pull();
+    } finally {
+      await engine.dispose();
+    }
+
+    activateDevice(b);
+    const merged = readMemory('mem-local-wins');
+    expect(merged?.content).toBe('new content, few reads'); // local still wins content
+    expect(merged?.accessCount).toBe(99);
+    expect(merged?.lastAccessedAt).toBe('2026-04-11T00:00:00.000Z');
+    // and the merge must not look like an edit, or the row re-enters the
+    // push queue on every cycle from now on
+    expect(merged?.updatedAt).toBe(newer);
+  });
+
+  it('teaches the pushing device the merged counter it would otherwise never pull back', async () => {
+    // A device that wins LWW stamps the row with its own device_id, and its
+    // own next pull filters that row out as an echo — so the push RETURNING
+    // is the only point at which it can learn the server-side merge.
+    const a = device();
+    const b = device();
+    const older = '2026-04-20T00:00:00.000Z';
+    const newer = '2026-04-20T00:05:00.000Z';
+
+    const deviceIdA = activateDevice(a);
+    insertMemory({
+      id: 'mem-writeback', deviceId: deviceIdA, content: 'from A',
+      accessCount: 42, createdAt: older, updatedAt: older,
+    });
+    await syncAsDevice(a);
+
+    const deviceIdB = activateDevice(b);
+    insertMemory({
+      id: 'mem-writeback', deviceId: deviceIdB, content: 'from B',
+      accessCount: 2, createdAt: older, updatedAt: newer,
+    });
+    await syncAsDevice(b); // B wins LWW on content; server MAXes the count to 42
+
+    activateDevice(b);
+    const local = readMemory('mem-writeback');
+    expect(local?.content).toBe('from B');
+    expect(local?.accessCount).toBe(42);
+    expect(local?.updatedAt).toBe(newer); // still not an edit
+  });
+
   // ─── 7. incompatible embedding model stops sync ─────────────────────────
 
   it('refuses to sync when the remote embedding model differs from the local one', async () => {
@@ -500,7 +731,14 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
       await pgConn.pool.query(
         `INSERT INTO memories (id, type, content, created_at, updated_at, device_id)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        ['mem-corrupted', 'semantic', encryptField('unrecoverable content', bogusKey), now, now, deviceIdA]
+        [
+          'mem-corrupted',
+          'semantic',
+          encryptField('unrecoverable content', bogusKey, memoryContentBinding('mem-corrupted')),
+          now,
+          now,
+          deviceIdA,
+        ]
       );
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -515,6 +753,273 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
       activateDevice(b);
       expect(readMemory('mem-ok')?.content).toBe('decryptable content');
       expect(readMemory('mem-corrupted')).toBeUndefined();
+    });
+
+    // ─── D4: bootstrap atomicity, against real Postgres ──────────────────
+
+    it('leaves one salt and one usable key when several devices bootstrap at once', async () => {
+      const client = new PgSyncClient({ db: pgConn.db, pool: pgConn.pool });
+      const managers = Array.from({ length: 5 }, () => new EncryptionManager(client));
+
+      await Promise.all(managers.map((m) => m.initialize('shared passphrase')));
+
+      const salts = await pgConn.pool.query(
+        `SELECT DISTINCT value FROM sync_metadata WHERE key = 'encryption_salt'`
+      );
+      expect(salts.rowCount).toBe(1);
+
+      // Every bootstrapper must hold the key derived from that one salt,
+      // not from the salt it happened to generate itself.
+      const row: EncryptableRow = {
+        id: 'mem-shared-bootstrap', content: 'shared secret', summary: null, metadata: null,
+        tags: null, embedding: null, concept: null, triggerPattern: null, actionPattern: null,
+      };
+      const encrypted = managers[0]!.encryptRow(row);
+      for (const other of managers.slice(1)) {
+        expect(other.decryptRow(encrypted)).toEqual(row);
+      }
+
+      await expect(new EncryptionManager(client).initialize('shared passphrase')).resolves.toBeUndefined();
+    });
+
+    it('recovers from a bootstrap killed between the salt write and the sentinel write', async () => {
+      // Exactly the half-written state a SIGKILL used to leave behind.
+      await pgConn.pool.query(
+        `INSERT INTO sync_metadata (key, value) VALUES ('encryption_salt', $1)`,
+        [generateSalt().toString('hex')]
+      );
+
+      const client = new PgSyncClient({ db: pgConn.db, pool: pgConn.pool });
+      await expect(new EncryptionManager(client).initialize('a passphrase')).resolves.toBeUndefined();
+
+      const sentinel = await pgConn.pool.query(
+        `SELECT value FROM sync_metadata WHERE key = 'encryption_sentinel'`
+      );
+      expect(sentinel.rowCount).toBe(1);
+    });
+
+    // ─── D5: a client with no passphrase must not downgrade the store ────
+
+    it('refuses to sync a passphrase-less client against a database that has encryption established', async () => {
+      const a = device();
+      const b = device();
+
+      const deviceIdA = activateDevice(a);
+      insertMemory({ id: 'mem-secret', deviceId: deviceIdA, content: 'secret content from A' });
+      await syncAsDevice(a, { encryptionKey: 'the-real-passphrase' });
+
+      const deviceIdB = activateDevice(b);
+      insertMemory({ id: 'mem-plain-b', deviceId: deviceIdB, content: 'plaintext content from B' });
+
+      await expect(syncAsDevice(b)).rejects.toThrow(/ENGRAM_SYNC_ENCRYPTION_KEY/);
+
+      // A's ciphertext must still be ciphertext, and B must not have pushed
+      // anything at all.
+      const raw = await pgConn.pool.query<{ id: string; content: string }>(
+        'SELECT id, content FROM memories ORDER BY id'
+      );
+      expect(raw.rows.map((r) => r.id)).toEqual(['mem-secret']);
+      expect(isEncrypted(raw.rows[0]!.content)).toBe(true);
+    });
+
+    it('applies a legacy plaintext row instead of dropping it as undecryptable', async () => {
+      const passphrase = 'correct horse battery staple';
+      const b = device();
+
+      // Exactly what a client running without ENGRAM_SYNC_ENCRYPTION_KEY
+      // left behind: plaintext strings AND a plaintext embedding, which has
+      // no `enc:v1:` marker of its own to distinguish it by.
+      const now = new Date().toISOString();
+      await pgConn.pool.query(
+        `INSERT INTO memories (id, type, content, summary, embedding, metadata, tags,
+                               created_at, updated_at, device_id)
+         VALUES ($1, 'semantic', $2, $3, $4, '{}', '[]', $5, $5, 'device-legacy')`,
+        [
+          'mem-legacy-plain',
+          'legacy plaintext content',
+          'legacy plaintext summary',
+          Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]),
+          now,
+        ]
+      );
+
+      const result = await syncAsDevice(b, { encryptionKey: passphrase });
+      expect(result.pulled.memories).toBe(1);
+
+      activateDevice(b);
+      const local = readMemory('mem-legacy-plain');
+      expect(local?.content).toBe('legacy plaintext content');
+      expect(local?.summary).toBe('legacy plaintext summary');
+      expect(local?.embedding?.equals(Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]))).toBe(true);
+    });
+
+    it('holds the pull cursor before a row it cannot decrypt', async () => {
+      const passphrase = 'correct horse battery staple';
+      const a = device();
+      const b = device();
+
+      const deviceIdA = activateDevice(a);
+      insertMemory({ id: 'mem-ok-2', deviceId: deviceIdA, content: 'decryptable content' });
+      await syncAsDevice(a, { encryptionKey: passphrase });
+
+      const bogusKey = await deriveKey('a-totally-different-key', generateSalt());
+      const now = new Date().toISOString();
+      await pgConn.pool.query(
+        `INSERT INTO memories (id, type, content, created_at, updated_at, device_id)
+         VALUES ($1, 'semantic', $2, $3, $3, $4)`,
+        [
+          'mem-corrupted-2',
+          encryptField('unrecoverable', bogusKey, memoryContentBinding('mem-corrupted-2')),
+          now,
+          deviceIdA,
+        ]
+      );
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await syncAsDevice(b, { encryptionKey: passphrase });
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      // Skipping the row while advancing the cursor past it loses it for
+      // good once it ages out of the 5-minute overlap window.
+      expect(pullCursorOf(b)).toBeNull();
+    });
+
+    // ─── D6: every user-content column, not just content/summary ─────────
+
+    it('encrypts concept, trigger/action patterns, session context and connection metadata', async () => {
+      const passphrase = 'correct horse battery staple';
+      const a = device();
+      const b = device();
+
+      const deviceIdA = activateDevice(a);
+      insertSession({
+        id: 'sess-1',
+        deviceId: deviceIdA,
+        source: 'claude-code',
+        namespace: 'work',
+        context: JSON.stringify({ cwd: '/home/secret-project' }),
+      });
+      insertMemory({
+        id: 'mem-proc',
+        deviceId: deviceIdA,
+        type: 'procedural',
+        content: 'procedure body',
+        concept: 'deploying the billing service',
+        triggerPattern: 'when the user says deploy billing',
+        actionPattern: 'run ./scripts/deploy-billing.sh --prod',
+        sessionId: 'sess-1',
+        source: 'claude-code',
+        namespace: 'work',
+      });
+      insertMemory({ id: 'mem-proc-2', deviceId: deviceIdA, content: 'second memory' });
+      insertConnection({
+        id: 'conn-1',
+        sourceId: 'mem-proc',
+        targetId: 'mem-proc-2',
+        deviceId: deviceIdA,
+        relationship: 'relates_to',
+        metadata: JSON.stringify({ note: 'derived from the billing runbook' }),
+      });
+
+      await syncAsDevice(a, { encryptionKey: passphrase });
+
+      const mem = await pgConn.pool.query<{
+        concept: string; trigger_pattern: string; action_pattern: string;
+        namespace: string; session_id: string; source: string;
+      }>(
+        `SELECT concept, trigger_pattern, action_pattern, namespace, session_id, source
+         FROM memories WHERE id = 'mem-proc'`
+      );
+      const row = mem.rows[0]!;
+      expect(isEncrypted(row.concept)).toBe(true);
+      expect(isEncrypted(row.trigger_pattern)).toBe(true);
+      expect(isEncrypted(row.action_pattern)).toBe(true);
+      // Filter/cursor columns must stay readable or sync itself breaks.
+      expect(row.namespace).toBe('work');
+      expect(row.session_id).toBe('sess-1');
+      expect(row.source).toBe('claude-code');
+
+      const sess = await pgConn.pool.query<{ context: string; source: string; namespace: string }>(
+        `SELECT context, source, namespace FROM sessions WHERE id = 'sess-1'`
+      );
+      expect(isEncrypted(sess.rows[0]!.context)).toBe(true);
+      expect(sess.rows[0]!.source).toBe('claude-code');
+      expect(sess.rows[0]!.namespace).toBe('work');
+
+      const conn = await pgConn.pool.query<{ metadata: string; relationship: string }>(
+        `SELECT metadata, relationship FROM memory_connections WHERE id = 'conn-1'`
+      );
+      expect(isEncrypted(conn.rows[0]!.metadata)).toBe(true);
+      expect(conn.rows[0]!.relationship).toBe('relates_to');
+
+      // …and a peer with the same passphrase gets all of it back.
+      await syncAsDevice(b, { encryptionKey: passphrase });
+      activateDevice(b);
+      const pulled = readMemory('mem-proc');
+      expect(pulled?.concept).toBe('deploying the billing service');
+      expect(pulled?.triggerPattern).toBe('when the user says deploy billing');
+      expect(pulled?.actionPattern).toBe('run ./scripts/deploy-billing.sh --prod');
+
+      const pulledSession = getDb()
+        .select()
+        .from(schema.sessions)
+        .where(eq(schema.sessions.id, 'sess-1'))
+        .get();
+      expect(pulledSession?.context).toBe(JSON.stringify({ cwd: '/home/secret-project' }));
+
+      const pulledConn = getDb()
+        .select()
+        .from(schema.memoryConnections)
+        .where(eq(schema.memoryConnections.id, 'conn-1'))
+        .get();
+      expect(pulledConn?.metadata).toBe(JSON.stringify({ note: 'derived from the billing runbook' }));
+    });
+  });
+
+  // ─── 9. pull pagination across a same-timestamp group (D3) ───────────────
+
+  describe('pull pagination', () => {
+    it('delivers every row of a server_updated_at group larger than one page', async () => {
+      // A single INSERT runs in one transaction, and the
+      // `engram_touch_server_updated_at` trigger stamps `now()` — the
+      // transaction clock — so all 1200 rows land on ONE distinct
+      // `server_updated_at`, exactly the shape a bulk migration produces.
+      const now = new Date().toISOString();
+      await pgConn.pool.query(
+        `INSERT INTO memories (id, type, content, created_at, updated_at, device_id)
+         SELECT 'mem-bulk-' || lpad(i::text, 5, '0'), 'semantic', 'bulk ' || i, $1, $1, 'device-elsewhere'
+         FROM generate_series(1, 1200) AS i`,
+        [now]
+      );
+
+      const distinct = await pgConn.pool.query<{ count: string }>(
+        'SELECT count(DISTINCT server_updated_at)::text AS count FROM memories'
+      );
+      expect(distinct.rows[0]?.count).toBe('1');
+
+      const client = new PgSyncClient({ db: pgConn.db, pool: pgConn.pool, batchSize: 500 });
+      const seen = new Set<string>();
+      const result = await drainPullBatches<{ id: string }>(
+        (ts, id) =>
+          client.pullMemories(ts, id, 'device-me').then((b) => ({
+            rows: b.memories,
+            maxServerUpdatedAt: b.maxServerUpdatedAt,
+            lastId: b.lastId,
+            hasMore: b.hasMore,
+          })),
+        () => true,
+        (row) => {
+          seen.add(row.id);
+          return { applied: true, conflict: false };
+        },
+        null
+      );
+
+      expect(seen.size).toBe(1200);
+      expect(result.applied).toBe(1200);
     });
   });
 });

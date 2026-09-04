@@ -25,10 +25,10 @@
 import {
   boolean,
   customType,
+  doublePrecision,
   index,
   integer,
   pgTable,
-  real,
   text,
   timestamp,
   uniqueIndex,
@@ -65,8 +65,13 @@ export const pgMemories = pgTable(
     embeddingDim: integer('embedding_dim').default(384).notNull(),
     embeddingModel: text('embedding_model'),
 
-    importance: real('importance').default(0.5).notNull(),
-    confidence: real('confidence').default(1.0).notNull(),
+    // `doublePrecision`, NOT `real`: SQLite's `real` is an 8-byte double,
+    // Postgres' `real` is a 4-byte float4. Mirroring the type NAME instead of
+    // its WIDTH rounded every score on the way through sync — 0.7 stored as
+    // 0.699999988079071 — and the pulling device then wrote that back as its
+    // own value. Same reason for `memory_connections.strength` below.
+    importance: doublePrecision('importance').default(0.5).notNull(),
+    confidence: doublePrecision('confidence').default(1.0).notNull(),
 
     accessCount: integer('access_count').default(0).notNull(),
     lastAccessedAt: text('last_accessed_at'),
@@ -103,6 +108,12 @@ export const pgMemories = pgTable(
   (t) => ({
     serverUpdatedIdx: index('idx_pg_memories_server_updated_at').on(t.serverUpdatedAt),
     namespaceIdx: index('idx_pg_memories_namespace').on(t.namespace),
+    // `PgSyncClient.backfillNullDeviceIds` runs `UPDATE ... WHERE device_id
+    // IS NULL` on every connect, and without this it is a full seq scan every
+    // single time even once there is nothing left to backfill (measured on a
+    // 20k-row table: 605 buffers / 1.8 ms -> 2 buffers / 0.03 ms). Postgres
+    // btree indexes do store NULLs, so `IS NULL` seeks here.
+    deviceIdx: index('idx_pg_memories_device_id').on(t.deviceId),
   })
 );
 
@@ -125,7 +136,7 @@ export const pgMemoryConnections = pgTable(
     relationship: text('relationship', {
       enum: ['is_a', 'has_property', 'causes', 'relates_to', 'contradicts', 'part_of', 'follows'],
     }).notNull(),
-    strength: real('strength').default(1.0).notNull(),
+    strength: doublePrecision('strength').default(1.0).notNull(),
     bidirectional: boolean('bidirectional').default(false).notNull(),
     metadata: text('metadata').default('{}').notNull(),
     createdAt: text('created_at').notNull(),
@@ -150,6 +161,12 @@ export const pgMemoryConnections = pgTable(
     // (`WHERE server_updated_at > :cursor`) runs against this table too —
     // an unindexed scan here would defeat the purpose of the memories index.
     serverUpdatedIdx: index('idx_pg_connections_server_updated_at').on(t.serverUpdatedAt),
+    // `source_id` deliberately has NO index of its own: it is the leading
+    // column of `idx_pg_connections_unique_pair`, and the planner picks that
+    // index for the ON DELETE CASCADE probe even with `enable_seqscan = off`.
+    // `target_id` leads nothing, so the same probe seq-scans the whole table
+    // (measured on 40k rows: 513 buffers / 2.5 ms -> 6 buffers / 0.05 ms).
+    targetIdx: index('idx_pg_connections_target_id').on(t.targetId),
   })
 );
 

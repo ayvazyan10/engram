@@ -1,3 +1,31 @@
+/**
+ * SQLite schema — the TYPE-LEVEL description of the local database, and the
+ * input to `drizzle-kit generate`.
+ *
+ * It is NOT what creates the database at runtime. `runSqliteMigrations()` in
+ * ./adapter.ts is: it runs on every connection open, in every process, and is
+ * the only thing that has ever touched a user's `engram.db`. The generated
+ * output under ./migrations is tooling-only — never published (package.json
+ * ships `files: ["dist"]`, and the build copies only `db/pg/migrations`) and
+ * never applied by any runtime code path.
+ *
+ * The two must still describe the same database: `$inferSelect`/`$inferInsert`
+ * types come from here, so anything this file gets wrong is a lie the
+ * compiler believes. `__tests__/sqlite-schema-parity.test.ts` builds one
+ * database each way and diffs them — if you change either side, run it, and
+ * regenerate with `drizzle-kit generate`. See ./migrations/README.md.
+ *
+ * Column ORDER here is not authoritative and does not need to match the
+ * runtime's; that test compares columns as a set, for exactly that reason.
+ *
+ * One trap worth knowing before you rely on a default: `CURRENT_TIMESTAMP`
+ * yields SQLite's own `2026-01-01 12:00:00`, which sorts BEFORE any ISO
+ * `2026-01-01T…Z` value on the same date because ' ' < 'T' — and sync
+ * compares every timestamp as a string. Every writer in this repo stamps ISO
+ * explicitly; see the "TIMESTAMP DEFAULTS" note in ./adapter.ts for why the
+ * default is documented rather than normalised.
+ */
+
 import { sql } from 'drizzle-orm';
 import {
   blob,
@@ -72,6 +100,11 @@ export const memories = sqliteTable(
     archivedIdx: index('idx_memories_archived').on(t.archivedAt),
     namespaceIdx: index('idx_memories_namespace').on(t.namespace),
     updatedAtIdx: index('idx_memories_updated_at').on(t.updatedAt), // sync push query: WHERE updated_at > cursor
+    // Three columns, in this order, on all three synced tables. See the long
+    // note in adapter.ts's runSqliteMigrations for the measurements behind
+    // it — leading with `device_id` is what lets SQLite seek into this
+    // device's own rows instead of walking peer-written ones.
+    syncPushIdx: index('idx_memories_sync_push').on(t.deviceId, t.updatedAt, t.id),
   })
 );
 
@@ -114,6 +147,7 @@ export const memoryConnections = sqliteTable(
     ),
     deletedIdx: index('idx_connections_deleted_at').on(t.deletedAt),
     updatedIdx: index('idx_connections_updated_at').on(t.updatedAt),
+    syncPushIdx: index('idx_connections_sync_push').on(t.deviceId, t.updatedAt, t.id),
   })
 );
 
@@ -142,6 +176,7 @@ export const sessions = sqliteTable(
     startedIdx: index('idx_sessions_started').on(t.startedAt),
     namespaceIdx: index('idx_sessions_namespace').on(t.namespace),
     deletedIdx: index('idx_sessions_deleted_at').on(t.deletedAt),
+    syncPushIdx: index('idx_sessions_sync_push').on(t.deviceId, t.updatedAt, t.id),
   })
 );
 
@@ -180,7 +215,10 @@ export const webhooks = sqliteTable(
     id: text('id').primaryKey(),
     url: text('url').notNull(),
     secret: text('secret'),  // optional shared secret for HMAC signing
-    events: text('events').notNull(),  // JSON array: ["stored","forgotten","decayed","consolidated","contradiction"]
+    // DEFAULT '[]' matches the runtime DDL in adapter.ts, which has carried
+    // it since v0.4.0. Declaring it notNull-without-default here made the two
+    // disagree on what an omitted `events` means.
+    events: text('events').default('[]').notNull(),  // JSON array: ["stored","forgotten","decayed","consolidated","contradiction"]
     active: integer('active', { mode: 'boolean' }).default(true).notNull(),
     description: text('description'),
     metadata: text('metadata').default('{}').notNull(),

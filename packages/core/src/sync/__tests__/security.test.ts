@@ -44,7 +44,6 @@ const shouldRun = !SKIP_REQUESTED && pgAvailable;
 const describeWithPg = shouldRun ? describe : describe.skip;
 
 if (!shouldRun) {
-  // eslint-disable-next-line no-console
   console.info(
     `[security.test.ts] skipping PG-dependent tests: ${
       SKIP_REQUESTED ? 'SKIP_PG_TESTS is set' : `PostgreSQL is unavailable at ${PG_URL}`

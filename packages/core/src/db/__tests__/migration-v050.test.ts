@@ -28,10 +28,22 @@ import { getDeviceId, _resetMemoizedDeviceIdForTests } from '../../sync/deviceId
 import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MIGRATION_SQL = fs.readFileSync(
-  path.join(__dirname, '../migrations/0000_cynical_marauders.sql'),
+// The FROZEN v0.1.0 schema, checked in under fixtures/. Deliberately not
+// `../migrations/` — that folder is regenerated from schema.ts and therefore
+// always describes the present, never the release this test needs to
+// reconstruct. See the fixture's own header.
+const V010_SCHEMA_SQL = fs.readFileSync(
+  path.join(__dirname, 'fixtures/v010-schema.sql'),
   'utf-8'
 );
+
+/** Applies the frozen v0.1.0 DDL to an empty database file. */
+function applyV010Schema(sqlite: Database.Database): void {
+  for (const rawStmt of V010_SCHEMA_SQL.split('--> statement-breakpoint')) {
+    const stmt = rawStmt.trim();
+    if (stmt) sqlite.exec(stmt);
+  }
+}
 
 // All tables that exist in any supported schema version, for the
 // fresh-vs-upgraded equivalence sweep.
@@ -50,37 +62,22 @@ function tempDbPath(label: string): string {
 }
 
 /**
- * Builds a database reflecting the real, pre-v0.5.0 schema (v0.4.0): the base
- * drizzle migration plus the v0.2.0/v0.3.0/v0.4.0 incremental ALTERs that
- * `runSqliteMigrations` applies at runtime.
+ * Builds a database reflecting the real, pre-v0.5.0 schema (v0.4.0): the
+ * frozen v0.1.0 baseline plus the v0.2.0/v0.3.0/v0.4.0 incremental ALTERs
+ * that `runSqliteMigrations` applies at runtime.
  *
- * IMPORTANT: the checked-in migration file inlines `namespace` on
- * `context_assemblies` and `sessions` (an incomplete, inconsistent historical
- * patch — it was never done for `memories`, and `embedding_model`/`webhooks`
- * are missing entirely — see .claude/PRPs/plans/postgres-cloud-sync.md,
- * item 0.9). A genuinely pre-v0.2.0 database never had `namespace` on ANY
- * table; it arrived later via a runtime `ALTER TABLE`, which APPENDS the
- * column. Real, long-lived production databases confirm this (verified
- * against a real backup via scripts/verify-migration-against-real-db.mjs:
- * `namespace` sits at the END of both tables, not inline). So the inline
- * column is stripped here and re-added via ALTER, to faithfully reproduce
- * real upgrade history instead of trusting the drifted migration file
- * verbatim.
+ * IMPORTANT: `namespace` is added here by ALTER, never inlined in the CREATE.
+ * A genuinely pre-v0.2.0 database never had `namespace` on ANY table; it
+ * arrived later via a runtime `ALTER TABLE`, which APPENDS the column. Real,
+ * long-lived production databases confirm this (verified against a real
+ * backup via scripts/verify-migration-against-real-db.mjs: `namespace` sits
+ * at the END of both tables, not inline). Reproducing that ordering is the
+ * whole point — the fresh-vs-upgraded equivalence assertions below compare
+ * column order.
  */
 function createV040Db(dbPath: string): void {
   const sqlite = new Database(dbPath);
-  for (const rawStmt of MIGRATION_SQL.split('--> statement-breakpoint')) {
-    const stmt = rawStmt.trim();
-    if (!stmt) continue;
-
-    // These indexes reference a column that, in this reconstruction, doesn't
-    // exist yet — deferred until after the ALTER below re-creates them.
-    if (stmt.includes('idx_assemblies_namespace') || stmt.includes('idx_sessions_namespace')) {
-      continue;
-    }
-
-    sqlite.exec(stmt.replace(/\n\s*`namespace` text,/, ''));
-  }
+  applyV010Schema(sqlite);
 
   // v0.2.0: namespace column, applied uniformly via ALTER (matches reality).
   sqlite.exec('ALTER TABLE memories ADD COLUMN namespace text');
@@ -114,32 +111,15 @@ function createV040Db(dbPath: string): void {
 }
 
 /**
- * Builds a database reflecting a genuine pre-v0.2.0 (v0.1.0) schema: the base
- * drizzle migration with NO `namespace` column on ANY table (not even
- * inline), NO `embedding_model`, and NO `webhooks` table — nothing past what
- * shipped in the very first migration.
- *
- * The checked-in migration file already has `namespace` inlined on
- * `context_assemblies` and `sessions` (see the `createV040Db` doc comment
- * above for why that's a historical drift, not reality). Both are stripped
- * here, along with their now-dangling indexes, so this reconstruction has
- * NOTHING added past v0.1.0. Opening this through the adapter must run the
- * entire incremental chain — v0.2.0 through v0.5.0 — in one connection.
+ * Builds a database reflecting a genuine pre-v0.2.0 (v0.1.0) schema: NO
+ * `namespace` column on ANY table, NO `embedding_model`, and NO `webhooks`
+ * table — nothing past what shipped in the very first release. Opening this
+ * through the adapter must run the entire incremental chain — v0.2.0 through
+ * v0.5.0 — in one connection.
  */
 function createV010Db(dbPath: string): void {
   const sqlite = new Database(dbPath);
-  for (const rawStmt of MIGRATION_SQL.split('--> statement-breakpoint')) {
-    const stmt = rawStmt.trim();
-    if (!stmt) continue;
-
-    // These indexes reference `namespace`, which doesn't exist in a true
-    // v0.1.0 database — the column arrives later via v0.2.0's ALTER TABLE.
-    if (stmt.includes('idx_assemblies_namespace') || stmt.includes('idx_sessions_namespace')) {
-      continue;
-    }
-
-    sqlite.exec(stmt.replace(/\n\s*`namespace` text,/, ''));
-  }
+  applyV010Schema(sqlite);
   sqlite.close();
 }
 
@@ -166,6 +146,21 @@ function tableExists(dbPath: string, table: string): boolean {
 
 function columnNames(dbPath: string, table: string): string[] {
   return (tableInfo(dbPath, table) as Array<{ name: string }>).map((c) => c.name);
+}
+
+function indexColumns(dbPath: string, index: string): string[] | null {
+  const sqlite = new Database(dbPath);
+  try {
+    const exists = sqlite
+      .prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='index' AND name=?")
+      .get(index) as { cnt: number };
+    if (exists.cnt === 0) return null;
+    return (sqlite.prepare(`PRAGMA index_info(${JSON.stringify(index)})`).all() as Array<{
+      name: string;
+    }>).map((c) => c.name);
+  } finally {
+    sqlite.close();
+  }
 }
 
 // ─── 1. Fresh database ──────────────────────────────────────────────────────
@@ -239,6 +234,76 @@ describe('v0.5.0 migration — upgrade path', () => {
     );
     expect(tableExists(dbPath, 'local_meta')).toBe(true);
     expect(tableExists(dbPath, 'sync_state')).toBe(true);
+  });
+});
+
+
+// ─── 2c. Sync push index ────────────────────────────────────────────────────
+//
+// The sync push query filters on `device_id` and pages on `(updated_at, id)`.
+// The column ORDER is load-bearing, not cosmetic: leading with `device_id`
+// lets SQLite seek straight into this device's own rows, while a two-column
+// `(updated_at, id)` index makes it abandon the OR optimization for a full
+// index scan. Assert the exact order so a well-meaning "simplification"
+// can't silently regress it.
+
+describe('v0.5.0 migration — sync push index', () => {
+  let dbPath: string;
+
+  afterEach(() => {
+    closeDatabase();
+    cleanupTestDb(dbPath);
+  });
+
+  const EXPECTED = ['device_id', 'updated_at', 'id'];
+
+  it('creates the composite push index on all three synced tables in a fresh database', () => {
+    dbPath = tempDbPath('push-index-fresh');
+    getDatabaseConnection({ dialect: 'sqlite', sqlitePath: dbPath });
+    closeDatabase();
+
+    expect(indexColumns(dbPath, 'idx_memories_sync_push')).toEqual(EXPECTED);
+    expect(indexColumns(dbPath, 'idx_connections_sync_push')).toEqual(EXPECTED);
+    expect(indexColumns(dbPath, 'idx_sessions_sync_push')).toEqual(EXPECTED);
+  });
+
+  it('adds the composite push index to a pre-v0.5.0 database on open', () => {
+    dbPath = tempDbPath('push-index-upgrade');
+    createV040Db(dbPath);
+    expect(indexColumns(dbPath, 'idx_memories_sync_push')).toBeNull();
+
+    getDatabaseConnection({ dialect: 'sqlite', sqlitePath: dbPath });
+    closeDatabase();
+
+    expect(indexColumns(dbPath, 'idx_memories_sync_push')).toEqual(EXPECTED);
+    expect(indexColumns(dbPath, 'idx_connections_sync_push')).toEqual(EXPECTED);
+    expect(indexColumns(dbPath, 'idx_sessions_sync_push')).toEqual(EXPECTED);
+  });
+
+  it('is the index SQLite actually picks for the push query', () => {
+    dbPath = tempDbPath('push-index-plan');
+    getDatabaseConnection({ dialect: 'sqlite', sqlitePath: dbPath });
+    closeDatabase();
+
+    const sqlite = new Database(dbPath);
+    try {
+      const plan = (
+        sqlite
+          .prepare(
+            `EXPLAIN QUERY PLAN
+             SELECT * FROM memories
+             WHERE (device_id IS NULL OR device_id = ?)
+               AND (updated_at > ? OR (updated_at = ? AND id > ?))
+             ORDER BY updated_at, id LIMIT 500`
+          )
+          .all('dev', 'ts', 'ts', 'id') as Array<{ detail: string }>
+      )
+        .map((r) => r.detail)
+        .join(' | ');
+      expect(plan).toContain('idx_memories_sync_push');
+    } finally {
+      sqlite.close();
+    }
   });
 });
 
