@@ -8,6 +8,88 @@ All request and response bodies are JSON. All endpoints return standard HTTP sta
 
 ---
 
+## Authentication & request policy
+
+Everything in this section applies to `/api/*` on every endpoint below.
+
+### API key
+
+Authentication is **off by default** — the local-first shape. Set `ENGRAM_API_KEY` on the server to turn it on; every `/api/*` route then requires the key, and so do `/docs/json` and `/docs/yaml`.
+
+| | |
+|---|---|
+| **Header** | `X-API-Key: <key>` or `Authorization: Bearer <key>` |
+| **Exempt** | `GET /api/health` (so container probes keep working) |
+| **Also exempt** | The dashboard bundle and the SPA fallback — a browser cannot attach a header to a top-level navigation, so gating them would make the page that lets a user supply a key unreachable. No data is served outside `/api/` |
+| **WebSocket** | Same key as `auth.token` in the Socket.io handshake: `io('/neural', { auth: { token: '<key>' } })` |
+
+**Response `401`**
+```json
+{ "error": "Unauthorized" }
+```
+
+`ENGRAM_API_KEY` set to an **empty** value aborts startup rather than silently running unauthenticated. Unset it to run open.
+
+### Host allowlist
+
+`/api/*` requests are refused unless the `Host` header is allowlisted — the DNS-rebinding defense. Without configuration, **IP literals (v4 and v6) and `localhost` / `*.localhost` always pass**; any other hostname must be listed in `ENGRAM_ALLOWED_HOSTS` (comma-separated). A deployment reached by name through a reverse proxy must set it. `ENGRAM_ALLOWED_HOSTS=*` turns the check off.
+
+Ports are stripped before matching and comparison is case-insensitive, so list bare hostnames. A missing or unparseable `Host` is refused.
+
+**Response `403`**
+```json
+{
+  "error": "Forbidden",
+  "message": "Host header is not allowlisted. Set ENGRAM_ALLOWED_HOSTS to the hostname this server is reached by (comma-separated, '*' to disable)."
+}
+```
+
+Only `/api/*` is guarded — the dashboard shell and `/docs` stay reachable under any Host, because they hold no data.
+
+### CORS and WebSocket origins
+
+Browser origins are allowlisted, not reflected. Defaults cover `http://localhost:{PORT}`, `http://127.0.0.1:{PORT}`, `:4902` and the Vite dev server on `:5173`; override with `ENGRAM_ALLOWED_ORIGINS`. Requests with **no** `Origin` (CLI, MCP, curl) are allowed. A disallowed origin is refused at the Socket.io handshake with a 403 before any transport exists.
+
+### Rate limits
+
+Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback are exempt. A request is charged against every tier it matches, so a heavy call also spends global budget.
+
+| Tier | Default limit | Applies to |
+|---|---|---|
+| `global` | 1000 / 60s | Every `/api/*` request |
+| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, and `GET /api/recall/stream`. `GET /api/memory` is a plain list and stays global-only |
+| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger` |
+
+Window and limits are configurable — see [CONFIGURATION.md](CONFIGURATION.md#security). Set a tier's limit to `0` to disable it, or `ENGRAM_RATE_LIMIT_DISABLED=true` to turn the limiter off entirely.
+
+**Response `429`**
+```json
+{
+  "error": "Too Many Requests",
+  "message": "Rate limit exceeded for the 'whole-store' tier. Retry in 60s."
+}
+```
+
+Sent with `Retry-After` (seconds), `X-RateLimit-Limit`, `X-RateLimit-Remaining: 0` and `X-RateLimit-Reset` (Unix seconds). These headers appear **only** on the 429 — successful responses carry none.
+
+### Single-flight whole-store operations
+
+The seven whole-store routes above hold a process-wide guard: starting one while the same operation is running returns `409` rather than interleaving two passes over the store.
+
+```json
+{
+  "statusCode": 409,
+  "error": "Conflict",
+  "message": "Operation 'index-save' is already in progress. Retry once it finishes."
+}
+```
+
+### Security headers
+
+Every response — including the dashboard bundle and the SPA fallback — carries `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and `Cross-Origin-Opener-Policy: same-origin`. An existing header is never overwritten. Override the CSP with `ENGRAM_CSP`, or `ENGRAM_CSP=off` to send none; `Strict-Transport-Security` is opt-in via `ENGRAM_HSTS_MAX_AGE`.
+
+---
+
 ## Health & Stats
 
 ### `GET /api/health`
@@ -18,8 +100,8 @@ Check if the server is running.
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
-  "uptime": 42.3
+  "version": "0.5.0",
+  "uptime": 268.962066517
 }
 ```
 
@@ -83,6 +165,145 @@ Consolidate episodic memories into semantic summaries. Clusters similar episodes
     }
   ]
 }
+```
+
+---
+
+## Analytics
+
+### `GET /api/analytics`
+
+Aggregated memory statistics, scoped to an explicit time window.
+
+Every number under `windowed` is computed over `window` — the last `days` UTC calendar days, ending with today. The only figures that are not are under `allTime`, which says so in its name. No number sits outside a container that names its scope.
+
+`excludesArchived` is `true` for the whole payload: archived memories are counted nowhere, including in the past days of the growth series.
+
+> **Breaking change.** Before this release the response was flat, and it mixed two scopes without saying so: `dailyGrowth` and `hourlyActivity` were windowed while `total`, `byType`, `bySource` and `topConcepts` were all-time. On a live store the windowed aggregates summed to 87 against a `total` of 651 in the same payload. Every field has moved under `window` / `windowed` / `allTime`, and **`byType`, `bySource` and `topConcepts` are now windowed** where they used to be all-time. Read `allTime.total` for the old `total`.
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `days` | integer 1–365 | Length of the window in UTC calendar days, default 30 |
+
+`days` is the **only** accepted query parameter. Any other key is a `400` rather than being ignored — `?day=90`, one letter short, used to return `200` with a 30-day window the caller read as 90.
+
+```
+GET /api/analytics?day=90
+```
+```json
+{
+  "error": "Bad Request",
+  "message": "Unknown query parameter: day. Allowed: days."
+}
+```
+
+**Response `200`**
+
+```json
+{
+  "window": {
+    "days": 1,
+    "start": "2026-09-04",
+    "end": "2026-09-04",
+    "startedAt": "2026-09-04T00:00:00.000Z",
+    "endsBefore": "2026-09-05T00:00:00.000Z",
+    "generatedAt": "2026-09-04T16:43:50.905Z",
+    "timezone": "UTC"
+  },
+  "excludesArchived": true,
+  "windowed": {
+    "total": 7,
+    "avgImportance": 0.5810046963955026,
+    "byType": { "episodic": 1, "semantic": 6 },
+    "bySource": { "claude-code": 3, "consolidation": 3, "mission-control": 1 },
+    "sourceCount": 3,
+    "conceptCount": 6,
+    "topConcepts": [
+      { "concept": "<redacted>", "count": 2, "avgImportance": 0.39177330555555556 },
+      { "concept": "<redacted>", "count": 1, "avgImportance": 0.43703173603395057 }
+    ],
+    "topConceptsLimit": 20,
+    "baseline": 644,
+    "dailyGrowth": [
+      { "date": "2026-09-04", "count": 7, "cumulative": 651 }
+    ],
+    "hourlyActivity": [
+      { "hour": 2, "dayOfWeek": 5, "count": 1 },
+      { "hour": 6, "dayOfWeek": 5, "count": 2 },
+      { "hour": 8, "dayOfWeek": 5, "count": 1 },
+      { "hour": 10, "dayOfWeek": 5, "count": 2 },
+      { "hour": 11, "dayOfWeek": 5, "count": 1 }
+    ],
+    "weekdayCoverage": [ 0, 0, 0, 0, 0, 1, 0 ]
+  },
+  "allTime": {
+    "total": 651,
+    "avgImportance": 0.8122686535225514,
+    "conceptCount": 228,
+    "sourceCount": 15
+  }
+}
+```
+
+*(`?days=1` on a 651-memory store, verbatim from the running server except for the two `concept` strings, which are real memory text and are withheld here. `topConcepts` returned six entries; two are shown.)*
+
+**`window`**
+
+| Field | Type | Description |
+|---|---|---|
+| `days` | integer | Window length actually used |
+| `start` / `end` | `YYYY-MM-DD` | Inclusive first and last calendar day. Label charts from these |
+| `startedAt` / `endsBefore` | ISO instant | The same interval half-open: `>= startedAt`, `< endsBefore` |
+| `generatedAt` | ISO instant | When the response was computed. The last day of the window is today and is partial — this is the hour to cut at |
+| `timezone` | `"UTC"` | Every bucket and boundary is UTC |
+
+**`windowed`**
+
+| Field | Type | Description |
+|---|---|---|
+| `total` | integer | Memories created inside the window and still active |
+| `avgImportance` | number \| **null** | Mean importance. `null`, never `0`, when the scope holds no memories |
+| `byType` | `{ type: count }` | Complete for the window — not a top-N |
+| `bySource` | `{ source: count }` | Complete for the window, never truncated. A `NULL` source appears as `"unknown"` |
+| `sourceCount` | integer | Distinct sources in the window, counting `"unknown"` as one |
+| `conceptCount` | integer | Distinct concepts in the window. **This is the statistic** — not `topConcepts.length` |
+| `topConcepts` | array | Ranked page of at most `topConceptsLimit`, by `count` desc then concept name. The name tiebreak is what keeps a polling dashboard from reshuffling |
+| `topConceptsLimit` | integer | The page size (`20`). A page size, not a statistic |
+| `baseline` | integer | Still-active memories created *before* the window opened. Seeds `cumulative` |
+| `dailyGrowth` | array | One point per day — see below |
+| `hourlyActivity` | array | Sparse 7×24 heatmap — see below |
+| `weekdayCoverage` | integer[7] | How many times each weekday falls in the window, indexed 0 = Sunday. A 30-day window holds five of one weekday and four of another; divide by this for a rate |
+
+**`allTime`** carries only `total`, `avgImportance`, `conceptCount` and `sourceCount`, over every active memory regardless of date.
+
+**`dailyGrowth`**
+
+`length === window.days`, always — contiguous, ascending, zero-filled. Days with no memories are present with `count: 0`, so a client never has to work out which days were dropped and never splines through a gap it invented.
+
+| Field | Type | Description |
+|---|---|---|
+| `date` | `YYYY-MM-DD` | The UTC day |
+| `count` | integer | Memories created that day and still active — a rate |
+| `cumulative` | integer | Memories still active **now** that were created on or before that day, seeded by `baseline` |
+
+`cumulative` is deliberately not "the size of the store that day". Because `excludesArchived` applies to the past too, a store that forgets a lot draws a curve flatter in the past than it really was. `sum(dailyGrowth[].count) + baseline === dailyGrowth[last].cumulative`, and `sum(count) === windowed.total`.
+
+**`hourlyActivity`**
+
+Sparse over a fixed 7×24 grid the client already knows, so an absent cell is unambiguously zero rather than an interpolated one.
+
+| Field | Type | Description |
+|---|---|---|
+| `hour` | integer 0–23 | UTC hour |
+| `dayOfWeek` | integer 0–6 | **0 = Sunday**, matching SQLite's `strftime('%w')` |
+| `count` | integer | Memories created in that cell |
+
+**Response `400`** — `days` outside `1..365`, or not an integer.
+
+```json
+{ "statusCode": 400, "error": "Bad Request", "message": "querystring/days must be <= 365" }
 ```
 
 ---
@@ -180,6 +401,8 @@ Bulk store memories in a single transaction. High-throughput path.
 
 The `contradictions` field reports how many contradictions were detected across the batch. Use `GET /api/contradictions` to retrieve details.
 
+`memories` accepts at most **1000** items. Every item is embedded, so the fan-out is bounded — 16 embeds in flight at a time by default, tunable with `ENGRAM_BATCH_CONCURRENCY`. `ids` come back in the order the memories were submitted.
+
 ---
 
 ### `GET /api/memory`
@@ -192,8 +415,8 @@ List memories with optional filters.
 |---|---|---|
 | `type` | `episodic` \| `semantic` \| `procedural` | Filter by type |
 | `source` | string | Filter by source |
-| `limit` | integer (max 200) | Default: 50 |
-| `offset` | integer | Default: 0 |
+| `limit` | integer 1–200 | Default: 50 |
+| `offset` | integer >= 0 | Default: 0 |
 
 **Example**
 ```
@@ -245,10 +468,7 @@ Get a single memory by ID. Returns the full memory record including all fields.
 **Response `404`**
 ```json
 {
-  "statusCode": 404,
-  "code": "MEMORY_NOT_FOUND",
-  "error": "Not Found",
-  "message": "Memory not found"
+  "error": "Memory not found"
 }
 ```
 
@@ -259,6 +479,81 @@ Get a single memory by ID. Returns the full memory record including all fields.
 Archive (soft-delete) a memory. Sets `archivedAt` timestamp; the memory remains in the database but is excluded from search and recall.
 
 **Response `204`** — no body.
+
+---
+
+### `PATCH /api/memory/:id`
+
+Edit a memory in place.
+
+**Request body** — every field optional; unknown keys are rejected.
+
+| Field | Type | Description |
+|---|---|---|
+| `content` | string (min 1) | New content |
+| `importance` | number 0–1 | New importance |
+| `tags` | string[] | Replaces the tag list |
+| `concept` | string | New concept |
+
+Changing `content` **re-embeds** the memory and updates the vector index in the same request, so search cannot go on matching the old text.
+
+**Response `200`** — the updated memory record.
+
+**Response `404`**
+```json
+{ "error": "Memory not found" }
+```
+
+---
+
+### `POST /api/memory/bulk/tag`
+
+Add one tag to many memories.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ids` | string[] (max 1000) | yes | Memory IDs |
+| `tag` | string (min 1) | yes | Tag to add |
+
+Memories that already carry the tag, do not exist, or fall outside the configured namespace are skipped rather than failing the request.
+
+**Response `200`**
+```json
+{ "modified": 0, "total": 0 }
+```
+
+`total` is how many ids were submitted; `modified` is how many rows actually changed.
+
+---
+
+### `POST /api/memory/bulk/archive`
+
+Archive many memories at once.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ids` | string[], 1–1000 items | yes | Memory IDs |
+
+`ids` must be an array of non-empty strings, and no other key is accepted — both are enforced before schema coercion, so `{"ids":"abc"}` is a `400` rather than three phantom archives.
+
+Unknown or already-archived ids are counted as not archived and fire no webhook.
+
+**Response `200`**
+```json
+{ "archived": 0, "total": 1 }
+```
+
+**Response `400`**
+```json
+{ "error": "Bad Request", "message": "'ids' must be an array." }
+```
+```json
+{ "error": "Bad Request", "message": "Unknown property: foo. Allowed: ids." }
+```
 
 ---
 
@@ -485,7 +780,14 @@ Update the decay policy configuration.
 
 All fields are optional; only provided fields are updated.
 
+`protectionRules` is **refused** rather than ignored: a rule carries a predicate function, which JSON cannot express. Configure protection rules in-process.
+
 **Response `200`** — the updated policy object (same shape as `GET`).
+
+**Response `400`**
+```json
+{ "error": "protectionRules cannot be set over HTTP: a rule needs a predicate function, which JSON cannot express. Configure them in-process instead." }
+```
 
 ---
 
@@ -775,24 +1077,47 @@ The write is asynchronous and atomic — it goes to a temporary file that is ren
 
 ## Webhooks
 
+Webhook events are `stored`, `forgotten`, `decayed`, `consolidated`, `contradiction` and `reflected`. These are **not** the Socket.io event names — see [WebSocket Events](#websocket-events) for those.
+
+A subscription's `secret` is write-only. It is supplied on subscribe, kept for the signer, and **never serialized back out** — reads report a `hasSecret` boolean instead, because handing the HMAC key back to anyone with read access lets them forge deliveries the receiver would accept. A lost secret is rotated by re-subscribing.
+
+Target URLs are checked against an SSRF guard before the subscription is stored: loopback, link-local (cloud metadata), RFC1918 and other non-global addresses are refused unless `ENGRAM_WEBHOOK_ALLOW_PRIVATE=true`. At delivery time the connection is pinned to the address that was validated, connection pooling is off, and **redirects are never followed** — a `302` is an ordinary failed delivery.
+
 ### `GET /api/webhooks`
 
 List all registered webhook subscriptions.
 
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `activeOnly` | boolean | Only subscriptions that have not been auto-disabled. Default `false` |
+
 **Response `200`**
 ```json
 {
+  "count": 1,
   "webhooks": [
     {
-      "id": "wh-uuid",
+      "id": "f696a516-24d4-4d75-946b-ca431629c34f",
       "url": "https://example.com/hook",
-      "events": ["memory:stored", "memory:contradiction"],
+      "events": ["stored", "contradiction"],
       "active": true,
-      "createdAt": "2026-03-20T12:00:00.000Z"
+      "description": "doc probe",
+      "hasSecret": true,
+      "createdAt": "2026-09-04T16:35:14.104Z",
+      "lastTriggeredAt": null,
+      "failCount": 0
     }
   ]
 }
 ```
+
+| Field | Type | Description |
+|---|---|---|
+| `active` | boolean | Auto-disabled after 10 consecutive delivery failures |
+| `hasSecret` | boolean | Whether an HMAC secret is configured. `true` exactly when a delivery would be signed |
+| `failCount` | integer | Consecutive failures; reset by a successful delivery |
 
 ---
 
@@ -805,27 +1130,40 @@ Subscribe a new webhook endpoint.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `url` | string | yes | The URL to receive POST callbacks |
-| `events` | string[] | yes | Events to subscribe to |
-| `secret` | string | — | Shared secret for HMAC signature verification |
+| `events` | string[] | yes | One or more of `stored`, `forgotten`, `decayed`, `consolidated`, `contradiction`, `reflected` |
+| `secret` | string | — | Shared secret for the `X-Engram-Signature` HMAC. Write-only |
+| `description` | string | — | Free-text label |
 
 **Request**
 ```json
 {
   "url": "https://example.com/hook",
-  "events": ["memory:stored", "memory:contradiction"],
-  "secret": "whsec_abc123"
+  "events": ["stored", "contradiction"],
+  "secret": "whsec_abc123",
+  "description": "doc probe"
 }
 ```
 
 **Response `201`**
 ```json
 {
-  "id": "wh-uuid",
+  "id": "f696a516-24d4-4d75-946b-ca431629c34f",
   "url": "https://example.com/hook",
-  "events": ["memory:stored", "memory:contradiction"],
+  "events": ["stored", "contradiction"],
   "active": true,
-  "createdAt": "2026-03-25T10:00:00.000Z"
+  "description": "doc probe",
+  "hasSecret": true,
+  "createdAt": "2026-09-04T16:35:14.104Z",
+  "lastTriggeredAt": null,
+  "failCount": 0
 }
+```
+
+Note the response carries `hasSecret`, not the secret you sent.
+
+**Response `400`** — the URL failed the SSRF guard.
+```json
+{ "error": "Webhook URL resolves to a private or loopback address (127.0.0.1). Set ENGRAM_WEBHOOK_ALLOW_PRIVATE=true to allow it." }
 ```
 
 ---
@@ -835,6 +1173,11 @@ Subscribe a new webhook endpoint.
 Get a single webhook subscription by ID.
 
 **Response `200`** — webhook object (same shape as list items).
+
+**Response `404`**
+```json
+{ "error": "Webhook not found" }
+```
 
 ---
 
@@ -848,15 +1191,30 @@ Remove a webhook subscription.
 
 ### `POST /api/webhooks/:id/test`
 
-Send a test payload to the webhook endpoint to verify connectivity.
+Send a test payload to the webhook endpoint to verify connectivity. Retries follow the normal delivery policy, so a failing endpoint is contacted up to three times before the result comes back.
 
 **Response `200`**
 ```json
 {
-  "delivered": true,
-  "statusCode": 200,
-  "latencyMs": 120
+  "webhookId": "f696a516-24d4-4d75-946b-ca431629c34f",
+  "url": "https://example.com/hook",
+  "success": false,
+  "statusCode": 405,
+  "error": "HTTP 405: Method Not Allowed",
+  "attempts": 3
 }
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `success` | boolean | Whether the endpoint answered 2xx |
+| `statusCode` | integer | Present when a response was received |
+| `error` | string | Present when the delivery failed |
+| `attempts` | integer | Delivery attempts made |
+
+**Response `404`** — an unknown id is a 404, not a `success: false` delivery report.
+```json
+{ "error": "Webhook not found" }
 ```
 
 ---
@@ -1018,8 +1376,9 @@ Get the knowledge graph neighborhood for a memory node.
   "connections": [
     {
       "id": "conn-uuid",
+      "sourceId": "uuid",
       "targetId": "target-uuid",
-      "relationship": "implements",
+      "relationship": "relates_to",
       "strength": 0.9
     }
   ],
@@ -1031,6 +1390,149 @@ Get the knowledge graph neighborhood for a memory node.
     }
   ]
 }
+```
+
+---
+
+### `GET /api/graph/layout`
+
+One 3D coordinate per memory, derived from that memory's stored embedding by a PCA projection into three components. This is what the dashboard's 3D views are drawn from — position means semantic proximity, not a hash of the id.
+
+The projection is computed server-side (the vectors live there, and 651 × 384 floats is about a megabyte a browser has no reason to download) and cached on a fingerprint of the memory set — row count plus the newest `createdAt`/`updatedAt` plus the active namespace — so any store, edit, archive or delete invalidates it and nothing else does.
+
+Nodes are scoped exactly as `GET /api/memory` scopes its list: archived memories are excluded, and the configured namespace applies.
+
+No query parameters. Unknown ones are ignored.
+
+**Response `200`**
+```json
+{
+  "method": "pca3",
+  "halfExtent": 42,
+  "count": 651,
+  "projected": 651,
+  "unprojected": 0,
+  "explainedVariance": [0.24093698985178116, 0.09472036395954171, 0.046422251410887],
+  "fingerprint": "m:651:2026-09-04T12:59:20.787Z:2026-09-04T11:27:59.722Z:-",
+  "generatedAt": "2026-09-04T16:23:26.925Z",
+  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "computeMs": 157,
+  "nodes": [
+    {
+      "id": "017a0632-0300-49f8-b49a-7c51037716a9",
+      "type": "procedural",
+      "label": "good-stories.us W3 Total Cache purge after plugin edits",
+      "importance": 0.8,
+      "source": "claude-code",
+      "accessCount": 8,
+      "createdAt": "2026-08-10T17:46:53.023Z",
+      "lastAccessedAt": "2026-08-16T16:22:20.900Z",
+      "x": 24.601694929485824,
+      "y": -11.06036758257762,
+      "z": 3.5952843911098022,
+      "projected": true
+    }
+  ]
+}
+```
+
+*(`nodes` holds one entry per memory — 651 here; one is shown.)*
+
+| Field | Type | Description |
+|---|---|---|
+| `method` | `pca3` \| `fallback` | `fallback` when the store is too small to fit three components, or holds no usable embeddings at all |
+| `halfExtent` | number | Half-width of the world box every coordinate is scaled into. Fixed at `42` so camera framing is stable across refits |
+| `count` | integer | Nodes returned |
+| `projected` | integer | Nodes placed by the projection |
+| `unprojected` | integer | Nodes with no usable embedding, parked on a shell just outside the box (`projected: false` on the node). `count === projected + unprojected` |
+| `explainedVariance` | number[3] | Fraction of total variance each component captures. `[0.24, 0.09, 0.05]` above is 38.1% in three components |
+| `fingerprint` | string | Cache key for this projection. Unchanged between two calls means the same coordinates |
+| `generatedAt` | ISO instant | When the cached projection was computed — not when this request was served |
+| `embeddingModel` | string \| null | The model the vectors were produced with |
+| `computeMs` | integer | Wall time of the projection that filled the cache. `157` cold on 651 memories; a cache hit returns in ~4 ms and reports the same number |
+
+**Nodes**
+
+| Field | Type | Description |
+|---|---|---|
+| `id`, `type`, `importance`, `source`, `accessCount`, `createdAt`, `lastAccessedAt` | — | Straight from the memory record |
+| `label` | string | `concept` if set, otherwise `content`, whitespace-collapsed and cut to 80 characters |
+| `x`, `y`, `z` | number | Coordinates in `[-halfExtent, halfExtent]` |
+| `projected` | boolean | `false` when the position is a deterministic placeholder rather than a projection |
+
+The projection is deterministic for a given store but **not invariant**: the basis is fitted, so adding a memory perturbs every coordinate by O(1/N). Sign is canonicalised so a refit cannot mirror the scene.
+
+**`fallback`**
+
+When `pca3` cannot fit — fewer usable vectors than components, or none at all — `method` is `fallback`, `projected` is `0`, `unprojected` equals `count`, `explainedVariance` is `[0, 0, 0]`, and every node gets a stable hash-derived position inside the box. The response shape is otherwise identical.
+
+---
+
+### `GET /api/graph/edges`
+
+Every connection whose **both** endpoints are memories the caller can see, strongest first, in one request. This replaces walking `GET /api/graph/:id` per node, which surfaced a biased handful of edges.
+
+The response reports its own denominators, so a client can state what it is not showing rather than truncating in silence.
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `minStrength` | number 0–1 | Keep only edges at or above this strength. Default `0` |
+| `limit` | integer 1–20000 | Maximum edges returned. Default `20000` |
+
+Unlike `GET /api/analytics`, an unrecognised query key here is silently ignored rather than refused.
+
+**Response `200`**
+```json
+{
+  "total": 3099,
+  "stored": 8492,
+  "matching": 1049,
+  "returned": 2,
+  "truncated": true,
+  "minStrength": 0.9,
+  "limit": 2,
+  "edges": [
+    {
+      "id": "029feba3-aa67-4efc-abf8-b639985a3519",
+      "sourceId": "ce02fd6e-0d9c-4186-bd45-d4479ee8f90a",
+      "targetId": "88adc7a4-9e52-4fe7-8c06-138ffb55d5f3",
+      "relationship": "relates_to",
+      "strength": 1
+    },
+    {
+      "id": "0300fb19-e0a4-47a2-b82a-570e825aec38",
+      "sourceId": "23b70a4e-ad9d-4920-a949-cfbefa116e37",
+      "targetId": "7a173c83-c6f9-4414-ac87-938be163a862",
+      "relationship": "contradicts",
+      "strength": 1
+    }
+  ]
+}
+```
+
+*(`?minStrength=0.9&limit=2` on the same store.)*
+
+| Field | Type | Description |
+|---|---|---|
+| `total` | integer | **Renderable** edges in the store, before this request's filter |
+| `stored` | integer | Non-deleted connection rows, **including** edges onto archived memories |
+| `matching` | integer | Edges passing `minStrength` |
+| `returned` | integer | Edges in `edges` |
+| `truncated` | boolean | `true` when `limit` cut the result — `returned < matching` |
+| `minStrength`, `limit` | — | Echoed back as applied |
+
+`stored - total` is the honest gap: on the store above, 3,099 of 8,492 connections are renderable and the remaining 5,393 point at archived memories, which have no node to draw an edge to. Self-loops are also excluded. A client showing an edge count should say which of the two numbers it means.
+
+Ordering is by `strength` descending, then `id`, so a `limit` drops the weakest edges rather than an arbitrary slice of insertion order.
+
+Results are cached on a fingerprint combining the memory set and the connection set, so any write to either invalidates the cache.
+
+**Response `400`** — `minStrength` outside `0..1`, or `limit` outside `1..20000`.
+
+```json
+{ "statusCode": 400, "error": "Bad Request", "message": "querystring/limit must be <= 20000" }
 ```
 
 ---
@@ -1066,13 +1568,25 @@ Create a typed connection between two memories.
 {
   "sourceId": "uuid-transformer",
   "targetId": "uuid-attention",
-  "relationship": "uses",
+  "relationship": "relates_to",
   "strength": 0.95,
   "bidirectional": false
 }
 ```
 
-**Response `201`** — created connection object.
+**Response `201`** — created connection object, re-read from the database. A connection that had been forgotten and occupies the same `(sourceId, targetId, relationship)` slot is resurrected and keeps its **original** `id`, so read the `id` from this response rather than assuming a fresh one.
+
+**Response `404`** — either endpoint does not exist, or is outside the configured namespace.
+
+```json
+{ "error": "Memory not found" }
+```
+
+**Response `409`** — a live connection with the same `(sourceId, targetId, relationship)` already exists.
+
+```json
+{ "error": "Connection already exists" }
+```
 
 ---
 
@@ -1181,34 +1695,53 @@ socket.on('embedding:progress', ({ processed, total, percent }) => {
 
 ## Error Format
 
-All error responses follow a standard shape:
+There are two error bodies, and which one you get depends on where the error was raised.
+
+**Framework errors** — schema validation, an unmatched route, anything that reaches the error handler with a status code:
 
 ```json
 {
   "statusCode": 400,
-  "code": "VALIDATION_ERROR",
   "error": "Bad Request",
-  "message": "Field 'content' is required"
+  "message": "body must have required property 'content'"
 }
 ```
 
+**Handler errors** — a route answering for itself:
+
+```json
+{
+  "error": "Memory not found"
+}
+```
+
+Some handler errors add a `message` alongside `error` (the `403`, `429` and strict-query `400` bodies above do). There is **no** `code` field on any response — machine-readable dispatch goes on the HTTP status.
+
 | Field | Type | Description |
 |---|---|---|
-| `statusCode` | integer | HTTP status code |
-| `code` | string | Machine-readable error code |
-| `error` | string | HTTP status text |
-| `message` | string | Human-readable description |
+| `statusCode` | integer | HTTP status code. Present on framework errors only |
+| `error` | string | HTTP status text on framework errors; a short human-readable summary on handler errors |
+| `message` | string | Human-readable description. Not always present on handler errors |
 
-### Common Error Codes
+4xx messages are passed through, because they describe the caller's own input and are the only way to know what to fix. **5xx messages are not**: an internal failure always answers with the same fixed string, with the real detail written to the server log instead.
 
-| Code | Status | Description |
-|---|---|---|
-| `VALIDATION_ERROR` | 400 | Missing or invalid request fields |
-| `MEMORY_NOT_FOUND` | 404 | Memory ID does not exist |
-| `CONTRADICTION_NOT_FOUND` | 404 | Contradiction ID does not exist |
-| `WEBHOOK_NOT_FOUND` | 404 | Webhook ID does not exist |
-| `PLUGIN_NOT_FOUND` | 404 | Plugin ID does not exist |
-| `SESSION_NOT_FOUND` | 404 | Session ID does not exist |
-| `INDEX_BUSY` | 409 | Index rebuild already in progress |
-| `EMBEDDING_BUSY` | 409 | Re-embedding already in progress |
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
+```json
+{
+  "statusCode": 500,
+  "error": "Internal Server Error",
+  "message": "An internal error occurred. See the server log for details."
+}
+```
+
+### Common statuses
+
+| Status | Meaning |
+|---|---|
+| `400` | Schema validation failed, an unknown query key or body key was sent, or a value the handler rejects |
+| `401` | `ENGRAM_API_KEY` is set and the request did not present it |
+| `403` | The `Host` header is not allowlisted |
+| `404` | The memory, contradiction, webhook, plugin or session does not exist — or exists outside the configured namespace |
+| `409` | A whole-store operation is already running, or a duplicate connection was posted |
+| `413` | Body over the size limit (Ollama proxy only) |
+| `429` | A rate-limit tier was exhausted |
+| `500` | Unexpected server error. The body never carries detail — read the server log |

@@ -277,11 +277,22 @@ created_at        DATETIME
 Built with **Fastify 5** for high throughput and automatic JSON schema validation.
 
 - Routes registered at `/api` prefix
-- **Socket.io** namespace `/neural` broadcasts `memory:stored` events
+- **Socket.io** namespace `/neural` broadcasts memory, contradiction, recall and embedding events
 - Swagger UI served at `/docs`
-- CORS enabled for all origins (configurable)
+- Binds `127.0.0.1` by default; the built dashboard is served from the same origin
 
-See [API.md](API.md) for full endpoint reference.
+Five middlewares run on every request, in this order, and the order is deliberate — reject a rebound `Host` before spending a rate-limit slot on it, and rate-limit before the key check so a flood of wrong-key requests is bounded too:
+
+1. **Error handler** — 4xx bodies pass through (they describe the caller's own input); 5xx bodies are replaced with a fixed string so driver text and filesystem paths never reach a caller
+2. **Security headers** — CSP and friends on every response, including static assets and the SPA fallback, via `onSend`
+3. **CORS** — explicit origin allowlist, no credentials. A no-`Origin` request (CLI, MCP, curl) is allowed; the WebSocket allowlist is enforced in `allowRequest`, because a CORS callback cannot refuse an upgrade
+4. **Host allowlist** — `/api/*` only, the REST half of the DNS-rebinding defense
+5. **Rate limiting** — three tiers keyed by client address, `/api/*` only
+6. **API key** — only when `ENGRAM_API_KEY` is set; `/api/health` and everything outside `/api/` stay open
+
+Whole-store operations additionally hold a process-wide single-flight guard, so two concurrent index rebuilds cannot interleave a `clear()` with the other's writes.
+
+See [API.md](API.md) for full endpoint reference and [CONFIGURATION.md](CONFIGURATION.md#security) for the knobs.
 
 ---
 
@@ -289,15 +300,21 @@ See [API.md](API.md) for full endpoint reference.
 
 Built with **React 19 + Vite 6**. Three-dimensional neural graph rendered with **React Three Fiber** and **@react-three/drei**.
 
-### 5 visualization views
+### 3D views
 
-| View | Layout | Style |
-|---|---|---|
-| Cosmos | Fibonacci sphere | Metallic + orbital rings, bloom |
-| Nebula | Wider sphere | Ghost orbs, high bloom |
-| Neural Net | 3 columns by type | Neon green, grid floor |
-| Galaxy | Spiral arms | Star-like, fast rotation |
-| Clusters | 3 type clouds | Plasma glow |
+Position is not decorative. Every node's coordinate comes from `GET /api/graph/layout` — a PCA projection of that memory's stored embedding into three components, computed server-side and cached on a fingerprint of the store. Two nodes near each other mean two memories near each other. The three views are framings over that one layout, not separate scatter functions:
+
+| View | Framing |
+|---|---|
+| Cosmos | The projection as it is, free orbit — global structure |
+| Neural Net | The projection with type pulled apart along X — bands you can compare, similarity still governing within a band |
+| Clusters | The projection folded into three per-type volumes |
+
+Nebula and Galaxy were removed. Nebula was Cosmos with a larger radius and the type colours discarded; Galaxy encoded nothing in position at all.
+
+Edges come from `GET /api/graph/edges` in one bulk request, which reports how many connections exist versus how many are renderable, so the scene key can state what it is not showing.
+
+Beside the 3D canvas the dashboard has Timeline, Analytics and Reflections views.
 
 ### Real-time updates
 
@@ -305,11 +322,14 @@ The dashboard connects to `ws://localhost:4901/neural` via Socket.io. When a mem
 
 ### State management
 
-Two Zustand stores:
+Zustand stores:
 
 - `neuralStore` — neurons, connections, selection state, WebSocket connection status
 - `memoryStore` — memory records, search results, recall context
 - `viewStore` — active visualization variant and theme
+- `authStore` — whether the server is demanding an API key, and whether this session has supplied one
+
+When `ENGRAM_API_KEY` is set on the server, the key is entered in the dashboard UI and held in the browser session — read per request and re-read by the socket on every reconnect attempt. It is **never** built into the bundle. The static assets and the SPA shell are served without it, because a browser cannot attach a header to a top-level navigation.
 
 ---
 

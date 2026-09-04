@@ -4,7 +4,7 @@ Engram exposes multiple integration surfaces:
 
 1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 21 tools)
 2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
-3. **REST API** — for everything else (Ollama, custom apps, 40+ endpoints)
+3. **REST API** — for everything else (Ollama, custom apps, 53 endpoints)
 4. **CLI** — terminal workflows and scripting
 5. **Webhooks** — push notifications to external systems on memory events
 6. **Plugin System** — extend Engram with lifecycle hooks
@@ -503,11 +503,24 @@ base_url = "http://localhost:11435/v1"
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_PROXY_PORT` | `11435` | Port the proxy listens on |
-| `OLLAMA_TARGET` | `http://localhost:11434` | Real Ollama server URL |
+| `OLLAMA_PROXY_PORT` | `11435` | Port the proxy listens on. `0` asks the OS for a free port; the banner reports it |
+| `ENGRAM_PROXY_HOST` | `127.0.0.1` | Bind address — see below |
+| `OLLAMA_TARGET` | `http://localhost:11434` | Real Ollama server URL. Parsed at startup; an unparseable value exits non-zero |
 | `ENGRAM_API` | `http://localhost:4901` | Engram REST API URL |
 | `ENGRAM_MAX_TOKENS` | `1500` | Max context tokens to inject |
+| `ENGRAM_MAX_BODY_BYTES` | `10485760` (10 MiB) | Ceiling on a buffered request body. Over it, the proxy answers `413 Payload Too Large` and destroys the socket rather than draining a body it has already refused. Raise it for large multimodal requests |
 | `ENGRAM_TOOL_RETRY` | `true` | Retry once when model misses a tool call (`false` to disable) |
+| `ENGRAM_UPSTREAM_TIMEOUT_MS` | `300000` | Per-request timeout against the upstream Ollama server |
+
+### Binding
+
+**The proxy binds `127.0.0.1` by default** — the same loopback default Ollama itself uses. It has no authentication of its own, so a wider bind hands any peer on the network an endpoint that drives your GPU. Reaching it from another machine requires opting in:
+
+```bash
+ENGRAM_PROXY_HOST=0.0.0.0 node adapters/ollama/dist/proxy.js
+```
+
+The startup banner states which mode is active, and warns when the bind is not loopback. A failure to bind (port in use, address not available) exits **non-zero** rather than leaving an idle process that a supervisor reads as healthy.
 
 ### Graceful degradation
 
@@ -677,6 +690,7 @@ curl -X POST http://localhost:4901/api/webhooks \
 | `decayed` | Decay sweep completed |
 | `consolidated` | Episodes merged into semantic |
 | `contradiction` | Conflict detected on store |
+| `reflected` | A reflection insight was stored |
 
 ### Payload format
 
@@ -689,6 +703,10 @@ curl -X POST http://localhost:4901/api/webhooks \
 ```
 
 When a `secret` is configured, the `X-Engram-Signature` header contains `sha256=<hmac>` for verification. Failed deliveries retry 3 times with exponential backoff. After 10 consecutive failures, the webhook is auto-disabled.
+
+The secret is write-only — reads report `hasSecret: true` rather than returning the value, so read access to the API cannot be turned into the ability to forge signed deliveries.
+
+Target URLs are checked before the subscription is stored and refused when they resolve to loopback, link-local, RFC1918 or other non-global addresses (`ENGRAM_WEBHOOK_ALLOW_PRIVATE=true` opts out). At delivery the connection is pinned to the address that was validated, and **redirects are never followed** — a `302` counts as a failed delivery.
 
 ---
 

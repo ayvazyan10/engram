@@ -47,7 +47,7 @@ Most AI tools forget everything the moment a session ends. Engram solves this by
 | **Embedding Upgradability** | Swap embedding models, store model ID alongside vectors, batch re-embedding pipeline |
 | **Streaming Recall** | SSE endpoint — high-confidence memories first, graph-expanded backfill later |
 | **Index Persistence** | Save/load vector index to disk for fast startup (27-37x speedup) |
-| **CLI Tool** | `engram store/search/recall/stats/forget/export/import/reflections` from the terminal |
+| **CLI Tool** | `engram store/search/recall/stats/forget/export/import/reflections/cloud` from the terminal |
 | **Import/Export** | Full backup & restore as JSON or NDJSON via CLI or API |
 | **Webhooks** | Subscribe external systems to memory events (stored, forgotten, decayed, consolidated, contradiction, reflected) |
 | **Tagging & Collections** | Tag cloud, filter by tag, prefix-based collections (e.g. `project:alpha`) |
@@ -124,19 +124,45 @@ That's it. Open http://localhost:4901 for the dashboard, `/docs` for Swagger UI.
 ### CLI commands
 
 ```bash
-engram setup                # Clone, build, configure, set up MCP for any AI client
-engram setup --npx          # Fast setup — npx-based MCP config, no clone/build
-engram setup --source cursor # Set ENGRAM_SOURCE for client identification
-engram init                 # Generate AI memory instructions (CLAUDE.md, .cursorrules, etc.)
-engram init --client cursor # Generate instructions for a specific client
-engram update               # Pull latest changes, rebuild, restart server
-engram update --force       # Update even with local repo changes (stashed, or kept on a backup branch)
-engram start                # Start the server (background)
-engram stop                 # Stop the server
-engram doctor               # Health checks (verifies MCP client configuration)
-engram status               # Server status + memory count
-engram configure            # View/set config (port, dbPath, namespace, etc.)
+engram setup                 # Clone, build, install the CLI globally, wire up MCP
+engram setup --npx           # Fast setup — npx-based MCP config, no clone/build
+engram setup --source cursor # Also picks WHICH client config file to write (see below)
+engram init                  # Generate AI memory instructions (CLAUDE.md, .cursorrules, etc.)
+engram init --client cursor  # Generate instructions for a specific client
+engram update                # Pull, rebuild, re-link the CLI, restart the server
+engram update --force        # Update even with local repo changes (stashed, or kept on a backup branch)
+engram update --no-restart   # Update without restarting the server
+engram start                 # Start the server (detached)
+engram start --foreground    # Run it in this terminal instead
+engram stop                  # Stop the server — waits for it to actually exit
+engram doctor                # Health checks; exits 1 when it finds something
+engram status                # Server status + memory count
+engram configure show        # Print the current config
+engram configure set <k> <v> # Change one setting
+engram configure path        # Print the config file path
+engram cloud connect <url>   # Configure multi-device sync against Postgres
+engram cloud status          # Sync state, last sync, pending pushes
+engram cloud sync            # Run one push + pull now
+engram cloud encrypt         # Turn on end-to-end encryption (prompts for the passphrase)
+engram cloud devices         # This device's sync identity
+engram cloud disconnect      # Stop syncing; the local database is untouched
 ```
+
+`engram setup --source <client>` picks both the identifier stamped on stored
+memories **and** the config file that gets written: `claude-code` →
+`~/.claude.json`, `cursor` → `~/.cursor/mcp.json`, `windsurf` →
+`~/.codeium/windsurf/mcp_config.json`. Any other value — including the default
+— registers nothing and prints the JSON block for you to paste yourself. It
+never writes `~/.mcp.json`; no MCP client reads that path.
+
+`engram stop`, `engram doctor` and `engram update` report failure through the
+exit code, so they can be used in scripts: `stop` waits up to 10 s for the
+process to exit and returns 1 if it may still be running (and refuses to signal
+a PID that does not own the port); `doctor` returns 1 when any check fails;
+`update` returns 1 when the repository moved but the build, the global CLI
+refresh or the restart did not complete. `update` keys on a build stamp as well
+as git state, so the first run after upgrading always rebuilds rather than
+reporting "already up to date" over a stale `dist/`.
 
 ### Manual install (alternative)
 
@@ -336,7 +362,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, reflection | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
 | `@engram-ai-memory/mcp` | MCP Server — 21 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
 | `@engram-ai-memory/cli` | CLI — store, search, recall, reflections, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
-| `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (45+ endpoints) | — |
+| `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (53 endpoints) | — |
 | `@engram-ai-memory/web` | Multi-view dashboard — 3D neural graph, Timeline, Analytics, Reflections | — |
 | `@engram-ai-memory/vis` | Force-directed layout + animation helpers | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/vis?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/vis) |
 | `@engram-ai-memory/adapter-ollama` | Transparent Ollama memory proxy (:11435) | — |
@@ -348,7 +374,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `4901` | API server port |
-| `HOST` | `0.0.0.0` | Bind address |
+| `HOST` | `127.0.0.1` | Bind address — **loopback only by default** |
 | `ENGRAM_SOURCE` | `mcp-client` | Client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
 | `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
 | `ENGRAM_NAMESPACE_MODE` | `none` | Namespace behavior: `none`, `filter`, or `isolated` |
@@ -358,7 +384,11 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
-| `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). |
+| `ENGRAM_API_KEY` | *(none)* | When set, all API routes except `/api/health` require this key via `X-API-Key` or `Authorization: Bearer`. Unset = open (local-first default). **Set-but-empty aborts startup** rather than silently disabling auth. |
+| `ENGRAM_ALLOWED_HOSTS` | *(empty)* | Hostnames allowed in the `Host` header on `/api/*` (DNS-rebinding defense). IP literals and `localhost` always pass; anything reached by name — a reverse proxy, a Docker service name — must be listed. `*` disables the check. |
+| `ENGRAM_RATE_LIMIT_MAX` | `1000` | Requests per window in the `global` tier. Also `ENGRAM_RATE_LIMIT_HEAVY_MAX` (300), `ENGRAM_RATE_LIMIT_WHOLE_STORE_MAX` (30), `ENGRAM_RATE_LIMIT_WINDOW_MS` (60000), `ENGRAM_RATE_LIMIT_DISABLED`. |
+| `ENGRAM_CSP` | *(built-in policy)* | Override the Content-Security-Policy sent on every response, or `off` to send none. |
+| `ENGRAM_BATCH_CONCURRENCY` | `16` | Parallel embeds inside `POST /api/memory/batch`. |
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
 | `ENGRAM_SYNC_URL` | *(none)* | PostgreSQL connection string for multi-device sync. Unset = sync disabled. See [Cloud Sync](docs/CLOUD-SYNC.md). |
 | `ENGRAM_SYNC_MODE` | `auto` | Sync behavior: `auto` (background sync on interval + debounce), `manual` (explicit only), `off`. |
@@ -366,9 +396,13 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS PostgreSQL connections. For local development only — production should always use `sslmode=require`. |
 | `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for E2E encryption of synced data. Unset = data reaches Postgres as plaintext. See [Cloud Sync](docs/CLOUD-SYNC.md#8-end-to-end-encryption). |
 | `OLLAMA_PROXY_PORT` | `11435` | Ollama proxy listen port |
+| `ENGRAM_PROXY_HOST` | `127.0.0.1` | Ollama proxy bind address — **loopback only by default**. The proxy has no authentication, so a wider bind hands any peer on the network an endpoint that drives your GPU. |
+| `ENGRAM_MAX_BODY_BYTES` | `10485760` | Ceiling on a proxied request body; over it the proxy answers `413`. |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 
 Namespaces are disabled by default. Set `ENGRAM_NAMESPACE_MODE=filter` for optional scoping, or `isolated` together with `ENGRAM_NAMESPACE` for a fixed boundary that rejects overrides and cross-namespace queries. Existing configurations that already contain `ENGRAM_NAMESPACE` continue in `filter` mode automatically.
+
+This is a summary. [docs/CONFIGURATION.md](docs/CONFIGURATION.md) has the full list, including everything under [Security](docs/CONFIGURATION.md#security). Note that `engram start` derives the server's environment from `~/.engram/config.json`, so shell variables it manages are overridden — see the [CLI section](docs/CONFIGURATION.md#cli-packagescli).
 
 ---
 
@@ -378,7 +412,10 @@ Namespaces are disabled by default. Set `ENGRAM_NAMESPACE_MODE=filter` for optio
 |---|---|---|
 | Engram API | **4901** | REST + WebSocket + Swagger UI |
 | Dashboard | **4901** | 3D visualization (served from API server) |
+| Dashboard (Docker) | **4902** | Standalone dashboard container, optional |
 | Ollama Proxy | **11435** | Memory injection proxy → Ollama |
+
+`docker compose` publishes all three — plus the sync-testing Postgres on 5432 — on **loopback only**. Exposing the API deliberately means setting `ENGRAM_API_KEY`, adding the public hostname to `ENGRAM_ALLOWED_HOSTS`, and only then changing the published address.
 
 All ports are in the 49xx range to avoid conflicts with common dev services (3000, 5173, 8080, etc.).
 
@@ -394,7 +431,7 @@ cd packages/core && npx tsx scripts/demo.ts
 # → http://localhost:4901
 ```
 
-**Dashboard views:** 3D (Cosmos · Nebula · Neural Net · Galaxy · Clusters) · Timeline · Analytics · Reflections
+**Dashboard views:** 3D (Cosmos · Neural Net · Clusters) · Timeline · Analytics · Reflections
 
 ---
 
@@ -419,7 +456,7 @@ Embeddings run **locally** using ONNX Runtime WASM — no OpenAI API, no cost, n
 | Document | Description |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, data flow, component overview |
-| [docs/API.md](docs/API.md) | Full REST API reference (40+ endpoints) |
+| [docs/API.md](docs/API.md) | Full REST API reference (53 endpoints) |
 | [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) | Claude Code, Ollama, REST, webhooks, plugins |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Monorepo, build system, contributing |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment variables, database, tuning |

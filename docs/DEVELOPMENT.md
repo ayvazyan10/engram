@@ -214,9 +214,11 @@ pnpm turbo run test
 # Watch mode for a package
 pnpm --filter @engram-ai-memory/core exec vitest
 
-# With coverage
-pnpm --filter @engram-ai-memory/core exec vitest --coverage
+# With coverage, and enforcing that package's thresholds
+pnpm turbo run test:coverage
 ```
+
+Every package with a `test` script has a matching `test:coverage` script, and CI runs `test:coverage` in place of `test` — it runs the same suites and additionally fails a package that drops below its own thresholds.
 
 Test files: `src/**/*.test.ts`
 
@@ -256,7 +258,8 @@ refactor(mcp): simplify tool registration pattern
 ### Pull request checklist
 
 - [ ] `pnpm turbo run build` passes with no errors
-- [ ] `pnpm turbo run test` passes
+- [ ] `pnpm turbo run lint` passes — it is a hard CI gate, not advisory
+- [ ] `pnpm turbo run test:coverage` passes, including each package's coverage thresholds
 - [ ] New functionality has tests
 - [ ] Database changes use `drizzle-kit generate` + `migrate` (never `push`)
 - [ ] Documentation updated if behavior changed
@@ -269,17 +272,20 @@ GitHub Actions workflows in `.github/workflows/`:
 
 | Workflow | Trigger | Steps |
 |---|---|---|
-| `ci.yml` | push / PR to main | install → build → test → lint |
+| `ci.yml` | push / PR to main | install → typecheck → lint → build → migrations → test with coverage → validate the Desktop Extension manifest |
 | `release.yml` | push tag `v*` | build → publish packages to npm |
 
 ### Local CI simulation
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm turbo run build
-pnpm turbo run test
+pnpm turbo run typecheck
 pnpm turbo run lint
+pnpm turbo run build
+pnpm turbo run test:coverage
 ```
+
+ESLint runs from the shared config in `tooling/`. Two rules are relaxed on purpose and worth knowing about: `no-console` is off for the CLI, whose stdout *is* its user interface, and `react/no-unknown-property` is off for the three canvas files, because the plugin only knows HTML attributes and every report there was a react-three-fiber prop.
 
 ---
 
@@ -294,9 +300,18 @@ docker-compose up -d
 # Services:
 #   api:4901        — Engram REST API (SQLite inside the container)
 #   web:4902        — Dashboard (standalone container, optional)
+#   postgres:5432   — for cloud-sync testing only, never a primary backend
 
 # Logs
 docker-compose logs -f api
 ```
+
+**All three publish on `127.0.0.1` only.** Binding them to every interface published an unauthenticated API — and a database whose password is in the compose file — on whatever network the host happens to be on. Exposing the API deliberately means setting `ENGRAM_API_KEY`, adding the public hostname to `ENGRAM_ALLOWED_HOSTS`, and only then changing the published address.
+
+The Postgres password comes from the environment: `POSTGRES_PASSWORD` in your shell or a `.env` file, defaulting to `dev_password`. Set a real one before moving that port off loopback.
+
+`ENGRAM_API_KEY` is deliberately **not** templated as `${ENGRAM_API_KEY}` in the compose file — an unset variable would expand to an empty string, which the server now refuses to start with. Uncomment the line and set a real value instead.
+
+The `api` service is reached by the name `api` from the web container, which is why `ENGRAM_ALLOWED_HOSTS` lists it alongside `localhost` and `127.0.0.1`.
 
 Environment variables for Docker are configured in `docker-compose.yml`. For multi-device sync, set `ENGRAM_SYNC_URL` to a PostgreSQL connection string — see [Cloud Sync](CLOUD-SYNC.md).

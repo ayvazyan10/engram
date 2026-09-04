@@ -36,7 +36,7 @@ TLS is required by default — keep `?sslmode=require` on the connection string 
 
 The schema is created and migrated automatically on first connection — there's nothing to run by hand. Start whichever surface you use normally:
 
-**MCP** — add the env block to your `claude_desktop_config.json` (or `.mcp.json`):
+**MCP** — add the env block to the config file your client reads (`~/.claude.json` for Claude Code, `~/.cursor/mcp.json` for Cursor, `~/.codeium/windsurf/mcp_config.json` for Windsurf):
 
 ```json
 {
@@ -135,7 +135,11 @@ See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported
 | `ENGRAM_SYNC_MODE` | `auto` | `auto` (interval + debounce, background), `manual` (explicit sync calls only), `off` (scheduler never runs) |
 | `ENGRAM_SYNC_INTERVAL` | `30000` | Background sync interval in ms (`auto` mode only) |
 | `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS Postgres connections. Development only — see [Security](#7-security) |
-| `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for end-to-end encryption of synced data. Unset = data reaches Postgres as plaintext (still TLS-in-transit). See [End-to-end encryption](#8-end-to-end-encryption) |
+| `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for end-to-end encryption of synced data. Unset = data reaches Postgres as plaintext (still TLS-in-transit), **and syncing against an already-encrypted database is refused**. Also read by `engram cloud encrypt` when no passphrase is given on the command line. See [End-to-end encryption](#8-end-to-end-encryption) |
+
+The passphrase is passed **byte-for-byte and never trimmed** — trimming would derive a different key and orphan every row already encrypted.
+
+The MCP server validates `ENGRAM_SYNC_MODE` and `ENGRAM_SYNC_INTERVAL` and refuses to start on a bad value. The REST API server does not: an unrecognised mode silently disables the scheduler, and a non-numeric interval produces `NaN`, which degenerates into a sync attempt roughly every millisecond.
 
 ---
 
@@ -155,8 +159,8 @@ Cloud sync can optionally encrypt memory data client-side before it ever reaches
 ### Setup
 
 ```bash
-# Initialize encryption (first device)
-engram cloud encrypt "my-secret-passphrase"
+# Initialize encryption (first device) — prompts, with the input hidden
+engram cloud encrypt
 
 # Set env var for automatic encryption on every sync
 export ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase"
@@ -165,28 +169,38 @@ export ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase"
 ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase" engram start
 ```
 
-`engram cloud encrypt <passphrase>` connects to the configured `ENGRAM_SYNC_URL`, derives a key from the passphrase, and stores the salt (and a verification sentinel — see below) in Postgres. It doesn't itself enable encryption on future syncs — that's what `ENGRAM_SYNC_ENCRYPTION_KEY` does, read on every sync connection.
+`engram cloud encrypt [passphrase]` connects to the configured `ENGRAM_SYNC_URL`, derives a key from the passphrase, and stores the salt, the KDF cost parameters and a verification sentinel in Postgres — all three in one transaction, first-wins, so two devices bootstrapping at once cannot end up with one device's salt and the other's sentinel. It doesn't itself enable encryption on future syncs — that's what `ENGRAM_SYNC_ENCRYPTION_KEY` does, read on every sync connection.
+
+**Where the passphrase comes from**, in order: the command-line argument, then `ENGRAM_SYNC_ENCRYPTION_KEY`, then an interactive prompt with the input hidden. Passing it on the command line still works but prints a warning — it lands in your shell history and is visible in `ps` — so prefer the bare command or the environment variable. With no TTY and neither source set, the command exits 1 rather than prompting into the void. The only validation is that it is not empty: there is no minimum length or complexity check.
+
+`engram cloud encrypt` writes metadata only. It does **not** re-encrypt rows already pushed in plaintext, and it never touches local SQLite. Running it twice with the same passphrase is a safe no-op; with a different one it reports that the database is already configured and exits 1.
 
 ### How it works
 
-- **AES-256-GCM with scrypt key derivation** (`N=2^15`, `r=8`, `p=1`) — a memory-hard KDF that resists brute-forcing on commodity hardware/GPUs. GCM gives both confidentiality and integrity: a tampered ciphertext fails to decrypt rather than silently returning garbage.
-- **Per-field encryption.** On a memory row, `content`, `summary`, `metadata`, `tags`, and `embedding` are each encrypted independently before push, and decrypted after pull. `memory_connections` and `sessions` rows are not encrypted.
-- **Encrypted text format:** `enc:v1:<base64(nonce || ciphertext || authTag)>`. Encrypted embeddings use the same `nonce || ciphertext || authTag` layout but stay raw bytes (no prefix, no base64) since embeddings are already stored as a byte column.
+- **AES-256-GCM with scrypt key derivation** (`N=2^17`, `r=8`, `p=1`) — a memory-hard KDF that resists brute-forcing on commodity hardware/GPUs. GCM gives both confidentiality and integrity: a tampered ciphertext fails to decrypt rather than silently returning garbage. The cost is **recorded per database** rather than hardcoded, so a database bootstrapped before the cost was raised keeps deriving at its original `N=2^15` — raising it there would invalidate the stored sentinel and lock the owner out of every row already encrypted. Parameters read back from the server are bounded on both sides: the floor is the legacy cost, so a hostile operator cannot publish a cheap `N` and have every client derive a brute-forceable key.
+- **Per-field encryption.** On a memory row: `content`, `summary`, `metadata`, `tags`, `embedding`, `concept`, `trigger_pattern` and `action_pattern` — the last three hold the actual content of semantic and procedural memories. On a session row: `context`. On a connection row: `metadata`. Everything else stays plaintext because the server filters, cursors or resolves conflicts on it: `namespace`, `session_id`, `source`, `device_id`, `type`, `relationship` and every timestamp. A Postgres operator can therefore see how many memories exist, when they changed, which device wrote them and how they relate — just not what any of them say.
+- **Ciphertext is bound to its row and column.** Every value authenticates the table, row id and column it was produced for (AES-GCM associated data), so a database operator cannot lift one row's `content` into another row, or swap `summary` and `content` inside one row. Either move now fails to decrypt instead of decrypting into the wrong place. The plaintext metadata above is deliberately *not* bound: background maintenance rewrites `updated_at`, `archived_at` and `device_id` without touching content, and binding them would turn routine work into undecryptable rows.
+- **Encrypted text format:** `enc:v2:<base64(nonce || ciphertext || authTag)>`. Encrypted embeddings use the same `nonce || ciphertext || authTag` layout but stay raw bytes (no prefix, no base64) since embeddings are already stored as a byte column. `enc:v1:` values — the earlier format, with no binding — are still read; nothing writes them any more.
 - **Random 12-byte nonce per field.** Every encryption call generates a fresh nonce, so the same plaintext produces different ciphertext each time — rows can't be correlated by comparing ciphertext bytes.
 - **Salt stored in Postgres.** A 32-byte random salt is generated once and stored in the `sync_metadata` table (`key='encryption_salt'`), so every device can derive the same key from the same passphrase without the salt itself needing to be shared out-of-band.
 - **Sentinel verification.** A fixed plaintext, encrypted under the derived key, is stored alongside the salt (`key='encryption_sentinel'`). Any device initializing encryption decrypts the sentinel to confirm its passphrase is correct *before* trusting the derived key — this is what turns a typo'd passphrase into an immediate, clear error instead of a pile of undecryptable rows.
 
 ### Multi-device setup
 
-1. Run `engram cloud encrypt <passphrase>` on the first device. This generates the salt and sentinel and stores them in Postgres.
+1. Run `engram cloud encrypt` on the first device. This generates the salt, the KDF parameters and the sentinel, and stores them in Postgres.
 2. On additional devices, set `ENGRAM_SYNC_ENCRYPTION_KEY` to the **same** passphrase — no need to run `engram cloud encrypt` again on each one.
 3. Each device reads the salt from `sync_metadata`, derives the same key locally, and verifies it against the sentinel on connect. A wrong passphrase fails fast with a clear error rather than corrupting or silently dropping data.
+
+> **Upgrade every device together.** `enc:v2` rows carry the row-and-column binding described above, and an older client cannot read them. A mesh where one device is still on the previous release will see that device fail to decrypt every row written by the upgraded ones. Old `enc:v1` rows keep decrypting on both, so the migration is one-way and safe in that direction only.
+
+**A device with no passphrase now refuses to sync** against a database that has encryption established, instead of connecting and pushing plaintext over it. Pushing would have sent that device's whole database in the clear, and the last-write-wins upsert would have overwritten ciphertext rows the encrypted peers had already pushed — silently and irreversibly downgrading the store for everyone. The error names `ENGRAM_SYNC_ENCRYPTION_KEY` as the fix.
 
 ### Tradeoffs
 
 - **pgvector search disabled.** Encrypted embeddings are random bytes from Postgres's point of view, so semantic search can never run server-side against them. This is by design, not a missing feature — Engram doesn't rely on server-side vector search anyway; semantic search always runs locally against SQLite + the local vector index, plaintext, on every device.
 - **No passphrase recovery.** The passphrase is never stored anywhere, only verified via the sentinel. If it's lost, encrypted rows in Postgres are permanently unreadable — there is no reset or recovery path. Local SQLite data is unaffected either way, since sync only ever encrypts the copy that leaves the device.
-- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is (`isEncrypted()` checks the `enc:v1:` prefix and leaves unprefixed values alone). On pull, a row that fails to decrypt (wrong passphrase, corrupted ciphertext, or data encrypted under a different key) is skipped with a warning rather than aborting the whole sync — it stays on the server and simply isn't applied locally until it can be decrypted.
+- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is — the encrypted-value check looks for the `enc:v1:` / `enc:v2:` prefix and leaves unprefixed values alone. On pull, a row that fails to decrypt (wrong passphrase, corrupted ciphertext, or data encrypted under a different key) is skipped with a warning rather than aborting the whole sync — it stays on the server and simply isn't applied locally until it can be decrypted.
+- **Metadata is not authenticated.** Timestamps, `archived_at`, `device_id` and `namespace` stay outside the binding for the reason given above, so a Postgres operator can still reorder or re-attribute rows even though they cannot read or move content. Closing that needs a per-row MAC column, which does not exist yet.
 
 ---
 
@@ -227,6 +241,14 @@ engram cloud sync
 curl -X POST http://localhost:4901/api/sync/trigger
 curl http://localhost:4901/api/sync/status
 ```
+
+**Two devices sharing one device id (a copied `engram.db`)**
+
+Copying a database to another machine — a backup restore, a disk clone, a plain `cp` — used to duplicate the device id onto both installations. The pull filter is "not written by me", so with a shared id every row from the twin looks like an echo of this device's own push and is skipped, **in both directions**: the two installations sit there exchanging nothing while `engram cloud status` reports no error, because nothing failed.
+
+Each installation now also records a fingerprint of the database file its id was minted for — hostname, resolved path, and the file's device and inode numbers. A fingerprint that no longer matches means this file is not the one the id belongs to, and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction so nothing pending is stranded. `mv` within one filesystem preserves all four components, so an ordinary relocation is not mistaken for a copy.
+
+A spurious re-mint costs one new UUID and a log line; a missed collision is silent data divergence, which is why the check errs toward re-minting. `resetDeviceId()` in `@engram-ai-memory/core` triggers the same recovery explicitly.
 
 **Your local data is always safe.** SQLite is the source of truth for that device regardless of what Postgres or the network is doing. If sync breaks, stalls, or the remote database disappears entirely, nothing is lost locally — Engram just stops replicating until sync is working again.
 

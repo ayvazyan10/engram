@@ -9,6 +9,120 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Breaking
+
+- **`@engram-ai-memory/server`** — `GET /api/analytics` has been restructured. One response used to mix two time windows and say nothing about it: `dailyGrowth` and `hourlyActivity` were scoped to the requested window while `total`, `byType`, `bySource` and `topConcepts` were all-time. Measured live, the windowed aggregates summed to 87 against a `total` of 651 in the same payload — six surfaces on one screen disagreeing by a factor of 7.5. Every field now sits under `window`, `windowed` or `allTime`, so no number exists outside a container that names its scope. **`byType`, `bySource` and `topConcepts` are now windowed where they used to be all-time**; the old `total` is `allTime.total`. `windowed.avgImportance` is `null` rather than `0` on an empty scope, `bySource` reports a NULL source as `"unknown"` and is never truncated, and the new `windowed.conceptCount` is the statistic that `topConcepts.length` was being misread as — 79 in a typical window against a page size that is always 20, now named `topConceptsLimit`. See [docs/API.md](docs/API.md#analytics).
+
+- **`@engram-ai-memory/server`** — `GET /api/analytics` accepts `days` and nothing else. An unknown query key is a `400` rather than being stripped: `?day=90`, one letter short, used to answer `200` with a 30-day window the caller read as 90.
+
+- **`@engram-ai-memory/server`** — An `ENGRAM_API_KEY` that is set but empty now aborts startup. `if (API_KEY)` is false for `''`, so `ENGRAM_API_KEY=""` — exactly what a host templating an unset optional field produces — turned authentication off while every config file and dashboard still said a key was configured. Unset means "no auth wanted"; empty means "auth wanted, value lost", and only one of those is safe to guess at.
+
+- **`@engram-ai-memory/server`** — A `Host` allowlist now covers `/api/*`. IP literals and `localhost` / `*.localhost` always pass, so nothing that works today breaks; **a deployment reached by hostname — behind a reverse proxy, or as a Docker service name — must now set `ENGRAM_ALLOWED_HOSTS`**, or every API request answers `403`. `ENGRAM_ALLOWED_HOSTS=*` turns the check off for deployments that terminate it elsewhere.
+
+- **`@engram-ai-memory/core`** — The `secret` on a webhook subscription is gone from every response; a `hasSecret` boolean replaces it. The value is what a receiver uses to verify `X-Engram-Signature`, so handing it back on a read let anyone with API read access forge deliveries the receiver would accept. It is write-only now: supplied on subscribe, kept for the signer, never serialized out. A caller that has lost it rotates it by re-subscribing.
+
+- **`@engram-ai-memory/core`** — Webhook deliveries no longer follow redirects at all, which is stricter than the previous manual handling: an endpoint that answers `302` now fails delivery.
+
+- **`@engram-ai-memory/core`** — Synced ciphertext is bound to its table, row and column through AES-GCM associated data, and the scrypt cost goes from `N=2^15` to `N=2^17`. `enc:v1` rows keep decrypting, but `enc:v2` rows cannot be read by an older client, so **all devices on one encrypted database must upgrade together**. The cost is recorded per database, so a database bootstrapped before this change keeps opening at the cost it was built with.
+
+- **`@engram-ai-memory/core`** — A client with no passphrase now refuses to sync against a database that has encryption established. Pushing would have sent that device's whole database in plaintext, and the last-write-wins upsert would have overwritten ciphertext rows encrypted peers had already pushed — silently and irreversibly downgrading the store for everyone.
+
+- **`@engram-ai-memory/core`** — `isPrivateAddress` is re-exported from the package root and its behaviour changed: a hostname now classifies as private. Nothing in this repo passes one, but external callers should know.
+
+- **`@engram-ai-memory/adapter-ollama`** — The proxy binds `127.0.0.1` instead of every interface. It listened wide while Ollama itself defaults to loopback, so any peer on the network could drive the user's GPU through an unauthenticated proxy. **Reaching the proxy from another machine now requires `ENGRAM_PROXY_HOST`**; the startup banner says which mode is active.
+
+- **`@engram-ai-memory/web`** — The Nebula and Galaxy 3D views are gone. Nebula was Cosmos with a larger radius and the type colours thrown away; Galaxy encoded nothing in position at all, and could never show the spiral it was named for. Cosmos, Neural Net and Clusters remain, and are now framings over one real layout rather than five scatter functions.
+
+### Added
+
+- **`@engram-ai-memory/server`** — `GET /api/graph/layout` returns a deterministic PCA projection of every memory's embedding into a fixed 3D box, cached on a fingerprint of the store and invalidated by any write. Measured on a 651-memory store: 157 ms cold, ~4 ms cached, 38.1% of variance in three components. Memories with no usable embedding are placed on a shell outside the box and reported as `unprojected`, so a client can say so rather than mixing them in among nodes placed by meaning.
+
+- **`@engram-ai-memory/server`** — `GET /api/graph/edges` returns the whole renderable edge set in one request, with `minStrength` and `limit`, and reports its own denominators: `total` (renderable), `stored` (all non-deleted rows, including edges onto archived memories), `matching`, `returned` and `truncated`. On the store above, 3,099 of 8,492 connections are renderable — the rest point at archived memories and have no node to draw to. Ordering is strongest-first, so a `limit` drops the weakest rather than an arbitrary slice of insertion order.
+
+- **`@engram-ai-memory/server`** — Per-client request rate limiting on `/api/*`, in three tiers, because the endpoints differ by two orders of magnitude in cost: `global` (1000/min), `heavy` (300/min — anything that embeds text or runs a search) and `whole-store` (30/min — the full-store passes). Configurable with `ENGRAM_RATE_LIMIT_WINDOW_MS`, `ENGRAM_RATE_LIMIT_MAX`, `ENGRAM_RATE_LIMIT_HEAVY_MAX`, `ENGRAM_RATE_LIMIT_WHOLE_STORE_MAX` and `ENGRAM_RATE_LIMIT_DISABLED`. A `429` carries `Retry-After` and the `X-RateLimit-*` headers.
+
+- **`@engram-ai-memory/server`** — Security headers on every response, including the static bundle and the SPA fallback: a Content-Security-Policy, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` and `Cross-Origin-Opener-Policy`. The CSP is written against what the built dashboard actually loads rather than copied from a template — including the CDN the 3D text library fetches its font index from at runtime, which a templated policy would have broken silently. Override with `ENGRAM_CSP`, or `ENGRAM_CSP=off`; `ENGRAM_HSTS_MAX_AGE` opts into HSTS.
+
+- **`@engram-ai-memory/server`** — Whole-store operations (`consolidate`, `decay`, `embeddings/backfill`, `embeddings/re-embed`, `index/rebuild`, `index/save`, `sync/trigger`) hold a process-wide single-flight guard and answer `409` when one is already running. Two concurrent index rebuilds could previously interleave one call's `clear()` with the other's writes, leaving the index missing whatever had already been written.
+
+- **`@engram-ai-memory/server`** — `ENGRAM_BATCH_CONCURRENCY` (default 16) bounds how many `POST /api/memory/batch` items embed at once. The endpoint accepts up to 1000 items and used to hand every one of them to a single `Promise.all`.
+
+- **`@engram-ai-memory/core`** — `resetDeviceId()` re-mints this installation's sync identity and re-stamps its rows, for the copied-database case described under Fixed.
+
+- **`@engram-ai-memory/adapter-ollama`** — `ENGRAM_MAX_BODY_BYTES` (default 10 MiB) caps a buffered request body; over the limit the proxy answers `413` and destroys the socket rather than draining a body it has already refused.
+
+- **`@engram-ai-memory/web`** — 202 tests at 95% line coverage. The package previously had none.
+
+### Changed
+
+- **Deployment** — `docker-compose.yml` publishes the API, the dashboard and Postgres on `127.0.0.1` only. `4901:4901` published an API with no authentication on every interface of the host, and `5432:5432` published a database whose password was written three lines below it. The Postgres password now comes from the environment (`POSTGRES_PASSWORD`, default `dev_password`), and `ENGRAM_API_KEY` is deliberately left commented out rather than templated — an unset variable would expand to the empty string the server now refuses to start with.
+
+- **`@engram-ai-memory/cli`** — `engram stop` waits for the process to actually exit (up to 10 s, polling every 100 ms) and exits `1` if it may still be running. It also refuses to signal a PID that does not own the port, which is what a stale pidfile looks like.
+
+- **`@engram-ai-memory/cli`** — `engram doctor` exits `1` when it reports findings, so it can be used as a check in a script.
+
+- **`@engram-ai-memory/cli`** — `engram update` keys on a build stamp (`~/.engram/build.json`, the git revision a build last *completed* for) as well as git state. A checkout with no recorded build always rebuilds, so the first run after upgrading can no longer report "already up to date" over a stale or failed `dist/`.
+
+- **`@engram-ai-memory/cli`** — `engram setup` writes the config file each MCP client actually reads — `~/.claude.json`, `~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json` — and never `~/.mcp.json`, which nothing reads. A source it does not recognise now prints the JSON block to paste and records the step as skipped, rather than reporting success for a file that configures nothing.
+
+- **`@engram-ai-memory/cli`** — `engram cloud encrypt` takes the passphrase from a hidden prompt when none is given. The argument still works and is still accepted from `ENGRAM_SYNC_ENCRYPTION_KEY`, but passing it on the command line now warns that it is in the shell history and was visible in `ps`. With no TTY and no other source, the command exits `1` rather than prompting into the void.
+
+- **`@engram-ai-memory/web`** — With `ENGRAM_API_KEY` set, the dashboard was entirely non-functional and said nothing about it: no REST header, no socket token, and no way to supply one. The key is now entered in the UI and held in the browser session, read per call, with the socket re-reading it on every reconnect attempt. It is never built into the bundle, and the server serves the dashboard shell and its assets without it — a browser cannot attach a header to a top-level navigation.
+
+- **CI** — Linting had never run once: eslint was not a dependency of anything, no flat config existed, and CI never invoked it. It runs now, from the shared config package, as a real gate with no `continue-on-error`. Of 314 raw findings, 33 were genuine defects and are fixed; the rest went away through five documented rule tunes. CI also runs `test:coverage` in place of `test`, which runs the same suites and additionally fails a package that drops below its thresholds.
+
+### Fixed
+
+- **`@engram-ai-memory/core`** — Sync could stop pushing local writes permanently. The push query selected every row newer than the cursor with no device filter, so rows pulled from a peer were pushed back and their foreign-clock timestamp became the new cursor; any later local write stamped by this device's slower clock then fell below it and was never selected again. One row on the server with a bogus future timestamp disabled push on every device that pulled it. Push now filters on this device, paginates on `(updated_at, id)`, and never derives the cursor from rows it did not author.
+
+- **`@engram-ai-memory/core`** — The pull cursor round-tripped through a JS `Date`, truncating Postgres microseconds to milliseconds, so the id tiebreak could never match and a same-timestamp group larger than one page stalled the loop. It carries full precision now.
+
+- **`@engram-ai-memory/core`** — Encryption bootstrap writes the salt, the KDF parameters and the sentinel in one first-wins transaction. A race or a crash could previously leave salt-present / sentinel-absent — a database that refused the correct passphrase forever, with the salt's presence stopping the setup branch from ever retrying.
+
+- **`@engram-ai-memory/core`** — A copied `engram.db` (backup restore, disk clone, `cp`) duplicated the device id onto both installations. The pull filter is "not written by me", so with a shared id every row from the twin looked like an echo of this device's own push and was skipped in *both* directions — two installations exchanging nothing, with `engram cloud status` reporting no error because nothing failed. Each installation now records a fingerprint of the file its id was minted for and re-mints when it no longer matches, re-stamping locally-owned rows in the same transaction so nothing pending is stranded.
+
+- **`@engram-ai-memory/core`** — Memories pulled from another device stayed unsearchable until restart. Index reconciliation was gated on `PRAGMA data_version`, which SQLite only moves for commits made by another *connection*, and the sync engine applies pulled rows through the same singleton connection. The gate is a count-and-max-timestamp fingerprint now. Reconciliation also only ever added and removed ids, so a pulled *update* kept its superseded vector; changed rows are re-indexed.
+
+- **`@engram-ai-memory/core`** — `brain.semantic`, `.episodic` and `.procedural` wrote to SQLite only — no index, no graph, no embedding model recorded — so a memory stored through them could not be found at all, and `semantic.update` left a stale vector that survived restarts because `initialize` trusted the on-disk cache by id. They go through the same path `store()` uses, and `initialize` now compares each cached entry against the stored row.
+
+- **`@engram-ai-memory/core`** — Contradiction auto-resolution could destroy both sides: it archived an existing memory in favour of a new one that a later iteration archived in turn. It plans the whole batch before applying any of it. Consolidation respects the discarded flag instead of archiving a cluster whose summary was already gone, and a similarity threshold of exactly 1 no longer divides by zero and silently switches contradiction detection off.
+
+- **`@engram-ai-memory/core`** — An embedding model with a different vector width made the brain un-initialisable, and the documented remedy could not run because re-embedding requires an initialised brain. Every upsert site now skips and counts an incompatible vector instead of throwing, and `rebuild` swaps in a fully built index rather than clearing first.
+
+- **`@engram-ai-memory/mcp`** — The Claude Desktop extension discarded every memory. `ENGRAM_DB_PATH` was templated from a config field whose default is an empty string, and whose description told the user to leave it empty; the empty string survived all the way down, and better-sqlite3 reads an empty filename as an anonymous temporary database that is deleted on close. `store_memory` answered "Memory stored successfully"; after a restart `memory_stats` reported zero and no database file had ever been created. A blank path is now treated as unset, and the resolved path is written back into the environment so every later reader agrees.
+
+- **`@engram-ai-memory/cli`** — `engram setup` replaced `~/.claude.json` with a near-empty object whenever it failed to parse the existing one — no backup, no warning. That file holds the account and every project's trust state. Reads now refuse an unparseable file, writes go through a timestamped backup and an atomic rename, and the closing banner reports skipped steps instead of success.
+
+- **`@engram-ai-memory/cli`** — The extension launcher could not run on Windows at all: `npm.cmd` cannot be resolved without a shell, and Node refuses to spawn `.cmd` without one. It uses this process's own node binary and npm's own CLI script, which is a plain argv spawn everywhere — and fixes nvm and Homebrew installs on macOS as a side effect.
+
+- **`@engram-ai-memory/adapter-ollama`** — `curl -X POST /api/chat -d 'null'` killed the process, and so did `{"messages":[null]}`: `JSON.parse` accepts the literal `null`, the result was cast to an object without a check, and the dereference happened inside an async `end` listener with no catch. Bodies are validated before anything reads them and answer `400`. Header filtering also ran only on the chat paths, so `/api/tags` and the rest forwarded `connection`, `upgrade`, `te`, `transfer-encoding` and `proxy-authorization` straight through; every path is filtered now, in both directions. An `https` target with no explicit port connected to 11434 instead of 443.
+
+- **`@engram-ai-memory/web`** — Storing a memory inserted it twice: the modal callback added it and the server broadcast for the same request added it again. The store is idempotent by id, since either path can legitimately arrive first.
+
+- **`@engram-ai-memory/web`** — Node positions were re-derived on every records change and three of five layouts drew fresh random numbers, so adding a tag relocated the whole graph. The hash used for jitter was also broken: salts differing in their last character were almost perfectly correlated (0.978), which is why Clusters drew three diagonal rods instead of three clouds. The salt goes first now, through murmur3's `fmix32`.
+
+- **`@engram-ai-memory/web`** — 3D text labels had never worked in production. troika bootstraps its worker via `importScripts` on a blob URL, which `script-src` governs, so every label failed silently — invisible under the Vite dev server, which sends no CSP, and never rendered from the server that actually ships the dashboard.
+
+- **`@engram-ai-memory/web`** — The memory-type palette failed its lightness band (amber outranked indigo on lightness alone, whatever the two meant), text carried the data colour on five surfaces including every 3D label, and the analytics heatmap's ramp was an opacity ramp over whatever the active theme supplied — 1.02:1 in one template. The palette is re-stepped, identity now comes from a mark beside the text rather than the text colour, and the heatmap is a real single-hue sequential ramp with the count printed in the cell.
+
+- **`@engram-ai-memory/web`** — The 3D scene key stated a 30-day recency half-life. The server's is 7, and the client never asked: a constant invented for node brightness was being printed as the definition of the channel, so a 30-day-old memory drew as fresh while the server put its strength on the archive threshold. The policy is fetched now, with no default anywhere, and the channel switches off (and says so) when it cannot be reached.
+
+### Security
+
+- **`@engram-ai-memory/server`** — The origin allowlist did not gate the WebSocket. Returning `false` from the CORS callback only omits response headers; it never rejects the upgrade, and browsers do not apply CORS to upgrades at all. With no API key set — the documented default — any page the user visited could connect to `/neural` and receive `memory:stored` with full content, contradictions, and every recall stream. Rejection now happens in `allowRequest`, before a transport exists. A missing `Origin` is still allowed, because the CLI and MCP legitimately send none.
+
+- **`@engram-ai-memory/core`** — The webhook SSRF guard recognised only the dotted IPv4-mapped spelling, but the URL parser always serialises an IPv6 hostname in hex, so that branch was dead for anything that came through `new URL()`. `http://[::ffff:127.0.0.1]:9000/` and `http://[::ffff:169.254.169.254]/latest/meta-data/` both passed, as did NAT64 and 6to4 forms. Classification is now normalisation plus an allow-list: only `2000::/3` is global unicast, documentation blocks are carved back out, and anything that parses as neither IPv4 nor IPv6 is treated as unsafe.
+
+- **`@engram-ai-memory/core`** — The address that was validated was not the address that was connected to. The guard resolved the hostname and discarded the result; `fetch` then resolved again, so an attacker's nameserver could answer public for the check and internal milliseconds later, with a fresh attempt on every stored memory. Delivery moved to `node:http` with a lookup that returns only the cleared addresses, and connection pooling off so a socket cannot outlive the check that authorised it. `Host` and TLS SNI still carry the hostname.
+
+- **`@engram-ai-memory/server`** — 5xx response bodies echoed driver text and absolute paths. A duplicate `POST /api/connections` answered with `UNIQUE constraint failed: memory_connections.source_id, ...`, and a failing index write answered with an absolute path under the user's home directory — the caller learned the schema, the storage engine and the server's filesystem layout from an error they could trigger on purpose. 5xx bodies now carry a fixed string and the detail goes to the log. 4xx bodies are unchanged: they describe the caller's own input and are the only way to know what to fix.
+
+- **`@engram-ai-memory/server`** — Updating the decay policy over HTTP could strip every protection rule. `protectionRules` carry predicate functions that JSON cannot express, so the key is refused outright — by a `preValidation` hook rather than a schema keyword, because ajv runs with `removeAdditional` here and would have stripped it silently while reporting success.
+
+- **`@engram-ai-memory/server`** — `POST /api/memory/bulk/archive` had no body schema at all. `{"ids":"abc"}` iterated the string's characters and reported three archived rows; `{"ids":12}` threw "ids is not iterable"; a 1 MiB body held ~25k ids, i.e. 25k sequential transactions and 25k webhook dispatches from one request. Unknown ids were also counted as archived and fired a `forgotten` webhook for a memory that never existed.
+
+- **`@engram-ai-memory/server`** — Pagination had ceilings but no floors, and SQLite reads `LIMIT -1` as unlimited.
+
 ## [0.6.5] — 2026-09-03
 
 Published as `@engram-ai-memory/core` 0.6.2, `@engram-ai-memory/mcp` 0.6.3 and `@engram-ai-memory/cli` 0.6.5.
