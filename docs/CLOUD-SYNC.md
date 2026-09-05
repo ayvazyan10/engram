@@ -87,7 +87,9 @@ Once configured, sync runs in the background:
 - **Push:** local changes are read from SQLite and sent to Postgres, batched 500 rows at a time.
 - **Pull:** remote changes are read from Postgres and applied to local SQLite, also batched 500 rows at a time. Pull uses a **5-minute overlap window** behind the last-seen cursor, so a transaction that started before — but committed after — the previous pull is still picked up rather than silently skipped.
 
-**What's synced:** memories, sessions, and memory connections (the knowledge graph edges between memories). Everything else — the vector index, decay/reflection state, device identity — stays local.
+**What's synced:** memories, sessions, and memory connections (the knowledge graph edges between memories). What stays on the device is the vector index file, the recall audit log, webhook subscriptions, the device identity and the sync cursors.
+
+Decay is not separate state left behind. It lives in fields on the memory row itself — `archived_at`, `access_count` and `last_accessed_at` — and those columns sync with the row, so a memory archived by a decay sweep on one device is archived on all of them. Reflections are memories too, and travel the same way.
 
 **Device identity:** each installation gets a unique `device_id`, generated once (a UUID) and persisted in a local-only table that never itself syncs. It's used purely to break ties during conflict resolution (see below) — it's not a user-facing identifier you need to manage.
 
