@@ -1,73 +1,63 @@
-import { VIEWS, useViewStore } from '../../store/viewStore.js';
+import PlateChooser from './PlateChooser.js';
 import { useDashboardStore, type ViewMode } from '../../store/dashboardStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { RADIUS, TYPE, withAlpha } from '../../lib/tokens.js';
+import { GLYPH, TYPE, SPACE } from '../../lib/tokens.js';
+import { segmentBase, segmentState, trackStyle } from './segmented.js';
 
+/**
+ * The header's navigation: which surface, and — on the plate surface — which
+ * plate.
+ *
+ * The first tab used to say "3D", which was true when the surface behind it
+ * was one WebGL scene wearing three art directions. It is five plates now:
+ * two 3D, one 2D, two hybrid. A control labelled "3D" would be lying about
+ * three of the five, so it says "Plates" — the word the whole system already
+ * uses (the contract, the token layer, the box itself), and the one label that
+ * stays true whatever a plate is drawn with.
+ *
+ * The five are not a fourth segmented track. They carry a sentence each, and
+ * five names plus five sentences do not fit beside four mode tabs and a
+ * template switcher — see PlateChooser for what they get instead.
+ *
+ * L6: icons come from the registry. '◎' (GLYPH.confidence) and '◈'
+ * (GLYPH.pattern) used to be re-typed here for the first and last tab — the
+ * primary navigation wearing two glyphs that mean something else a panel away.
+ * The Plates tab shares `panePlate` with the mobile tab bar's plate pane on
+ * purpose: same thing.
+ */
 const MODE_TABS: { id: ViewMode; label: string; icon: string }[] = [
-  { id: '3d', label: '3D', icon: '◎' },
-  { id: 'timeline', label: 'Timeline', icon: '⏤' },
-  { id: 'analytics', label: 'Analytics', icon: '▧' },
-  { id: 'reflections', label: 'Reflections', icon: '◈' },
+  { id: '3d', label: 'Plates', icon: GLYPH.panePlate },
+  { id: 'timeline', label: 'Timeline', icon: GLYPH.viewTimeline },
+  { id: 'analytics', label: 'Analytics', icon: GLYPH.viewAnalytics },
+  { id: 'reflections', label: 'Reflections', icon: GLYPH.viewReflections },
 ];
 
 export default function ViewSwitcher() {
-  const { activeViewId, setView } = useViewStore();
   const { viewMode, setViewMode } = useDashboardStore();
   const t = useTemplateStore((s) => s.activeTemplate);
 
   return (
     <div style={s.container}>
-      {/* Mode tabs */}
-      <div style={{ ...s.modeTabs, background: t.inputBg, borderColor: t.panelBorder }}>
+      <div style={trackStyle(t)} role="group" aria-label="View">
         {MODE_TABS.map((tab) => {
           const active = tab.id === viewMode;
           return (
             <button
               key={tab.id}
               className="ec-hover-tint"
-              style={{
-                ...s.modeBtn,
-                ...(active ? { background: withAlpha(t.accent, 0.13), color: t.accent } : { color: t.textMuted }),
-              }}
+              style={{ ...segmentBase, ...segmentState(t, active) }}
               onClick={() => setViewMode(tab.id)}
               title={tab.label}
+              aria-pressed={active}
             >
-              <span style={s.modeIcon}>{tab.icon}</span>
+              <span aria-hidden="true" style={s.modeIcon}>{tab.icon}</span>
               <span className="ec-switcher-label">{tab.label}</span>
             </button>
           );
         })}
       </div>
 
-      {/* The 3D sub-views. These are framings of ONE layout now, not five
-          different scatter functions — see store/viewStore.ts. Nebula and
-          Galaxy were removed there, and this list follows VIEWS rather than
-          naming them, so it cannot fall out of step. */}
-      {viewMode === '3d' && (
-        <div style={{ ...s.wrap, background: t.inputBg, borderColor: t.panelBorder }}>
-          {VIEWS.map((v) => {
-            const active = v.id === activeViewId;
-            return (
-              <button
-                key={v.id}
-                className="ec-hover-tint"
-                style={{
-                  ...s.btn,
-                  ...(active ? { background: withAlpha(t.accent, 0.09) } : {}),
-                }}
-                onClick={() => setView(v.id)}
-                title={v.description}
-                aria-pressed={active}
-              >
-                <span style={{ ...s.icon, color: t.accent }}>{v.icon}</span>
-                <span className="ec-switcher-label" style={{ ...s.label, color: active ? t.textSecondary : t.textMuted }}>
-                  {v.name}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {viewMode === '3d' && <PlateChooser />}
     </div>
   );
 }
@@ -76,56 +66,13 @@ const s = {
   container: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: SPACE.sm,
     flexWrap: 'wrap' as const,
-  },
-  modeTabs: {
-    display: 'flex',
-    gap: '2px',
-    border: '1px solid',
-    borderRadius: RADIUS.sm,
-    padding: '2px',
-  },
-  modeBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    padding: '4px 10px',
-    background: 'transparent',
-    border: 'none',
-    borderRadius: RADIUS.tight,
-    fontSize: TYPE.sm,
-    fontWeight: 500,
-    whiteSpace: 'nowrap' as const,
+    minWidth: 0,
   },
   modeIcon: {
     fontSize: TYPE.sm,
     lineHeight: 1,
-  },
-  wrap: {
-    display: 'flex',
-    gap: '2px',
-    border: '1px solid',
-    borderRadius: RADIUS.sm,
-    padding: '2px',
-  },
-  btn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '5px',
-    padding: '4px 10px',
-    background: 'transparent',
-    border: 'none',
-    borderRadius: RADIUS.tight,
-    whiteSpace: 'nowrap' as const,
-  },
-  icon: {
-    fontSize: TYPE.base,
-    lineHeight: 1,
-  },
-  label: {
-    fontSize: TYPE.sm,
-    fontWeight: 500,
-    letterSpacing: '0.01em',
+    opacity: 0.85,
   },
 } as const;

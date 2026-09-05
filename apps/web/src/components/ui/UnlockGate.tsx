@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useAuthStore } from '../../store/authStore.js';
 import { setStoredApiKey, clearStoredApiKey } from '../../lib/apiKey.js';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { RADIUS, SPACE, TYPE, withAlpha } from '../../lib/tokens.js';
+import { RADIUS, SPACE, TYPE, WEIGHT } from '../../lib/tokens.js';
 
 /**
  * "Enter your API key" gate (F2). Rendered on top of the whole dashboard
@@ -39,7 +39,7 @@ export default function UnlockGate() {
 
   return (
     <div style={styles.overlay}>
-      <div style={{ ...styles.card, background: t.cardBg, borderColor: t.panelBorder, boxShadow: `0 0 0 1px ${withAlpha(t.accent, 0.15)}, 0 20px 60px rgba(0,0,0,0.6)` }}>
+      <div style={{ ...styles.card, background: t.cardBg, borderColor: t.panelBorder }}>
         {/* L6: was a 🔒 colour emoji — the one piece of colour art in an
             otherwise monochrome, line-drawn interface. Hand-rolled inline
             path, the same ~100-byte approach NeuronInspector's archive/close
@@ -68,6 +68,7 @@ export default function UnlockGate() {
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
           placeholder="API key"
+          aria-label="API key"
           style={{ ...styles.input, background: t.inputBg, borderColor: t.panelBorder, color: t.textPrimary }}
           disabled={submitting}
         />
@@ -84,14 +85,8 @@ export default function UnlockGate() {
             </button>
           )}
           <button
-            className="ec-hover-bright"
-            style={{
-              ...styles.submitBtn,
-              background: `linear-gradient(135deg, ${t.accent} 0%, ${t.accentStrong} 100%)`,
-              color: t.onAccent,
-              boxShadow: `0 2px 8px ${t.accentGlow}`,
-              opacity: submitting || !value.trim() ? 0.5 : 1,
-            }}
+            className="ec-primary"
+            style={{ ...styles.submitBtn, background: t.accentStrong, color: t.onAccent }}
             onClick={handleSubmit}
             disabled={submitting || !value.trim()}
           >
@@ -112,26 +107,28 @@ const styles = {
   card: {
     width: '380px', maxWidth: '90vw',
     border: '1px solid', borderRadius: RADIUS.xl,
-    padding: '28px 26px', display: 'flex', flexDirection: 'column' as const, alignItems: 'center',
+    boxShadow: '0 24px 64px rgba(0, 0, 0, 0.6)',
+    padding: `${SPACE['2xl']} ${SPACE['2xl']} ${SPACE.xl}`,
+    display: 'flex', flexDirection: 'column' as const, alignItems: 'center',
   },
   icon: { width: 30, height: 30, marginBottom: SPACE.sm },
-  title: { fontSize: TYPE.xl, fontWeight: 700, textAlign: 'center' as const },
+  title: { fontSize: TYPE.xl, fontWeight: WEIGHT.semibold, letterSpacing: '-0.01em', textAlign: 'center' as const },
   subtitle: {
     fontSize: TYPE.base, textAlign: 'center' as const,
-    lineHeight: 1.6, margin: '8px 0 18px',
+    lineHeight: 1.55, margin: `${SPACE.sm} 0 ${SPACE.xl}`,
   },
   input: {
-    width: '100%', border: '1px solid', borderRadius: RADIUS.md,
-    padding: '10px 12px', fontSize: TYPE.md,
+    width: '100%', border: '1px solid', borderRadius: RADIUS.sm,
+    padding: `${SPACE.sm} ${SPACE.md}`, fontSize: TYPE.base, minHeight: 34,
     fontFamily: 'inherit', boxSizing: 'border-box' as const,
   },
   actions: { display: 'flex', justifyContent: 'flex-end', gap: SPACE.sm, marginTop: SPACE.lg, width: '100%' },
   clearBtn: {
-    padding: '8px 14px', background: 'transparent', border: '1px solid', borderRadius: RADIUS.sm,
-    fontSize: TYPE.base, fontWeight: 600,
+    padding: `${SPACE.xs} ${SPACE.md}`, background: 'transparent', border: '1px solid', borderRadius: RADIUS.sm,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.medium, minHeight: 32,
   },
   submitBtn: {
-    flex: 1, padding: '8px 16px', border: 'none', borderRadius: RADIUS.sm,
-    fontSize: TYPE.base, fontWeight: 600,
+    flex: 1, padding: `${SPACE.xs} ${SPACE.lg}`, border: 'none', borderRadius: RADIUS.sm,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.semibold, minHeight: 32,
   },
 } as const;

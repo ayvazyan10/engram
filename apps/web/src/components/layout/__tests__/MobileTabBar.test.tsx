@@ -9,7 +9,9 @@ describe('MobileTabBar (V3 — compact-viewport pane switcher)', () => {
   it('renders the three panes and marks the active one', () => {
     render(<MobileTabBar pane="canvas" onChange={() => {}} t={t} />);
 
-    expect(screen.getByRole('button', { name: /graph/i })).toHaveAttribute('aria-current', 'true');
+    // "Plate", not "Graph": the pane shows whichever of the five plates is
+    // active, and three of the five are not graphs.
+    expect(screen.getByRole('button', { name: /plate/i })).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('button', { name: /memories/i })).toHaveAttribute('aria-current', 'false');
     expect(screen.getByRole('button', { name: /inspect/i })).toHaveAttribute('aria-current', 'false');
   });

@@ -18,7 +18,7 @@ import { GLYPH } from '../../../lib/tokens.js';
  *
  * `layout` joins the sweep here: it was left out of the original pass only
  * because it was another change's directory, and MobileTabBar promptly took
- * '⬡' (concept) for its Graph tab and '◈' (pattern) for its Inspect tab.
+ * '⬡' (concept) for its plate tab and '◈' (pattern) for its Inspect tab.
  */
 const COMPONENTS_DIR = join(__dirname, '../..');
 const PANEL_DIRS = [
@@ -67,21 +67,14 @@ describe('panel glyphs (L6)', () => {
  * exact list rather than a ceiling: adding an offender fails, and so does
  * fixing one without deleting its line here, which keeps the list honest about
  * what is actually left.
+ *
+ * Empty since the design pass that the previous entries were deferred to:
+ * the wordmark's '⬡' (GLYPH.concept) became a drawn mark, the two view-mode
+ * tabs ('◎' = confidence, '◈' = pattern) draw `panePlate` and
+ * `viewReflections`, and the reflections empty state draws
+ * `viewReflections` too — the same glyph as the tab that leads to it.
  */
-const KNOWN_LITERALS = [
-  // The wordmark, not an icon — it predates the registry and changing the
-  // brand mark is not a glyph-hygiene decision.
-  'layout/AppLayout.tsx: ⬡',
-  // The two view-mode tabs. Same collision MobileTabBar had ('◈' is
-  // GLYPH.pattern, '◎' is GLYPH.confidence), but picking replacements is a
-  // visible change to the primary navigation and belongs with a design pass.
-  'ui/ViewSwitcher.tsx: ◈',
-  'ui/ViewSwitcher.tsx: ◎',
-  // Deliberate and protected: the reflections empty state is the
-  // best-composed surface in the product, and its 32px '◈' is decorative
-  // rather than the "pattern" badge that sits a few lines above it.
-  'views/ReflectionView.tsx: ◈',
-];
+const KNOWN_LITERALS: string[] = [];
 
 describe('panel glyphs draw from the registry (L6)', () => {
   it('no panel re-types a registry glyph for a second meaning', () => {
@@ -109,7 +102,7 @@ describe('panel glyphs draw from the registry (L6)', () => {
       expect(content, `MobileTabBar hard-codes GLYPH.${name}`).not.toContain(glyph);
     }
     expect(content).toContain('GLYPH.paneMemories');
-    expect(content).toContain('GLYPH.paneGraph');
+    expect(content).toContain('GLYPH.panePlate');
     expect(content).toContain('GLYPH.paneInspect');
   });
 });

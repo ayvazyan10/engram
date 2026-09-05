@@ -5,16 +5,34 @@ import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js
 import { useNeuralStore } from '../../../store/neuralStore.js';
 import { useDashboardStore } from '../../../store/dashboardStore.js';
 import { useAuthStore } from '../../../store/authStore.js';
+import { useViewStore, VIEWS, DEFAULT_VIEW_ID } from '../../../store/viewStore.js';
 import { api } from '../../../lib/api.js';
 import type { LayoutResponse, EdgeSummary } from '../../../lib/api.js';
+import type { ObsData } from '../../../lib/plate/contract.js';
 
-vi.mock('../../canvas/NeuralCanvas.js', () => ({ default: () => <div data-testid="neural-canvas" /> }));
+/**
+ * The plate itself is stubbed. This file asserts what AppLayout PASSES and
+ * when it fetches; what a plate does with a measured box belongs to
+ * plates/__tests__/PlateSurface.test.tsx, and what each plate draws is not a
+ * jsdom question at all — two of the five want a WebGL context.
+ */
+vi.mock('../../plates/PlateSurface.js', () => ({
+  default: (p: { data: ObsData | null; error: string | null; onRetry: () => void }) => (
+    <div data-testid="plate" onClick={p.onRetry}>
+      {JSON.stringify({
+        memories: p.data?.stats.memories ?? null,
+        links: p.data?.links.length ?? null,
+        error: p.error,
+      })}
+    </div>
+  ),
+}));
 vi.mock('../../../hooks/useWebSocket.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../hooks/useWebSocket.js')>()),
   useWebSocket: () => {},
 }));
-// The three non-3D views belong to a different change; stub them so this file
-// asserts what AppLayout PASSES rather than what they happen to render.
+// The three non-plate views belong to a different change; stub them so this
+// file asserts what AppLayout PASSES rather than what they happen to render.
 vi.mock('../../views/TimelineView.js', () => ({
   default: (p: ViewProps) => <div data-testid="timeline">{describeProps(p)}</div>,
 }));
@@ -29,12 +47,15 @@ vi.mock('../../../lib/api.js', () => ({
     listMemories: vi.fn(),
     getContradictions: vi.fn(),
     stats: vi.fn().mockResolvedValue({ total: 0, byType: {}, bySource: {} }),
-    // The scene's two fetches had their own copy of the request helper in a
-    // canvas-local module, and were mocked as a separate module here. They are
-    // `api` methods now, so they are stubbed alongside every other call the
-    // layout makes.
+    // The plate data layer's three calls. They are `api` methods, so they are
+    // stubbed alongside every other call the layout makes — there is no second
+    // entry point that could carry a different key or a different timeout.
     getGraphLayout: vi.fn(),
     getGraphEdges: vi.fn(),
+    getDecayPolicy: vi.fn(),
+    // NeuronInspector fetches the selected memory's neighbourhood, and these
+    // tests select memories.
+    getGraph: vi.fn().mockResolvedValue({ node: null, connections: [], neighbors: [] }),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -47,6 +68,7 @@ vi.mock('../../../lib/api.js', () => ({
 
 const getGraphLayout = vi.mocked(api.getGraphLayout);
 const getGraphEdges = vi.mocked(api.getGraphEdges);
+const getDecayPolicy = vi.mocked(api.getDecayPolicy);
 
 interface ViewProps {
   loading: boolean;
@@ -60,6 +82,10 @@ function describeProps(p: ViewProps): string {
     error: p.error,
     onRetry: typeof p.onRetry,
   });
+}
+
+function plateProps(): { memories: number | null; links: number | null; error: string | null } {
+  return JSON.parse(screen.getByTestId('plate').textContent ?? '{}');
 }
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -127,13 +153,16 @@ function resetAll() {
   });
   useDashboardStore.setState({ viewMode: '3d' });
   useAuthStore.setState({ locked: false, hadKey: false });
+  useViewStore.getState().setView(DEFAULT_VIEW_ID);
   vi.mocked(api.listMemories).mockReset();
   vi.mocked(api.getContradictions).mockReset();
   getGraphLayout.mockReset();
   getGraphEdges.mockReset();
+  getDecayPolicy.mockReset();
   vi.mocked(api.getContradictions).mockResolvedValue({ count: 0, contradictions: [] });
   getGraphLayout.mockResolvedValue(layoutResponse(['a']));
   getGraphEdges.mockResolvedValue(edgeResponse());
+  getDecayPolicy.mockResolvedValue({ halfLifeDays: 7, archiveThreshold: 0.05 });
 }
 
 describe('AppLayout effect wiring (W12)', () => {
@@ -173,7 +202,7 @@ describe('AppLayout effect wiring (W12)', () => {
     expect(getGraphEdges.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
-  it('does not refire the scene fetches on every return to the 3D view when nothing changed', async () => {
+  it('does not refire the plate fetches on every return to the plate surface when nothing changed', async () => {
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<AppLayout />);
@@ -204,7 +233,7 @@ describe('AppLayout effect wiring (W12)', () => {
   });
 });
 
-describe('AppLayout scene sourcing', () => {
+describe('AppLayout plate sourcing', () => {
   beforeEach(resetAll);
 
   it('builds the node set from the projection, not from the 200-row memory page', async () => {
@@ -216,38 +245,136 @@ describe('AppLayout scene sourcing', () => {
     expect(useMemoryStore.getState().records).toHaveLength(1);
   });
 
-  it('states what it is showing and what it is not', async () => {
+  /** One response set, two consumers: the plate and `neuralStore.neurons`. If
+   *  these ever split, the inspector and the plate stop describing the same
+   *  store. */
+  it('derives the plate data from the same responses that fill the inspector', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c']));
     getGraphEdges.mockResolvedValue(
-      edgeResponse({ total: 3102, stored: 8495, matching: 3102, returned: 3102 })
+      edgeResponse({
+        total: 1,
+        stored: 4,
+        matching: 1,
+        returned: 1,
+        edges: [{ id: 'e1', sourceId: 'a', targetId: 'b', relationship: 'relates_to', strength: 0.95 }],
+      })
     );
 
     render(<AppLayout />);
-    await waitFor(() => expect(screen.getAllByText(/3 nodes/).length).toBeGreaterThan(0));
-    expect(screen.getAllByText(/3,102 of 3,102 edges/).length).toBeGreaterThan(0);
-    // 8,495 - 3,102 connections point at archived memories and must be owned up to.
-    expect(screen.getByText(/5,393 more connections/)).toBeInTheDocument();
+    await waitFor(() => expect(plateProps().memories).toBe(3));
+    expect(plateProps().links).toBe(1);
+    expect(useNeuralStore.getState().neurons).toHaveLength(3);
+    expect(useNeuralStore.getState().connections).toHaveLength(1);
   });
 
-  it('says so when the projection is unavailable instead of pretending the sphere means something', async () => {
+  /**
+   * The fallback sphere is gone with the scene key that used to confess it. A
+   * plate is an argument about this store's real shape, so a failed load says
+   * so — it must not read as "the store is empty".
+   */
+  it('states a failed load on the plate instead of drawing an id-derived sphere', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 2, memories: [record({ id: 'a' }), record({ id: 'b' })] });
     getGraphLayout.mockRejectedValue(new Error('offline'));
 
     render(<AppLayout />);
-    await waitFor(() => expect(screen.getByText(/positions unavailable/i)).toBeInTheDocument());
-    // …and the scene still renders, from an id-derived fallback.
-    expect(useNeuralStore.getState().neurons).toHaveLength(2);
+    await waitFor(() => expect(plateProps().error).toBe('offline'));
+    expect(plateProps().memories).toBeNull();
+    expect(useNeuralStore.getState().neurons).toHaveLength(0);
   });
 
-  it('passes the server\'s own "fallback" verdict through to the key', async () => {
+  it('retries the load when the plate asks it to', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    getGraphLayout.mockResolvedValue(
-      layoutResponse(['a'], { method: 'fallback', projected: 0, unprojected: 1 })
-    );
+    getGraphLayout.mockRejectedValue(new Error('offline'));
 
     render(<AppLayout />);
-    await waitFor(() => expect(screen.getByText(/too few embedded memories/i)).toBeInTheDocument());
+    await waitFor(() => expect(plateProps().error).toBe('offline'));
+
+    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b']));
+    fireEvent.click(screen.getByTestId('plate'));
+
+    await waitFor(() => expect(plateProps().memories).toBe(2));
+    expect(plateProps().error).toBeNull();
+  });
+
+  /** The whole point of loading the plate data once: five plates, one store. */
+  it('switching plates neither refetches nor drops the selection', async () => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
+    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c']));
+
+    render(<AppLayout />);
+    await waitFor(() => expect(plateProps().memories).toBe(3));
+    act(() => useNeuralStore.getState().selectNeuron('b'));
+    const calls = getGraphLayout.mock.calls.length;
+
+    for (const view of VIEWS) act(() => useViewStore.getState().setView(view.id));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(getGraphLayout.mock.calls.length).toBe(calls);
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('b');
+    expect(plateProps().memories).toBe(3);
+  });
+});
+
+/**
+ * Escape is the host's. Three components used to want it — the search field,
+ * the modal, and two plates each with their own window listener — and a plate's
+ * listener quietly wiped the reader's selection every time the search field
+ * was cleared.
+ */
+describe('AppLayout owns Escape', () => {
+  beforeEach(() => {
+    resetAll();
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
+  });
+
+  function pressEscape(target: EventTarget = window) {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  it('clears the selection', async () => {
+    render(<AppLayout />);
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
+    act(() => useNeuralStore.getState().selectNeuron('a'));
+
+    pressEscape();
+    expect(useNeuralStore.getState().selectedNeuronId).toBeNull();
+  });
+
+  it('leaves the selection alone when Escape came from a text field', async () => {
+    render(<AppLayout />);
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
+    act(() => useNeuralStore.getState().selectNeuron('a'));
+
+    pressEscape(screen.getByLabelText(/search memories/i));
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
+  });
+
+  it('leaves the selection alone while a modal is open — that Escape belongs to the modal', async () => {
+    render(<AppLayout />);
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
+    fireEvent.click(screen.getByTitle(/store new memory/i));
+    act(() => useNeuralStore.getState().selectNeuron('a'));
+
+    pressEscape();
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
+  });
+
+  it('stands down for anything a nearer component already handled', async () => {
+    render(<AppLayout />);
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
+    act(() => useNeuralStore.getState().selectNeuron('a'));
+
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    event.preventDefault();
+    act(() => {
+      window.dispatchEvent(event);
+    });
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
   });
 });
 
@@ -263,24 +390,6 @@ describe('AppLayout REST payload validation (W10)', () => {
     render(<AppLayout />);
     await waitFor(() => expect(useMemoryStore.getState().records).toHaveLength(1));
     expect(useMemoryStore.getState().records[0]?.id).toBe('good');
-  });
-});
-
-describe('AppLayout loading spinner animates (W13)', () => {
-  beforeEach(resetAll);
-
-  it("gives the loading spinner an animation, matching SearchBar's spinner", async () => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
-    // The spinner now covers the projection fetch too — an empty canvas while
-    // /api/graph/layout is in flight looked identical to an empty store.
-    let resolveLayout!: (v: LayoutResponse) => void;
-    getGraphLayout.mockReturnValueOnce(new Promise((resolve) => { resolveLayout = resolve; }));
-
-    render(<AppLayout />);
-    const spinner = screen.getByText(/loading neural graph/i).previousSibling as HTMLElement;
-    expect(spinner.style.animation).toBeTruthy();
-
-    resolveLayout(layoutResponse([]));
   });
 });
 
@@ -361,6 +470,11 @@ describe('AppLayout compact (mobile) layout', () => {
     expect(screen.getByRole('navigation', { name: /panel switcher/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /memories/i }));
     fireEvent.click(screen.getByRole('button', { name: /inspect/i }));
-    fireEvent.click(screen.getByRole('button', { name: /graph/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Plate' }));
+  });
+
+  it('gives the compact pane the same plate the desktop layout shows', async () => {
+    render(<AppLayout />);
+    await waitFor(() => expect(screen.getByTestId('plate')).toBeInTheDocument());
   });
 });

@@ -2,7 +2,7 @@ import { useMemoryStore } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
-import { GLYPH, SPACE, STATUS, TYPE, TYPE_COLORS } from '../../lib/tokens.js';
+import { GLYPH, SPACE, STATUS, TYPE, TYPE_COLORS, WEIGHT } from '../../lib/tokens.js';
 import { DataDot } from './DataMark.js';
 import { useServerStats } from '../../lib/serverStats.js';
 
@@ -86,8 +86,8 @@ function Chip({ label, value, color, title, t }: { label: string; value: number;
   return (
     <div style={styles.chip} title={title}>
       <DataDot color={color} size={6} />
-      <span style={{ color: t.textSecondary, fontSize: TYPE.xs, fontWeight: 700 }}>{label}</span>
-      <span className="ec-tabular" style={{ color: t.textSecondary, fontWeight: 500 }}>{value}</span>
+      <span style={{ color: t.textSecondary, fontSize: TYPE.xs, fontWeight: WEIGHT.semibold }}>{label}</span>
+      <span className="ec-tabular" style={{ color: t.textSecondary, fontWeight: WEIGHT.medium }}>{value}</span>
     </div>
   );
 }
@@ -103,7 +103,8 @@ const styles = {
     // backstop for anything that still can't fit on one line.
     minHeight: '26px',
     borderTop: '1px solid',
-    fontSize: TYPE.sm,
+    fontSize: TYPE.xs,
+    lineHeight: 1,
     flexShrink: 0,
     gap: SPACE.sm,
     overflow: 'hidden',
@@ -114,7 +115,8 @@ const styles = {
   right: { display: 'flex', alignItems: 'center', gap: SPACE.sm, flexShrink: 0 },
   chip: { display: 'flex', alignItems: 'center', gap: SPACE['3xs'] },
   sep: { width: '1px', height: '12px', flexShrink: 0 },
-  latency: { fontWeight: 600, fontSize: TYPE.sm },
+  latency: { fontWeight: WEIGHT.semibold, fontSize: TYPE.xs },
   contextHint: { fontSize: TYPE.xs, cursor: 'default', overflow: 'hidden', textOverflow: 'ellipsis' },
-  brand: { fontSize: TYPE.xs, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' as const },
+  // Sentence case: the brand is a signature at the corner, not a shout.
+  brand: { fontSize: TYPE.xs, fontWeight: WEIGHT.medium, letterSpacing: '0.01em' },
 } as const;

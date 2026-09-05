@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import NeuralCanvas from '../canvas/NeuralCanvas.js';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import PlateSurface from '../plates/PlateSurface.js';
 import MemoryPanel from '../ui/MemoryPanel.js';
 import SearchBar from '../ui/SearchBar.js';
 import StatusBar from '../ui/StatusBar.js';
@@ -8,22 +8,25 @@ import ViewSwitcher from '../ui/ViewSwitcher.js';
 import TemplateSwitcher from '../ui/TemplateSwitcher.js';
 import StoreMemoryModal from '../ui/StoreMemoryModal.js';
 import UnlockGate from '../ui/UnlockGate.js';
-import MobileTabBar, { type MobilePane } from './MobileTabBar.js';
-import SceneKey, { type SceneStats } from '../canvas/SceneKey.js';
+import CompactMain from './CompactMain.js';
+import type { MobilePane } from './MobileTabBar.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
-import { useViewStore, fallbackSceneNodes, type SceneNodeInput } from '../../store/viewStore.js';
+import { sceneLayout, type SceneNodeInput } from '../../store/viewStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { useDashboardStore } from '../../store/dashboardStore.js';
 import { useAuthStore } from '../../store/authStore.js';
-import { api, ApiError, type EdgeSummary, type LayoutResponse } from '../../lib/api.js';
+import { api, ApiError } from '../../lib/api.js';
+import { loadPlateData } from '../../lib/plate/data.js';
+import type { ObsData } from '../../lib/plate/contract.js';
 import { useWebSocket, asMemoryRecord } from '../../hooks/useWebSocket.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { useThemeVars } from '../../hooks/useThemeVars.js';
-import { RADIUS, SPACE, TYPE } from '../../lib/tokens.js';
+import { SPACE, STATUS, TYPE, WEIGHT } from '../../lib/tokens.js';
+import { APP_VERSION } from '../../lib/version.js';
 
 // W16: recharts (the bulk of these three views' weight) shipped to every
-// visitor even if they never leave the default 3D view — these were the
+// visitor even if they never leave the default plate surface — these were the
 // only static imports pulling it into the main chunk. Code-split so it's
 // fetched only when a user actually opens Timeline/Analytics/Reflections.
 const TimelineView = lazy(() => import('../views/TimelineView.js'));
@@ -33,17 +36,23 @@ const ReflectionView = lazy(() => import('../views/ReflectionView.js'));
 export default function AppLayout() {
   const { neurons, setNeurons, reconcileNeurons, setConnections, setContradictionPairs } = useNeuralStore();
   const { records, setRecords } = useMemoryStore();
-  const { activeView } = useViewStore();
   const viewMode = useDashboardStore((s) => s.viewMode);
   const t = useTemplateStore((s) => s.activeTemplate);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // The 3D scene's node set no longer comes from the memory page: it comes from
+  // The plate's node set does not come from the memory page: it comes from
   // GET /api/graph/layout, which places EVERY memory by projecting its
   // embedding. The sidebar still lists its own page of records.
-  const [layout, setLayout] = useState<LayoutResponse | null>(null);
-  const [layoutFailed, setLayoutFailed] = useState(false);
-  const [edgeSummary, setEdgeSummary] = useState<EdgeSummary | null>(null);
+  const [sceneNodes, setSceneNodes] = useState<SceneNodeInput[] | null>(null);
+  // The five plates all read this one derived object. It is loaded with the
+  // projection, from the same responses, and it is NOT a dependency of the
+  // active plate — switching plates re-renders, it does not refetch, and the
+  // selection rides through untouched.
+  const [plateData, setPlateData] = useState<ObsData | null>(null);
+  const [plateError, setPlateError] = useState<string | null>(null);
+  /** Bumped by the retry button. The load is otherwise fired only by a change
+   *  in the record count, so a failed load has no other way back. */
+  const [plateAttempt, setPlateAttempt] = useState(0);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [firstLoad, setFirstLoad] = useState(true);
   const locked = useAuthStore((s) => s.locked);
@@ -86,6 +95,14 @@ export default function AppLayout() {
     loadMemories();
   }, [loadMemories]);
 
+  /** Re-run the plate load after a failure. The failure already reset the
+   *  ref-counted guard, so bumping the attempt counter is what actually
+   *  re-fires the effect. */
+  const retryPlate = useCallback(() => {
+    setPlateError(null);
+    setPlateAttempt((n) => n + 1);
+  }, []);
+
   // W12: fetches below key on `records` itself (not a synthetic
   // `records.length > 0` boolean, which only ever ran once) so a socket
   // 'memory:stored' arrival — which changes `records`' length — refreshes
@@ -122,6 +139,15 @@ export default function AppLayout() {
   // other endpoint had fallen outside the 200-row page — 67 edges out of
   // thousands, biased toward important nodes, with nothing on screen saying so.
   // Two requests now: the projection, and the whole edge set.
+  //
+  // ONE load feeds both consumers. `loadPlateData` makes the three requests
+  // (/graph/layout, /graph/edges, /decay/policy) and returns the derived plate
+  // data alongside the raw responses, so the plate and the inspector are
+  // talking about the same store and a load costs three requests rather than
+  // five. There is no fallback sphere any more: the plates are arguments about
+  // this store's real shape, and an id-derived sphere is invented data — the
+  // one surface that used to confess it (the scene key) has been retired
+  // because each plate now states its own denominators.
   const sceneFetchedForCountRef = useRef(-1);
   useEffect(() => {
     if (viewMode !== '3d') return;
@@ -129,24 +155,14 @@ export default function AppLayout() {
     sceneFetchedForCountRef.current = records.length;
 
     let cancelled = false;
-    api.getGraphLayout()
-      .then((res) => {
+    loadPlateData()
+      .then(({ data, layout, edges }) => {
         if (cancelled) return;
-        setLayout(res);
-        setLayoutFailed(false);
-      })
-      .catch(() => {
-        // Not silent: `layoutFailed` drives the scene key's "positions
-        // unavailable" note and the id-derived fallback below.
-        if (!cancelled) setLayoutFailed(true);
-      });
-
-    api.getGraphEdges()
-      .then((res) => {
-        if (cancelled) return;
-        setEdgeSummary(res);
+        setPlateData(data);
+        setPlateError(null);
+        setSceneNodes(layout.nodes);
         setConnections(
-          res.edges.map((e) => ({
+          edges.edges.map((e) => ({
             id: e.id,
             sourceId: e.sourceId,
             targetId: e.targetId,
@@ -155,25 +171,32 @@ export default function AppLayout() {
           }))
         );
       })
-      .catch(() => {
-        if (!cancelled) setEdgeSummary(null);
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        // A 401 is the unlock gate's, exactly as it is for the memory list:
+        // the gate covers the dashboard and unlocking reloads, so the box
+        // stays in its loading state rather than showing a second, competing
+        // explanation of the same failure.
+        if (err instanceof ApiError && err.status === 401) return;
+        // Anything else is stated on the plate box. It must not be allowed to
+        // look like an empty store — see PlateSurface for the two treatments.
+        sceneFetchedForCountRef.current = -1;
+        setPlateError(err instanceof Error ? err.message : 'Could not reach Engram API');
       });
 
     return () => {
       cancelled = true;
     };
-  }, [records.length, viewMode, setConnections]);
-
-  /** Where the scene's nodes come from: the projection, or a flagged fallback. */
-  const sceneNodes = useMemo<SceneNodeInput[] | null>(() => {
-    if (layout) return layout.nodes;
-    if (layoutFailed) return fallbackSceneNodes(records);
-    return null;
-  }, [layout, layoutFailed, records]);
+  }, [records.length, viewMode, plateAttempt, setConnections]);
 
   useEffect(() => {
     if (!sceneNodes || sceneNodes.length === 0 || viewMode !== '3d') return;
-    const positions = activeView.layout(sceneNodes);
+    // ONE layout, always: the projection as the server computed it. This is
+    // deliberately not keyed on the active plate — a plate owns its own
+    // geometry and reads `plateData`, so switching plates must not disturb
+    // `neurons`, which is what the inspector and the socket reconciliation
+    // read.
+    const positions = sceneLayout(sceneNodes);
 
     if (firstLoad || neurons.length === 0) {
       setNeurons(positions.map((p) => ({ ...p, activation: 0, tx: p.x, ty: p.y, tz: p.z })));
@@ -188,45 +211,61 @@ export default function AppLayout() {
   // updated inside this very effect, and including them would either loop or
   // add nothing. setNeurons/reconcileNeurons are stable Zustand actions.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneNodes, activeView, viewMode]);
+  }, [sceneNodes, viewMode]);
 
-  const sceneStats = useMemo<SceneStats | null>(() => {
-    if (!sceneNodes) return null;
-    const filter =
-      edgeSummary && edgeSummary.truncated
-        ? `capped at ${edgeSummary.limit.toLocaleString('en-US')}`
-        : edgeSummary && edgeSummary.minStrength > 0
-          ? `strength ≥ ${edgeSummary.minStrength}`
-          : null;
-    return {
-      nodes: sceneNodes.length,
-      method: layout ? layout.method : 'offline',
-      unprojected: layout ? layout.unprojected : sceneNodes.length,
-      explainedVariance: layout?.explainedVariance ?? [],
-      edgesShown: edgeSummary?.returned ?? 0,
-      edgesRenderable: edgeSummary?.total ?? 0,
-      edgesStored: edgeSummary?.stored ?? 0,
-      edgeFilter: filter,
+  /**
+   * Escape, owned in one place.
+   *
+   * Two plates used to bind their own window listener for it. In this app that
+   * key is already spent twice — SearchBar clears its field on Escape and does
+   * not stop propagation, and ModalShell closes on Escape — so a plate's own
+   * listener silently threw away the reader's selection every time the search
+   * field was cleared, and one keystroke closed a modal AND wiped the plate
+   * behind it. Three listeners for one key cannot agree, so the host takes it
+   * and declines in the three cases where the key belongs to something else:
+   * a text field, an open modal or the unlock gate, and anything a component
+   * nearer the event has already handled (the plate chooser marks its own
+   * Escape that way).
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (showStoreModal || locked) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable ||
+          target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT')
+      ) {
+        return;
+      }
+      useNeuralStore.getState().selectNeuron(null);
     };
-  }, [sceneNodes, layout, edgeSummary]);
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, [showStoreModal, locked]);
 
   return (
     <div style={{ ...s.root, background: t.rootBg }}>
       {/* Header */}
-      <div className="ec-header" style={{ ...s.header, background: t.headerBg, borderBottomColor: t.headerBorder }}>
+      <header className="ec-header" style={{ ...s.header, background: t.headerBg, borderBottomColor: t.headerBorder }}>
         <div style={s.logo}>
-          <span style={{ ...s.logoIcon, color: t.accent }}>⬡</span>
+          <BrandMark color={t.accent} />
           <span style={{ ...s.logoText, color: t.textPrimary }}>Engram</span>
-          <span className="ec-logo-badge" style={{ ...s.logoBadge, color: t.textMuted, background: t.cardBg }}>v0.2</span>
+          {/* Read from package.json (lib/version.ts) — this badge said
+              'v0.2' for two minor versions. */}
+          <span className="ec-logo-badge ec-tabular" style={{ ...s.logoBadge, color: t.textMuted }}>v{APP_VERSION}</span>
         </div>
 
         <ViewSwitcher />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: SPACE.sm }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SPACE.md }}>
           <TemplateSwitcher />
           <ConnectionDot />
         </div>
-      </div>
+      </header>
 
       {/* Main — mode aware */}
       {viewMode === '3d' ? (
@@ -238,8 +277,9 @@ export default function AppLayout() {
             loadError={loadError}
             loadMemories={loadMemories}
             onStore={() => setShowStoreModal(true)}
-            sceneStats={sceneStats}
-            sceneReady={sceneNodes !== null}
+            plateData={plateData}
+            plateError={plateError}
+            onPlateRetry={retryPlate}
           />
         ) : (
           <div style={s.main}>
@@ -248,9 +288,10 @@ export default function AppLayout() {
               <MemoryPanel loading={loading} error={loadError} onRetry={loadMemories} onStore={() => setShowStoreModal(true)} />
             </div>
 
+            {/* The plate slot. PlateSurface is the positioned, measured box —
+                every plate roots itself inside it and bleeds to its edges. */}
             <div style={s.canvas}>
-              <CanvasOrLoading sceneReady={sceneNodes !== null} />
-              <SceneKey stats={sceneStats} compact={false} />
+              <PlateSurface data={plateData} error={plateError} onRetry={retryPlate} />
             </div>
 
             <div style={{ ...s.inspector, background: t.panelBg, borderLeftColor: t.panelBorder }}>
@@ -295,69 +336,38 @@ export default function AppLayout() {
   );
 }
 
-/** The spinner also covers the projection fetch: rendering an empty canvas
- *  while `/api/graph/layout` is in flight looked identical to an empty store. */
-function CanvasOrLoading({ sceneReady }: { sceneReady: boolean }) {
-  const t = useTemplateStore((s) => s.activeTemplate);
-  if (!sceneReady) {
-    return (
-      <div style={{ ...s.loadingOverlay, background: t.rootBg }}>
-        <div style={{ ...s.spinner, borderColor: t.panelBorder, borderTopColor: t.accent }} />
-        <div style={{ ...s.loadingText, color: t.textMuted }}>Loading neural graph…</div>
-      </div>
-    );
-  }
-  return <NeuralCanvas />;
-}
-
-interface CompactMainProps {
-  pane: MobilePane;
-  onPaneChange: (pane: MobilePane) => void;
-  loading: boolean;
-  loadError: string | null;
-  loadMemories: () => void;
-  onStore: () => void;
-  sceneStats: SceneStats | null;
-  sceneReady: boolean;
-}
-
-/** The 3D-mode layout below ~900px (V3): one full-width pane at a time
- *  (list / canvas / inspector), switched via MobileTabBar instead of the
- *  desktop's fixed 3-column row. */
-function CompactMain({ pane, onPaneChange, loading, loadError, loadMemories, onStore, sceneStats, sceneReady }: CompactMainProps) {
-  const t = useTemplateStore((s) => s.activeTemplate);
-
+/**
+ * The brand mark: the central node and its three primary neighbours from
+ * public/logo.svg, drawn in the template's accent. It replaces a '⬡' — which
+ * is GLYPH.concept, the timeline card's "concept" marker — so the wordmark
+ * no longer shares its icon with a record field.
+ */
+function BrandMark({ color }: { color: string }) {
   return (
-    <div style={s.compactMain}>
-      <div style={s.compactPaneArea}>
-        {pane === 'list' && (
-          <div className="ec-mobile-pane" style={{ background: t.panelBg, display: 'flex', flexDirection: 'column' }}>
-            <SearchBar />
-            <MemoryPanel loading={loading} error={loadError} onRetry={loadMemories} onStore={onStore} />
-          </div>
-        )}
-        {pane === 'canvas' && (
-          <div className="ec-mobile-pane" style={{ position: 'relative' }}>
-            <CanvasOrLoading sceneReady={sceneReady} />
-            <SceneKey stats={sceneStats} compact />
-          </div>
-        )}
-        {pane === 'inspector' && (
-          <div className="ec-mobile-pane" style={{ background: t.panelBg }}>
-            <NeuronInspector />
-          </div>
-        )}
-      </div>
-      <MobileTabBar pane={pane} onChange={onPaneChange} t={t} />
-    </div>
+    <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" style={{ color, flexShrink: 0 }}>
+      <g stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity="0.55">
+        <path d="M10 10V4.2M10 10l5 2.9M10 10l-5 2.9" />
+      </g>
+      <circle cx="10" cy="10" r="2.6" fill="currentColor" />
+      <circle cx="10" cy="3.6" r="1.7" fill="currentColor" />
+      <circle cx="15.5" cy="13.2" r="1.7" fill="currentColor" />
+      <circle cx="4.5" cy="13.2" r="1.7" fill="currentColor" />
+    </svg>
   );
 }
 
+/** Socket state. Green means the live feed is up; otherwise it recedes to
+ *  the muted role rather than a fixed slate that ignored the template. */
 function ConnectionDot() {
   const { isConnected } = useNeuralStore();
+  const t = useTemplateStore((s) => s.activeTemplate);
+  const color = isConnected ? STATUS.success : t.textMuted;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: TYPE.sm, color: isConnected ? '#22c55e' : '#64748b' }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? '#22c55e' : '#475569', display: 'inline-block', boxShadow: isConnected ? '0 0 6px #22c55e88' : 'none' }} />
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: SPACE.xs, fontSize: TYPE.sm, fontWeight: WEIGHT.medium, color }}
+      title={isConnected ? 'Live updates connected' : 'Live updates disconnected — the dashboard shows what it last loaded'}
+    >
+      <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
       {isConnected ? 'Live' : 'Offline'}
     </div>
   );
@@ -366,25 +376,21 @@ function ConnectionDot() {
 const s = {
   root: { display: 'flex', flexDirection: 'column' as const, width: '100%', height: '100%', overflow: 'hidden' },
   header: {
+    // `position: relative` + a z-index above the main row: the plate chooser's
+    // drawer is an absolutely positioned child of this bar, and without a
+    // stacking context here the surface it selects paints over it.
+    position: 'relative' as const, zIndex: 20,
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '0 16px', minHeight: '46px', borderBottom: '1px solid',
-    flexShrink: 0, gap: '12px',
+    padding: `0 ${SPACE.lg}`, minHeight: '48px', borderBottom: '1px solid',
+    flexShrink: 0, gap: SPACE.md,
   },
-  logo: { display: 'flex', alignItems: 'center', gap: '7px', flexShrink: 0 },
-  logoIcon: { fontSize: '16px' },
-  logoText: { fontSize: TYPE.md, fontWeight: 700, letterSpacing: '-0.02em' },
-  logoBadge: { fontSize: TYPE.xs, padding: '1px 5px', borderRadius: RADIUS.tight },
+  logo: { display: 'flex', alignItems: 'center', gap: SPACE.sm, flexShrink: 0 },
+  logoText: { fontSize: TYPE.md, fontWeight: WEIGHT.semibold, letterSpacing: '-0.01em' },
+  logoBadge: { fontSize: TYPE.xs, fontWeight: WEIGHT.regular, marginLeft: SPACE['3xs'] },
   main: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
   fullView: { flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 },
   sidebar: { width: '260px', flexShrink: 0, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid', overflow: 'hidden' },
   canvas: { flex: 1, position: 'relative' as const, overflow: 'hidden', minWidth: 0, height: '100%' },
   inspector: { width: '252px', flexShrink: 0, borderLeft: '1px solid', overflow: 'hidden', display: 'flex', flexDirection: 'column' as const },
-  compactMain: { flex: 1, display: 'flex', flexDirection: 'column' as const, overflow: 'hidden', minHeight: 0 },
-  compactPaneArea: { flex: 1, overflow: 'hidden', minHeight: 0 },
-  loadingOverlay: { position: 'absolute' as const, inset: 0, display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', gap: '12px' },
-  // W13: had no `animation`, so it just sat there as a static ring —
-  // @keyframes ec-spin already exists (styles/global.css) and SearchBar's
-  // own spinner already uses it; this one just never did.
-  spinner: { width: '28px', height: '28px', border: '2px solid', borderRadius: '50%', animation: 'ec-spin 0.8s linear infinite' },
   loadingText: { fontSize: TYPE.base },
 } as const;

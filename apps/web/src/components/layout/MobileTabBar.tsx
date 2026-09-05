@@ -1,14 +1,19 @@
 import type { UITemplate } from '../../store/templateStore.js';
-import { GLYPH, TYPE, withAlpha } from '../../lib/tokens.js';
+import { GLYPH, TYPE, WEIGHT } from '../../lib/tokens.js';
 
 export type MobilePane = 'list' | 'canvas' | 'inspector';
 
 // L6: from the registry, not hand-picked here. The previous '⬡'/'◈' pair
 // was `GLYPH.concept` and `GLYPH.pattern` — the same two glyphs a timeline card
 // and a reflection badge use for something else entirely.
+//
+// "Plate" rather than "Graph": this pane shows whichever of the five plates is
+// active, and three of the five are not graphs. The desktop tab that leads to
+// the same surface says "Plates"; this one is singular because the pane holds
+// one at a time.
 const TABS: { id: MobilePane; label: string; icon: string }[] = [
   { id: 'list', label: 'Memories', icon: GLYPH.paneMemories },
-  { id: 'canvas', label: 'Graph', icon: GLYPH.paneGraph },
+  { id: 'canvas', label: 'Plate', icon: GLYPH.panePlate },
   { id: 'inspector', label: 'Inspect', icon: GLYPH.paneInspect },
 ];
 
@@ -20,8 +25,8 @@ interface Props {
 
 /**
  * Below ~900px (V3) AppLayout can no longer afford a fixed 260px sidebar +
- * fluid canvas + fixed 252px inspector side by side — at 768px that leaves
- * ~256px for the 3D scene, and at 320-375px the two fixed columns alone
+ * fluid plate + fixed 252px inspector side by side — at 768px that leaves
+ * ~256px for the plate, and at 320-375px the two fixed columns alone
  * exceed the viewport. This replaces the 3-column row with one full-width
  * pane at a time, switched here instead of via CSS `display:none` (which
  * would still mount/measure the hidden panes at their desktop widths).
@@ -39,9 +44,9 @@ export default function MobileTabBar({ pane, onChange, t }: Props) {
             onClick={() => onChange(tab.id)}
             aria-current={active}
           >
-            <span style={{ fontSize: TYPE.xl, lineHeight: 1 }}>{tab.icon}</span>
-            <span style={{ fontSize: TYPE.micro, fontWeight: active ? 600 : 400 }}>{tab.label}</span>
-            {active && <span style={{ position: 'absolute', bottom: 0, width: 20, height: 2, borderRadius: 1, background: t.accent, boxShadow: `0 0 6px ${withAlpha(t.accent, 0.6)}` }} />}
+            <span aria-hidden="true" style={{ fontSize: TYPE.xl, lineHeight: 1 }}>{tab.icon}</span>
+            <span style={{ fontSize: TYPE.micro, fontWeight: active ? WEIGHT.semibold : WEIGHT.medium, letterSpacing: '0.01em' }}>{tab.label}</span>
+            {active && <span aria-hidden="true" style={{ position: 'absolute', bottom: 0, width: 24, height: 2, borderRadius: '1px 1px 0 0', background: t.accent }} />}
           </button>
         );
       })}

@@ -1,6 +1,7 @@
 import { useTemplateStore, TEMPLATES, type UITemplate } from '../../store/templateStore.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
-import { RADIUS, SPACE, TYPE } from '../../lib/tokens.js';
+import { withAlpha } from '../../lib/tokens.js';
+import { segmentBase, segmentState, trackStyle } from './segmented.js';
 
 /**
  * M12: the shared `.ec-switcher-label` rule hides switcher labels below
@@ -18,55 +19,40 @@ export default function TemplateSwitcher() {
 
   // M11: was `border: '1px solid #1a1a1a'` / `background: '#050505'` — Mono's
   // own values, hardcoded. The theme control was the one control the themes
-  // did not reach.
-  const wrapperStyle = {
-    ...styles.wrapper,
-    borderColor: activeTemplate.panelBorder,
-    background: activeTemplate.rootBg,
-  };
-
+  // did not reach. It is the same track as the view switcher now.
   if (compact) {
     const index = TEMPLATES.findIndex((t) => t.id === activeTemplate.id);
     const next = TEMPLATES[(index + 1) % TEMPLATES.length]!;
     return (
-      <div style={wrapperStyle}>
+      <div style={trackStyle(activeTemplate)}>
         <button
           className="ec-hover-tint"
-          style={{
-            ...styles.btn,
-            background: activeTemplate.cardBg,
-            color: activeTemplate.textPrimary,
-            borderColor: activeTemplate.panelBorder,
-          }}
+          style={{ ...segmentBase, ...segmentState(activeTemplate, true) }}
           onClick={() => setTemplate(next.id)}
           title={`Theme: ${activeTemplate.name} — switch to ${next.name}`}
         >
           <Dot template={activeTemplate} active />
-          <span className="ec-template-label" style={{ fontSize: TYPE.xs, fontWeight: 600 }}>{activeTemplate.name}</span>
+          <span className="ec-template-label">{activeTemplate.name}</span>
         </button>
       </div>
     );
   }
 
   return (
-    <div style={wrapperStyle}>
+    <div style={trackStyle(activeTemplate)} role="group" aria-label="Theme">
       {TEMPLATES.map((t) => {
         const active = t.id === activeTemplate.id;
         return (
           <button
             key={t.id}
             className="ec-hover-tint"
-            style={{
-              ...styles.btn,
-              background: active ? activeTemplate.cardBg : 'transparent',
-              color: active ? activeTemplate.textPrimary : activeTemplate.textMuted,
-              borderColor: active ? activeTemplate.panelBorder : 'transparent',
-            }}
+            style={{ ...segmentBase, ...segmentState(activeTemplate, active) }}
             onClick={() => setTemplate(t.id)}
             title={t.name}
+            aria-pressed={active}
           >
             <Dot template={t} active={active} />
-            <span className="ec-template-label" style={{ fontSize: TYPE.xs, fontWeight: active ? 600 : 400 }}>{t.name}</span>
+            <span className="ec-template-label">{t.name}</span>
           </button>
         );
       })}
@@ -74,6 +60,8 @@ export default function TemplateSwitcher() {
   );
 }
 
+/** The swatch: each template's own accent, so the three read as what they
+ *  switch to. The active one wears a soft ring instead of a glow. */
 function Dot({ template, active }: { template: UITemplate; active: boolean }) {
   return (
     <span
@@ -83,32 +71,8 @@ function Dot({ template, active }: { template: UITemplate; active: boolean }) {
         background: template.accent,
         display: 'inline-block',
         flexShrink: 0,
-        boxShadow: active ? `0 0 6px ${template.accentGlow}` : 'none',
+        boxShadow: active ? `0 0 0 2px ${withAlpha(template.accent, 0.28)}` : 'none',
       }}
     />
   );
 }
-
-const styles = {
-  wrapper: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: SPACE['3xs'],
-    padding: SPACE['3xs'],
-    borderRadius: RADIUS.sm,
-    border: '1px solid',
-  },
-  btn: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: SPACE.xs,
-    // M6: the button was 22px tall, under the 24x24 WCAG 2.2 target minimum.
-    minHeight: 24,
-    padding: `${SPACE['2xs']} ${SPACE.md}`,
-    border: '1px solid',
-    borderRadius: RADIUS.tight,
-    whiteSpace: 'nowrap' as const,
-    fontFamily: 'inherit',
-  },
-} as const;

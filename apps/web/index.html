@@ -6,20 +6,24 @@
     <title>Engram — AI Brain Visualization</title>
     <meta name="description" content="Universal AI Brain — visualize and interact with persistent memory" />
     <!--
-      Inter was previously named in the font-family stack (index.html, old
-      version) but never actually loaded, so the browser always fell through
-      to the system UI font — a typeface implied but absent. Loaded properly
-      here: preconnect to both Google Fonts hosts, then the stylesheet with
-      display=swap so text still paints in the fallback stack immediately and
-      swaps once Inter arrives, matching the font-loading rule (max two
-      families, swap, preload only the weights actually used).
+      IBM Plex Sans is self-hosted (src/styles/fonts.css; files under
+      /public/fonts). This dashboard is served by the Engram API process on
+      the owner's own machine, often with no route to the public internet, so
+      the Google Fonts <link> that used to sit here was a coin toss: the face
+      arrived late, or never. Only the latin regular is preloaded — it carries
+      nearly every glyph on the first paint. The medium and semibold weights
+      and the other scripts load on demand through their unicode-range.
+      `crossorigin` is required on a font preload even when same-origin, or
+      the browser fetches it twice.
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-    />
+    <link rel="preload" href="/fonts/ibm-plex-sans-400-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <!--
+      Archivo is preloaded alongside it because the plate — the app's primary
+      surface — is set in it end to end, and it is one variable file rather
+      than a weight per cut. Spectral is not: it sets the plate claims only,
+      which are chrome the reader reaches for rather than the first paint.
+    -->
+    <link rel="preload" href="/fonts/archivo-latin-wght-wdth.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Pre-paint background so there's no flash-of-white before global.css
          (imported from main.tsx) finishes loading. -->
     <style>

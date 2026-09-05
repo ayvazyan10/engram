@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { GLYPH, RADIUS, SPACE, STATUS, TYPE } from '../../lib/tokens.js';
+import { useTemplateStore } from '../../store/templateStore.js';
+import { GLYPH, RADIUS, SPACE, STATUS, TYPE, WEIGHT } from '../../lib/tokens.js';
 
 interface Props {
   children: ReactNode;
@@ -22,7 +23,9 @@ interface State {
  *
  * A class component is required here — React only supports error boundaries
  * via `getDerivedStateFromError`/`componentDidCatch`, there is no hook
- * equivalent.
+ * equivalent. It reads the active template straight off the store instead
+ * (no hook needed for a synchronous read), so the one screen that appears
+ * when everything else has failed is still in the theme the user chose.
  */
 export default class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
@@ -43,12 +46,17 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     if (this.state.error) {
+      const t = useTemplateStore.getState().activeTemplate;
       return (
-        <div style={styles.wrap} role="alert">
-          <div style={styles.icon}>{GLYPH.warning}</div>
+        <div style={{ ...styles.wrap, background: t.rootBg, color: t.textPrimary }} role="alert">
+          <div style={styles.icon} aria-hidden="true">{GLYPH.warning}</div>
           <div style={styles.title}>Something went wrong</div>
-          <div style={styles.message}>{this.state.error.message}</div>
-          <button className="ec-hover-bright" style={styles.button} onClick={this.handleRetry}>
+          <div className="ec-wrap-anywhere" style={{ ...styles.message, color: t.textSecondary }}>{this.state.error.message}</div>
+          <button
+            className="ec-primary"
+            style={{ ...styles.button, background: t.accentStrong, color: t.onAccent }}
+            onClick={this.handleRetry}
+          >
             Try again
           </button>
         </div>
@@ -68,22 +76,18 @@ const styles = {
     width: '100%',
     gap: SPACE.sm,
     padding: SPACE.xl,
-    background: '#020817',
-    color: '#e2e8f0',
     textAlign: 'center' as const,
   },
-  icon: { fontSize: '32px', color: STATUS.danger },
-  title: { fontSize: TYPE.lg, fontWeight: 700 },
-  message: { fontSize: TYPE.sm, color: '#94a3b8', maxWidth: '440px' },
+  icon: { fontSize: TYPE.glyph, lineHeight: 1, color: STATUS.danger },
+  title: { fontSize: TYPE.xl, fontWeight: WEIGHT.semibold, letterSpacing: '-0.01em' },
+  message: { fontSize: TYPE.sm, lineHeight: 1.5, maxWidth: '440px' },
   button: {
     marginTop: SPACE.sm,
-    padding: '8px 20px',
+    padding: `${SPACE.xs} ${SPACE.xl}`,
     border: 'none',
     borderRadius: RADIUS.sm,
-    fontSize: TYPE.base,
-    fontWeight: 600,
-    background: '#6366f1',
-    color: '#ffffff',
-    cursor: 'pointer',
+    fontSize: TYPE.sm,
+    fontWeight: WEIGHT.semibold,
+    minHeight: 32,
   },
 } as const;

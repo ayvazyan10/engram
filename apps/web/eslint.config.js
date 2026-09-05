@@ -23,13 +23,17 @@ module.exports = [
     },
   },
   {
-    // react-three-fiber renders <mesh>, <pointLight>, <meshStandardMaterial>
+    // react-three-fiber renders <mesh>, <primitive>, <meshStandardMaterial>
     // and friends — three.js objects, not DOM elements. Their props
-    // (position, intensity, emissive, args, attach…) are unknown to
+    // (object, position, visible, args, attach…) are unknown to
     // eslint-plugin-react, which only knows the HTML/SVG attribute set, so
-    // every one of the 90 hits in this directory was a false positive.
-    // Scoped to the R3F tree: real DOM components keep the check.
-    files: ['src/components/canvas/**/*.{ts,tsx}'],
+    // every hit in this directory is a false positive.
+    //
+    // This used to be scoped to src/components/canvas, which held the one
+    // WebGL scene. That scene is gone and the R3F tree now lives in the two
+    // 3D plates, so the exemption follows it. Still narrowly scoped: every
+    // real DOM component in the app keeps the check.
+    files: ['src/components/plates/**/*.{ts,tsx}'],
     rules: { 'react/no-unknown-property': 'off' },
   },
 ];

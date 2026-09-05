@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Engram Plate Archive — three readings of one store</title>
+    <!--
+      Two families, one per register.
+
+        Archivo   the instrument. A grotesque drawn by Omnibus-Type for
+                  archival and administrative printing — forms, catalogues,
+                  registers. It carries a real width axis (62–125), which is
+                  what makes it worth loading: column headings are set in a
+                  narrow cut and figures in the normal cut, so register is
+                  carried by WIDTH rather than by tracked-out capitals. It has
+                  proper tabular figures.
+
+        Spectral  the observer's note. A screen-first text serif (Production
+                  Type). It carries the three demo claims and the masthead —
+                  the only running sentences in the harness, and the only text
+                  a reader actually reads rather than scans. Everything
+                  measured stays in Archivo, including every figure.
+
+      display=swap and two preconnects, so a blocked font request degrades to
+      the named fallbacks instead of to invisible text.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..112,200..700&family=Spectral:wght@200;300;400&display=swap"
+    />
+    <!-- Pre-paint the plate so there is no white flash before tokens.css. -->
+    <style>
+      html,
+      body,
+      #root {
+        background: #0b1315;
+        margin: 0;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

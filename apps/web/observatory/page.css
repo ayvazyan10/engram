@@ -1,0 +1,157 @@
+/**
+ * The comparison page's own layout. Kept apart from `tokens.css` so that file
+ * stays a pure token layer the rebuilt application can adopt verbatim.
+ *
+ * Two rules govern everything here:
+ *   the visualization bleeds — no card, no radius, no shadow, no frame;
+ *   the chrome is one band — everything else on the page fits in it or is cut.
+ */
+
+.obs-page {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ─── The band ────────────────────────────────────────────────────────────── */
+
+.obs-band {
+  padding: 12px 20px 11px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--plate);
+}
+
+.obs-band-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gap-section);
+  flex-wrap: wrap;
+}
+
+/* ─── The switch ──────────────────────────────────────────────────────────── */
+
+.obs-switch {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  background: var(--rule); /* the 1px gaps read as hairlines between items */
+  flex: 0 0 auto;
+}
+
+.obs-switch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 13px 6px;
+  background: var(--plate);
+  color: var(--ink-3);
+  text-align: left;
+  transition: color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.obs-switch-item:hover {
+  color: var(--ink-2);
+}
+
+/* Selection is marked by ink weight and a filled ground, not by a hue —
+   there is no accent colour in this system, and the two hues are spoken for. */
+.obs-switch-item[aria-pressed='true'] {
+  background: var(--rule);
+  color: var(--ink);
+}
+
+.obs-switch-name {
+  font-size: var(--t-figure);
+  font-weight: 600;
+  line-height: var(--lead-tight);
+  letter-spacing: -0.005em;
+}
+
+.obs-switch-dim {
+  color: inherit;
+  opacity: 0.62;
+}
+
+/* ─── The claim ───────────────────────────────────────────────────────────── */
+
+.obs-claim {
+  margin: 11px 0 0;
+  max-width: 62ch;
+}
+
+/* ─── The stamp ───────────────────────────────────────────────────────────── */
+
+.obs-stamp {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex: 0 1 auto;
+}
+
+.obs-cell {
+  padding: 0 14px;
+  border-left: 1px solid var(--rule);
+  min-width: 0;
+}
+
+.obs-cell:first-child {
+  border-left: none;
+}
+
+.obs-cell:last-child {
+  padding-right: 0;
+}
+
+.obs-cell-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.25;
+  margin-top: 1px;
+}
+
+/* The key, folded into the stamp: the bar beside the count is the colour that
+   count is drawn in, so the page never needs a separate legend block. */
+.obs-swatch {
+  width: 3px;
+  height: 13px;
+  flex: 0 0 auto;
+}
+
+.obs-cell-note {
+  font-size: var(--t-label);
+  color: var(--ink-3);
+  line-height: 1.3;
+  margin-top: 1px;
+}
+
+/* ─── The plate ───────────────────────────────────────────────────────────── */
+
+.obs-plate {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--plate);
+}
+
+.obs-message {
+  margin: 0;
+  padding: 28px 20px;
+  color: var(--ink-2);
+  font-family: var(--font-note);
+  font-size: var(--t-claim);
+  font-weight: 300;
+  max-width: 56ch;
+}
+
+/* Narrow windows: the stamp wraps below the switch rather than shrinking the
+   figures. Nothing here animates a layout property. */
+@media (max-width: 900px) {
+  .obs-stamp {
+    flex-wrap: wrap;
+    gap: 10px 0;
+  }
+}

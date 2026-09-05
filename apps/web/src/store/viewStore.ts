@@ -1,80 +1,42 @@
 import { create } from 'zustand';
-import type { MemoryRecord } from './memoryStore.js';
 import type { NeuronNode } from './neuralStore.js';
-import { hexToInt, TYPE_COLORS } from '../lib/tokens.js';
+import type { DemoModule } from '../lib/plate/contract.js';
+import { laidOutByLink } from '../components/plates/LaidOutByLink.js';
+import { overviewAndDetail } from '../components/plates/OverviewAndDetail.js';
+import { memoryRiver } from '../components/plates/MemoryRiver.js';
+import { axesAndChords } from '../components/plates/AxesAndChords.js';
+import { memoryMatrix } from '../components/plates/MemoryMatrix.js';
 
 /**
- * One honest layout, three framings of it.
+ * The five plates, and the one layout that feeds the inspector.
  *
- * Position used to be decorative: five views, five unrelated scatter functions,
- * none of which encoded anything about the memory beyond its type. A node's
- * place on screen told you nothing you could not read off its colour.
+ * What used to be here was three FRAMINGS of a single projection — Cosmos, the
+ * Neural Net's type bands, the Clusters' three volumes — each carrying a
+ * `ViewTheme` of fog, bloom, autorotation, camera and grid, because all three
+ * were rendered by one shared `NeuralCanvas`. All three were rejected, the
+ * canvas is gone, and every field in that theme went with it: a plate owns its
+ * own camera, its own atmosphere, and its own idea of what motion means, and
+ * nothing outside the plate can tell it otherwise.
  *
- * Now every view draws the SAME projection — the server's PCA of each memory's
- * 384-dimension embedding into a fixed world box (GET /api/graph/layout), so
- * two nodes near each other are near each other in meaning. The views differ in
- * how that projection is framed and art-directed, not in where they put things:
+ * What is left in this file is therefore two unrelated things that both happen
+ * to be "the view":
  *
- *   Cosmos    the projection as it is, free orbit — global structure
- *   Neural Net the projection with type pulled apart along X — bands you can
- *              compare, similarity still governing within each band
- *   Clusters  the projection folded into three per-type volumes — the view the
- *             audit found was the only one that worked, now with real
- *             within-cluster structure instead of hash noise
- *
- * Nebula and Galaxy are gone. Nebula was Cosmos with a bigger radius and the
- * type colours thrown away; Galaxy encoded nothing at all in position and could
- * not show the spiral it was named for (disc in XZ, camera inside that plane,
- * autoRotate about Y preserving the polar angle).
+ *   VIEWS          the five plates, each one its own `DemoModule` export, so
+ *                  the id, name, dimension and claim on the switch are the
+ *                  plate's own words and cannot drift from it.
+ *   sceneLayout    the projection pipeline that fills `neuralStore.neurons`.
+ *                  The plates do not read that array — they take `ObsData` —
+ *                  but NeuronInspector, the sidebar and the websocket
+ *                  reconciliation all do, so it stays. There is now exactly
+ *                  ONE layout: the projection as the server computed it, plus
+ *                  a sub-unit jitter. The banded and clustered variants were
+ *                  art direction for a renderer that no longer exists.
  */
 
-// ─── Canonical colour ─────────────────────────────────────────────────────────
-//
-// TYPE_COLORS is the app's single source of truth for memory-type colour, and
-// the footer legend has always drawn from it. Three view themes used to
-// override it with near-monochrome ramps (Neural Net's worst pair was ΔE 10.4 —
-// effectively one colour), which made the app's own legend false. Memory type is
-// the primary categorical variable here, so its encoding is invariant across
-// views: views differentiate on background, fog, bloom and geometry, never on
-// hue. See lib/__tests__/typeColorsSingleSource.test.ts.
-const CANONICAL_NEURON_COLORS = {
-  episodic: hexToInt(TYPE_COLORS.episodic),
-  semantic: hexToInt(TYPE_COLORS.semantic),
-  procedural: hexToInt(TYPE_COLORS.procedural),
-} as const;
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type ViewStyle = 'cosmos' | 'net' | 'clusters';
-
-export interface ViewCamera {
-  /** Direction the camera sits in, from the target. Normalised by the rig. */
-  direction: [number, number, number];
-  /** Half-extent of the content, in world units — what has to fit on screen. */
-  frameRadius: number;
-  /** Where the orbit pivots, for a layout that is not centred on the origin. */
-  target: [number, number, number];
-  fov: number;
-}
-
-export interface ViewTheme {
-  background: string;
-  /**
-   * Fog as a fraction of the camera distance, not absolute world units: the rig
-   * pushes the camera back on a narrow viewport, and absolute fog would swallow
-   * the whole scene on a phone while barely touching it on a desktop.
-   */
-  fog: { nearFactor: number; farFactor: number };
-  bloom: { intensity: number; threshold: number; smoothing: number };
-  autoRotateSpeed: number;
-  /** Always CANONICAL_NEURON_COLORS. Kept as a field so the renderer reads
-   *  colour from one place, not so views can disagree about it. */
-  colors: typeof CANONICAL_NEURON_COLORS;
-  camera: ViewCamera;
-  /** Ground plane, only where a horizontal reference means something. */
-  grid: boolean;
-  style: ViewStyle;
-}
+/** The plate boundary calls this a `DemoModule` and the plates export it under
+ *  that name; re-exported here so nothing outside has to reach past the store
+ *  into the contract to name what `VIEWS` holds. */
+export type { DemoModule };
 
 /** A placed memory as `GET /api/graph/layout` returns it. */
 export interface SceneNodeInput {
@@ -95,25 +57,15 @@ export interface SceneNodeInput {
 
 export type NeuronPosition = Omit<NeuronNode, 'activation' | 'tx' | 'ty' | 'tz'>;
 
-export interface ViewConfig {
-  id: string;
-  name: string;
-  icon: string;
-  description: string;
-  layout: (nodes: readonly SceneNodeInput[]) => NeuronPosition[];
-  theme: ViewTheme;
-}
-
 // ─── Deterministic hash ───────────────────────────────────────────────────────
 
 /**
  * murmur3's finalizer. The previous hash ended in a single `h ^= h >>> 15`,
  * which does not avalanche: with the salt appended LAST, two salts differing
  * only in their final character produced almost the same value. Measured over
- * 4,000 uuids: corr(cloud-x, cloud-y) = 0.978, corr(net-y, net-z) = 0.953, mean
- * absolute difference 0.008 where independent uniforms give 0.333. That is why
- * the "clusters" clouds rendered as straight diagonal rods — x, y and z were
- * the same number.
+ * 4,000 uuids: mean absolute difference 0.008 where independent uniforms give
+ * 0.333 — the three "independent" axes were one number, which is why the old
+ * Clusters clouds rendered as straight diagonal rods.
  *
  * Two fixes, both needed: the salt goes FIRST so it is mixed through every
  * subsequent byte, and the finalizer is a real avalanche.
@@ -142,14 +94,14 @@ export function idRandom(id: string, salt: string): number {
   return fmix32(h) / 4294967296;
 }
 
-// ─── Layout helpers ───────────────────────────────────────────────────────────
+// ─── The one layout ───────────────────────────────────────────────────────────
 
 /**
  * Jitter, and nothing else.
  *
- * The hash no longer decides where a memory goes — the projection does. Its one
- * remaining job is to pull apart nodes whose embeddings are identical: 42 of the
- * live store's 653 memories are job-generated reflections that embed to the same
+ * The hash does not decide where a memory goes — the projection does. Its one
+ * remaining job is to pull apart nodes whose embeddings are identical: dozens
+ * of this store's memories are job-generated reflections that embed to the same
  * vector, and without this they would occupy exactly one pixel.
  */
 const JITTER = 0.9;
@@ -158,8 +110,11 @@ function jitter(id: string, axis: string): number {
   return (idRandom(id, 'jitter-' + axis) - 0.5) * JITTER;
 }
 
-function base(n: SceneNodeInput, x: number, y: number, z: number): NeuronPosition {
-  return {
+/** The projection as the server computed it, moved only by the anti-overlap
+ *  jitter. The single canonical layout — every plate draws its own geometry
+ *  from `ObsData`, and this exists to fill `neuralStore.neurons`. */
+export function sceneLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
+  return nodes.map((n) => ({
     id: n.id,
     type: n.type,
     label: n.label,
@@ -169,156 +124,51 @@ function base(n: SceneNodeInput, x: number, y: number, z: number): NeuronPositio
     createdAtMs: Date.parse(n.createdAt),
     lastAccessedAtMs: n.lastAccessedAt ? Date.parse(n.lastAccessedAt) : null,
     projected: n.projected,
-    x: x + jitter(n.id, 'x'),
-    y: y + jitter(n.id, 'y'),
-    z: z + jitter(n.id, 'z'),
-  };
+    x: n.x + jitter(n.id, 'x'),
+    y: n.y + jitter(n.id, 'y'),
+    z: n.z + jitter(n.id, 'z'),
+  }));
 }
 
-/** Cosmos — the projection, untouched. */
-function projectionLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
-  return nodes.map((n) => base(n, n.x, n.y, n.z));
-}
-
-/** Neural Net — type separated along X, similarity still governing within a band. */
-const NET_BAND_X: Record<NeuronNode['type'], number> = {
-  episodic: -58,
-  semantic: 0,
-  procedural: 58,
-};
-/** How much of the projection's X survives inside a band. Small enough that
- *  bands never overlap (0.28 x 42 = 11.8 against a 58-unit gap). */
-const NET_X_COMPRESSION = 0.28;
-
-function bandedLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
-  return nodes.map((n) => base(n, NET_BAND_X[n.type] + n.x * NET_X_COMPRESSION, n.y, n.z));
-}
-
-/** Clusters — three volumes, each keeping its own internal projection. */
-const CLUSTER_CENTRE: Record<NeuronNode['type'], [number, number, number]> = {
-  episodic: [-44, 24, 0],
-  semantic: [44, 24, 0],
-  procedural: [0, -46, 0],
-};
-const CLUSTER_SCALE = 0.4;
-
-function clusteredLayout(nodes: readonly SceneNodeInput[]): NeuronPosition[] {
-  return nodes.map((n) => {
-    const [cx, cy, cz] = CLUSTER_CENTRE[n.type];
-    return base(n, cx + n.x * CLUSTER_SCALE, cy + n.y * CLUSTER_SCALE, cz + n.z * CLUSTER_SCALE);
-  });
-}
-
-// ─── Fallback when the projection is unavailable ──────────────────────────────
-
-/** Half-extent the server scales its projection into (GET /api/graph/layout). */
-export const WORLD_HALF_EXTENT = 42;
+// ─── The plates ───────────────────────────────────────────────────────────────
 
 /**
- * What the scene shows when `/api/graph/layout` cannot be reached.
+ * Order is a reading order, not a ranking.
  *
- * A deterministic sphere derived from ids alone — meaningless as a position,
- * and flagged `projected: false` so the renderer draws these hollow and the
- * scene key says "positions unavailable" rather than implying the arrangement
- * means something. This is a degraded mode, not a second layout.
+ * The two that need no WebGL come first, so the surface a cold load paints is
+ * the cheapest and the fastest to read; the two that put the store in a real
+ * volume come last. Nothing here re-states a plate's name, dimension or claim:
+ * every entry IS the module the plate exports, so the switch cannot describe a
+ * plate differently from how the plate describes itself.
  */
-export function fallbackSceneNodes(records: readonly MemoryRecord[]): SceneNodeInput[] {
-  return records.map((r) => {
-    const phi = Math.acos(1 - 2 * idRandom(r.id, 'fallback-u'));
-    const theta = idRandom(r.id, 'fallback-v') * Math.PI * 2;
-    const radius = WORLD_HALF_EXTENT * 0.85;
-    return {
-      id: r.id,
-      type: r.type,
-      label: r.concept ?? r.content.slice(0, 60),
-      importance: r.importance,
-      source: r.source,
-      accessCount: 0,
-      createdAt: r.createdAt,
-      lastAccessedAt: null,
-      x: radius * Math.sin(phi) * Math.cos(theta),
-      y: radius * Math.cos(phi),
-      z: radius * Math.sin(phi) * Math.sin(theta),
-      projected: false,
-    };
-  });
-}
-
-// ─── View configs ─────────────────────────────────────────────────────────────
-
-export const VIEWS: ViewConfig[] = [
-  {
-    id: 'cosmos',
-    name: 'Cosmos',
-    icon: '✦',
-    description: 'The whole projection, free orbit — near means similar',
-    layout: projectionLayout,
-    theme: {
-      background: '#03060f',
-      fog: { nearFactor: 0.72, farFactor: 2.35 },
-      bloom: { intensity: 1.05, threshold: 0.3, smoothing: 0.75 },
-      autoRotateSpeed: 0.18,
-      colors: CANONICAL_NEURON_COLORS,
-      camera: { direction: [0, 0.06, 1], frameRadius: 52, target: [0, 0, 0], fov: 50 },
-      grid: false,
-      style: 'cosmos',
-    },
-  },
-  {
-    id: 'neural',
-    name: 'Neural Net',
-    icon: '⬡',
-    description: 'Same projection, type separated into bands along one axis',
-    layout: bandedLayout,
-    theme: {
-      background: '#04090c',
-      fog: { nearFactor: 0.8, farFactor: 2.6 },
-      bloom: { intensity: 0.9, threshold: 0.32, smoothing: 0.6 },
-      autoRotateSpeed: 0,
-      colors: CANONICAL_NEURON_COLORS,
-      camera: { direction: [0, 0.17, 1], frameRadius: 74, target: [0, 0, 0], fov: 50 },
-      grid: true,
-      style: 'net',
-    },
-  },
-  {
-    id: 'clusters',
-    name: 'Clusters',
-    icon: '⊹',
-    description: 'Same projection, grouped into one volume per memory type',
-    layout: clusteredLayout,
-    theme: {
-      background: '#07070d',
-      fog: { nearFactor: 0.78, farFactor: 2.6 },
-      bloom: { intensity: 1.0, threshold: 0.3, smoothing: 0.7 },
-      autoRotateSpeed: 0.12,
-      colors: CANONICAL_NEURON_COLORS,
-      camera: { direction: [0, 0.05, 1], frameRadius: 72, target: [0, -10, 0], fov: 50 },
-      grid: false,
-      style: 'clusters',
-    },
-  },
+export const VIEWS: DemoModule[] = [
+  laidOutByLink,
+  overviewAndDetail,
+  memoryRiver,
+  axesAndChords,
+  memoryMatrix,
 ];
 
-export const DEFAULT_VIEW_ID = 'cosmos';
+export const DEFAULT_VIEW_ID = VIEWS[0]!.id;
 
 /**
- * Resolve a view id to one that exists.
+ * Resolve a plate id to one that exists.
  *
- * Nebula and Galaxy were removed, and `setView` used to store whatever id it
- * was handed even when no view matched — so a stale 'nebula' left the switcher
- * highlighting nothing while the canvas rendered Cosmos. An unknown id now
- * resolves to the default, id included.
+ * The three view styles this replaced — `cosmos`, `neural`, `clusters` — can
+ * still arrive from a URL hash or a persisted preference, exactly as `nebula`
+ * and `galaxy` did before them. An unknown id resolves to the default, id
+ * included, so the switch is never lit on nothing while the surface draws
+ * something else.
  */
-export function resolveView(id: string | null | undefined): ViewConfig {
-  return VIEWS.find((v) => v.id === id) ?? (VIEWS[0] as ViewConfig);
+export function resolveView(id: string | null | undefined): DemoModule {
+  return VIEWS.find((v) => v.id === id) ?? VIEWS[0]!;
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 interface ViewState {
   activeViewId: string;
-  activeView: ViewConfig;
+  activeView: DemoModule;
   setView: (id: string) => void;
 }
 

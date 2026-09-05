@@ -3,7 +3,7 @@ import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useTemplateStore, type UITemplate } from '../../store/templateStore.js';
 import {
-  GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_ICONS, TYPE_LABELS, withAlpha,
+  GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_LABELS, WEIGHT, withAlpha,
   type MemoryType,
 } from '../../lib/tokens.js';
 import { DataDot } from './DataMark.js';
@@ -87,30 +87,33 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
   return (
     <div style={styles.panel}>
       <div style={styles.header}>
-        <span style={{ ...styles.title, color: t.textMuted }}>Memory Graph</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SPACE.xs }}>
-          <span className="ec-tabular" title={countTitle} style={{ ...styles.count, color: t.textMuted, background: t.inputBg }}>
+        {/* "Memories", the same word the mobile tab bar and the status bar
+            use for this list — it was "MEMORY GRAPH", which is the canvas. */}
+        <div style={styles.headerLeft}>
+          <span style={{ ...styles.title, color: t.textPrimary }}>{searchQuery ? 'Results' : 'Memories'}</span>
+          <span className="ec-tabular" title={countTitle} style={{ ...styles.count, color: t.textMuted, borderColor: t.panelBorder }}>
             {countLabel}
           </span>
-          {onStore && (
-            <button
-              className="ec-hover-bright"
-              onClick={onStore}
-              title="Store new memory"
-              aria-label="Store new memory"
-              style={{
-                ...styles.storeBtn,
-                background: `linear-gradient(135deg, ${t.accent}, ${t.accentStrong})`,
-                color: t.onAccent,
-              }}
-            >
-              +
-            </button>
-          )}
         </div>
+        {onStore && (
+          <button
+            className="ec-primary"
+            onClick={onStore}
+            title="Store new memory"
+            aria-label="Store new memory"
+            style={{ ...styles.storeBtn, background: t.accentStrong, color: t.onAccent }}
+          >
+            <svg viewBox="0 0 16 16" fill="none" style={{ width: 12, height: 12 }} aria-hidden="true">
+              <path d="M8 2.5v11M2.5 8h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      {/* Type filter pills — real filters (L1) */}
+      {/* Type filter pills — real filters (L1). The dot is the mark that
+          wears the type colour (F2); the count is ink. Pressed: the pill
+          takes a tint of its type and its hairline turns to the type colour.
+          Dimmed: another type is pressed and this one is filtered out. */}
       <div style={styles.typeSummary}>
         {TYPES.map((type) => {
           const active = activeTypes.has(type);
@@ -125,22 +128,15 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
               onClick={() => toggleType(type)}
               style={{
                 ...styles.typePill,
-                // F2: the type-coloured border is this pill's mark, and it is
-                // now unconditional — `opacity` already says "filtered out",
-                // so swapping the border to a neutral was throwing away the
-                // only non-text carrier of the hue.
-                borderColor: TYPE_COLORS[type],
-                background: active ? withAlpha(TYPE_COLORS[type], 0.14) : withAlpha(t.textPrimary, 0.02),
-                opacity: dimmed ? 0.55 : 1,
+                borderColor: active ? TYPE_COLORS[type] : t.panelBorder,
+                background: active ? withAlpha(TYPE_COLORS[type], 0.14) : t.inputBg,
+                opacity: dimmed ? 0.5 : 1,
               }}
             >
-              {/* Glyph + count only: the sidebar is too narrow for three
-                  labelled pills. The group header directly below spells the
-                  type out, so the legend is on screen rather than hidden in a
-                  tooltip. F2: the glyph is ink — the pill's border is the
-                  mark that wears the data colour. */}
-              <span aria-hidden="true" style={{ color: active ? t.textPrimary : t.textSecondary, fontSize: TYPE.sm }}>{TYPE_ICONS[type]}</span>
-              <span aria-hidden="true" className="ec-tabular" style={{ color: active ? t.textPrimary : t.textMuted, fontSize: TYPE.xs }}>{grouped[type]?.length ?? 0}</span>
+              <DataDot color={TYPE_COLORS[type]} size={7} />
+              <span aria-hidden="true" className="ec-tabular" style={{ color: active ? t.textPrimary : t.textSecondary, fontSize: TYPE.sm, fontWeight: WEIGHT.medium }}>
+                {grouped[type]?.length ?? 0}
+              </span>
             </button>
           );
         })}
@@ -180,13 +176,12 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
           : TYPES.map((type) =>
               (activeTypes.size === 0 || activeTypes.has(type)) && grouped[type] && grouped[type]!.length > 0 ? (
                 <div key={type}>
-                  <div style={{ ...styles.groupLabel, color: t.textMuted }}>
+                  <div style={{ ...styles.groupLabel, color: t.textSecondary }}>
                     {/* F2: was the glyph painted in the type colour at 11px.
-                        The dot is the mark; the glyph and the word are ink. */}
+                        The dot is the mark; the word is ink. */}
                     <DataDot color={TYPE_COLORS[type]} size={7} />
-                    <span aria-hidden="true">{TYPE_ICONS[type]}</span>
                     {TYPE_LABELS[type]}
-                    <span className="ec-tabular" style={{ ...styles.groupCount, background: t.inputBg, color: t.textMuted }}>{grouped[type]!.length}</span>
+                    <span className="ec-tabular" style={{ ...styles.groupCount, color: t.textMuted }}>{grouped[type]!.length}</span>
                   </div>
                   {grouped[type]!.map((r) => (
                     <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
@@ -197,11 +192,17 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
 
         {displayList.length === 0 && !isSearching && !loading && !error && (
           <div style={{ ...styles.empty, color: t.textMuted }}>
-            {searchQuery
-              ? `${GLYPH.empty} No results found`
-              : activeTypes.size > 0
-                ? `${GLYPH.empty} No memories of this type`
-                : `${GLYPH.empty} No memories yet`}
+            <span aria-hidden="true" style={{ ...styles.emptyGlyph, color: t.panelBorder }}>{GLYPH.empty}</span>
+            <span style={{ ...styles.emptyTitle, color: t.textSecondary }}>
+              {searchQuery ? 'No results found' : activeTypes.size > 0 ? 'No memories of this type' : 'No memories yet'}
+            </span>
+            <span style={styles.emptyHint}>
+              {searchQuery
+                ? 'Try different words, or clear the search to see everything.'
+                : activeTypes.size > 0
+                  ? 'Press the pill again to clear the filter.'
+                  : 'Store one with the + button above, or through any connected AI.'}
+            </span>
           </div>
         )}
       </div>
@@ -217,23 +218,29 @@ function MemoryItem({ record, selected, onClick, t }: { record: MemoryRecord; se
   return (
     <button
       className="ec-hover-tint"
+      aria-current={selected || undefined}
       style={{
         ...styles.item,
+        // 8%, not more: Mono's accent is white, and at 10% the tint lifted
+        // the ground under the row's muted date to 4.32:1.
         ...(selected ? { background: withAlpha(t.accent, 0.08) } : {}),
       }}
       onClick={onClick}
     >
-      <div style={{ ...styles.typeBar, background: color }} />
+      {/* The bar is the row's type mark. It comes up to full strength on the
+          selected row, so the selection reads in the mark as well as in the
+          tint behind it. */}
+      <div style={{ ...styles.typeBar, background: color, opacity: selected ? 1 : 0.55 }} />
       <div style={styles.itemBody}>
         {/* H1/L3: the concept alone made 30% of rows byte-identical to
             another row, and the manual '…' fired on any label >= 40 chars
             whether or not anything had been cut. The excerpt distinguishes
             the row; the CSS ellipsis handles the cutting. */}
-        <div style={{ ...styles.itemLabel, color: t.textPrimary }}>{primary}</div>
+        <div style={{ ...styles.itemLabel, color: t.textPrimary, fontWeight: selected ? WEIGHT.medium : WEIGHT.regular }}>{primary}</div>
         {secondary && <div style={{ ...styles.itemExcerpt, color: t.textMuted }}>{secondary}</div>}
         <div style={styles.itemFooter}>
           <span className="ec-tabular" style={{ color: t.textMuted }}>{formatShortDate(record.createdAt)}</span>
-          <div style={{ ...styles.importanceBar, background: t.inputBg }}>
+          <div style={{ ...styles.importanceBar, background: t.inputBg }} title={`Importance ${importancePct}%`}>
             <div style={{ ...styles.importanceFill, width: `${importancePct}%`, background: color }} />
           </div>
         </div>
@@ -253,14 +260,23 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: `${SPACE.lg} ${SPACE.lg} ${SPACE.sm}`,
+    gap: SPACE.sm,
+    padding: `${SPACE.md} ${SPACE.lg} ${SPACE.sm}`,
   },
-  title: { fontSize: TYPE.sm, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.08em' },
-  count: { fontSize: TYPE.sm, padding: `${SPACE['3xs']} ${SPACE.sm}`, borderRadius: RADIUS.pill, fontWeight: 600, whiteSpace: 'nowrap' as const },
+  headerLeft: { display: 'flex', alignItems: 'center', gap: SPACE.sm, minWidth: 0 },
+  title: { fontSize: TYPE.base, fontWeight: WEIGHT.semibold, letterSpacing: '-0.005em' },
+  count: {
+    fontSize: TYPE.xs,
+    padding: `1px ${SPACE.xs}`,
+    borderRadius: RADIUS.pill,
+    border: '1px solid',
+    whiteSpace: 'nowrap' as const,
+    lineHeight: 1.4,
+  },
   storeBtn: {
     // M6: was 22x22, under the 24x24 WCAG 2.2 target minimum.
-    width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    border: 'none', borderRadius: RADIUS.sm, fontSize: TYPE.lg, fontWeight: 700, cursor: 'pointer', lineHeight: 1,
+    width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: 'none', borderRadius: RADIUS.sm, flexShrink: 0,
   },
   typeSummary: {
     display: 'flex',
@@ -271,9 +287,9 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: SPACE['2xs'],
+    gap: SPACE.xs,
     flex: 1,
-    minHeight: 24,
+    minHeight: 26,
     padding: `${SPACE['3xs']} ${SPACE.xs}`,
     borderRadius: RADIUS.sm,
     border: '1px solid',
@@ -307,7 +323,7 @@ const styles = {
   },
   retryBtn: {
     fontSize: TYPE.xs,
-    fontWeight: 600,
+    fontWeight: WEIGHT.medium,
     background: 'transparent',
     border: '1px solid',
     borderRadius: RADIUS.tight,
@@ -325,15 +341,13 @@ const styles = {
     gap: SPACE.xs,
     padding: `${SPACE.md} ${SPACE.lg} ${SPACE['2xs']}`,
     fontSize: TYPE.xs,
-    fontWeight: 700,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.06em',
+    fontWeight: WEIGHT.medium,
+    letterSpacing: '0.01em',
   },
   groupCount: {
     marginLeft: 'auto',
     fontSize: TYPE.xs,
-    padding: `1px ${SPACE.xs}`,
-    borderRadius: RADIUS.pill,
+    fontWeight: WEIGHT.regular,
   },
   item: {
     display: 'flex',
@@ -348,13 +362,12 @@ const styles = {
     width: `${TYPE_BAR_WIDTH}px`,
     flexShrink: 0,
     borderRadius: `0 ${SPACE['3xs']} ${SPACE['3xs']} 0`,
-    opacity: 0.7,
   },
   itemBody: {
     flex: 1,
     // L5: text starts at SPACE.lg from the panel edge, exactly like the
     // header, the pills and the group labels — the bar eats the first 3px.
-    padding: `${SPACE.sm} ${SPACE.lg} ${SPACE.sm} calc(${SPACE.lg} - ${TYPE_BAR_WIDTH}px)`,
+    padding: `${SPACE.sm} ${SPACE.lg} 9px calc(${SPACE.lg} - ${TYPE_BAR_WIDTH}px)`,
     minWidth: 0,
   },
   itemLabel: {
@@ -362,15 +375,15 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
-    lineHeight: 1.3,
+    lineHeight: 1.35,
   },
   itemExcerpt: {
     fontSize: TYPE.xs,
-    marginTop: SPACE['3xs'],
+    marginTop: '1px',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
-    lineHeight: 1.35,
+    lineHeight: 1.4,
   },
   itemFooter: {
     display: 'flex',
@@ -378,6 +391,7 @@ const styles = {
     gap: SPACE.sm,
     marginTop: SPACE.xs,
     fontSize: TYPE.xs,
+    lineHeight: 1,
   },
   importanceBar: {
     flex: 1,
@@ -388,11 +402,17 @@ const styles = {
   importanceFill: {
     height: '100%',
     borderRadius: '1px',
-    opacity: 0.7,
+    opacity: 0.75,
   },
   empty: {
-    padding: `${SPACE['3xl']} ${SPACE.lg}`,
-    fontSize: TYPE.base,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    gap: SPACE['2xs'],
+    padding: `${SPACE['3xl']} ${SPACE.xl}`,
     textAlign: 'center' as const,
   },
+  emptyGlyph: { fontSize: TYPE.glyph, lineHeight: 1, marginBottom: SPACE.xs },
+  emptyTitle: { fontSize: TYPE.base, fontWeight: WEIGHT.medium },
+  emptyHint: { fontSize: TYPE.xs, lineHeight: 1.5, maxWidth: 220 },
 } as const;

@@ -67,14 +67,17 @@ export function TypeTag({ type, style }: { type: MemoryType; style?: CSSProperti
   );
 }
 
+// Sentence case. The badge used to be tracked capitals, which made a
+// two-syllable type name the loudest thing on a card; the dot beside it is
+// what carries the identity, and the word only has to be readable.
 const tagStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: SPACE['2xs'],
   fontSize: TYPE.xs,
-  fontWeight: WEIGHT.semibold,
-  padding: `${SPACE['3xs']} ${SPACE.sm}`,
+  fontWeight: WEIGHT.medium,
+  lineHeight: 1.4,
+  padding: `${SPACE['3xs']} ${SPACE.xs}`,
   borderRadius: RADIUS.tight,
-  textTransform: 'uppercase',
-  letterSpacing: '0.03em',
+  letterSpacing: '0.01em',
 };

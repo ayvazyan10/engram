@@ -64,8 +64,18 @@ function meanAbsoluteDifference(a: readonly number[], b: readonly number[]): num
   return a.reduce((sum, value, i) => sum + Math.abs(value - b[i]!), 0) / a.length;
 }
 
-/** Every salt the app actually uses, including the near-identical suffixes. */
-const SALTS = ['jitter-x', 'jitter-y', 'jitter-z', 'fallback-u', 'fallback-v'];
+/**
+ * Every salt the app actually uses. It is three now, not five: the two
+ * `fallback-*` salts belonged to the id-derived sphere the scene fell back to
+ * when the projection was unreachable, and that fallback is gone — a plate is
+ * an argument about this store's real shape, and there is no longer a scene key
+ * to confess that the positions mean nothing.
+ *
+ * The three that remain are the ones the defect was actually about: 'jitter-x',
+ * 'jitter-y' and 'jitter-z' differ only in their final character, which is
+ * exactly the case the old hash could not separate.
+ */
+const SALTS = ['jitter-x', 'jitter-y', 'jitter-z'];
 
 const IDS = makeIds(4000);
 

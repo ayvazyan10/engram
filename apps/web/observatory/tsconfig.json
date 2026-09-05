@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tooling/tsconfig/react.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "types": ["vite/client"],
+    "paths": {
+      "@obs/*": ["./*"]
+    }
+  },
+  "include": ["."],
+  "exclude": ["node_modules"]
+}

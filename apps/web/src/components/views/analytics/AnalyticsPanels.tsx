@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import { useTemplateStore, type UITemplate } from '../../../store/templateStore.js';
 import type { AnalyticsData, WindowedAnalytics } from '../../../store/analyticsStore.js';
-import { RADIUS, SERIES, SPACE, TYPE } from '../../../lib/tokens.js';
+import { RADIUS, SERIES, SPACE, TYPE, WEIGHT } from '../../../lib/tokens.js';
 import { toPlainText } from '../../../lib/plainText.js';
 import { DataDot } from '../../ui/DataMark.js';
 import ChartPanel from './ChartPanel.js';
@@ -59,8 +59,8 @@ export function StatsRow({ data }: { data: AnalyticsData }) {
 function StatCard({ label, value, sub, t }: { label: string; value: string | number; sub?: string; t: UITemplate }) {
   return (
     <div style={{ ...s.statCard, background: t.cardBg, borderColor: t.panelBorder }}>
-      <div style={{ fontSize: TYPE.display, fontWeight: 700, color: t.textPrimary, letterSpacing: '-0.02em' }}>{value}</div>
-      <div style={{ fontSize: TYPE.sm, color: t.textSecondary, marginTop: SPACE['2xs'] }}>{label}</div>
+      <div style={{ fontSize: TYPE.display, fontWeight: WEIGHT.semibold, color: t.textPrimary, letterSpacing: '-0.025em', lineHeight: 1.1 }}>{value}</div>
+      <div style={{ fontSize: TYPE.sm, fontWeight: WEIGHT.medium, color: t.textSecondary, marginTop: SPACE.xs }}>{label}</div>
       {sub && <div className="ec-tabular" style={{ fontSize: TYPE.xs, color: t.textMuted, marginTop: SPACE['3xs'] }}>{sub}</div>}
     </div>
   );
@@ -315,7 +315,7 @@ const s = {
   statCard: {
     border: '1px solid',
     borderRadius: RADIUS.lg,
-    padding: `${SPACE.xl} ${SPACE.xl}`,
+    padding: `${SPACE.lg} ${SPACE.xl}`,
   },
   legend: {
     display: 'flex',
@@ -341,7 +341,7 @@ const s = {
   },
   conceptName: {
     fontSize: TYPE.base,
-    fontWeight: 500,
+    fontWeight: WEIGHT.medium,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,

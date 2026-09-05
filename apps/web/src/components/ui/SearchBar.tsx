@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { api } from '../../lib/api.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { RADIUS, SPACE, STATUS, TYPE, withAlpha } from '../../lib/tokens.js';
+import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 
 export default function SearchBar() {
   const [input, setInput] = useState('');
@@ -71,35 +71,25 @@ export default function SearchBar() {
   // Right pattern for a custom (non-:focus-visible) focus treatment: outline
   // is compensated for by a computed border + box-shadow, never just removed
   // (V2). This one stays hand-rolled — a plain outline ring would clip
-  // against the rounded pill — but every *other* interactive element in the
-  // app now gets its ring from the global :focus-visible rule.
-  const borderColor = focused ? t.accent : hasQuery ? withAlpha(t.accent, 0.6) : t.panelBorder;
-  const boxShadow   = focused ? `0 0 0 3px ${t.accentGlow}, 0 2px 8px rgba(0,0,0,0.4)` : '0 2px 6px rgba(0,0,0,0.3)';
-  const iconStroke  = focused ? t.accent : t.textMuted;
+  // against the rounded field — but every *other* interactive element in the
+  // app now gets its ring from the global :focus-visible rule. The field is
+  // flat when idle; the only shadow it ever wears is the focus ring.
+  const borderColor = focused ? t.accent : hasQuery ? withAlpha(t.accent, 0.55) : t.panelBorder;
+  const boxShadow   = focused ? `0 0 0 3px ${t.accentGlow}` : 'none';
+  const iconStroke  = focused || hasQuery ? t.accent : t.textMuted;
 
   return (
-    <div style={{ ...styles.wrapper, background: `linear-gradient(180deg, ${t.panelBg} 0%, ${t.rootBg} 100%)`, borderBottomColor: t.panelBorder }}>
-      {/* Label row */}
-      <div style={styles.labelRow}>
-        <span style={{ ...styles.label, color: t.textMuted }}>Search</span>
-        {hasQuery && (
-          <span style={{ ...styles.activeTag, color: t.accent }}>
-            <span style={{ ...styles.activeDot, background: t.accent, boxShadow: `0 0 5px ${t.accent}` }} />
-            semantic recall active
-          </span>
-        )}
-      </div>
-
+    <div style={{ ...styles.wrapper, background: t.panelBg, borderBottomColor: t.panelBorder }}>
       {/* Input row */}
       <div style={{ ...styles.container, background: t.inputBg, borderColor, boxShadow }}>
         {/* Search icon / spinner */}
         <div style={styles.iconWrap}>
           {loading ? (
-            <svg style={styles.spinner} viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke={t.accentStrong} strokeWidth="2" strokeDasharray="28" strokeDashoffset="10" strokeLinecap="round" />
+            <svg style={styles.spinner} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" stroke={t.accent} strokeWidth="2" strokeDasharray="28" strokeDashoffset="10" strokeLinecap="round" />
             </svg>
           ) : (
-            <svg style={styles.searchIcon} viewBox="0 0 20 20" fill="none">
+            <svg style={styles.searchIcon} viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <circle cx="8.5" cy="8.5" r="5.5" stroke={iconStroke} strokeWidth="1.5" />
               <path d="M13 13l3.5 3.5" stroke={iconStroke} strokeWidth="1.5" strokeLinecap="round" />
             </svg>
@@ -118,34 +108,31 @@ export default function SearchBar() {
             if (e.key === 'Escape') handleClear();
           }}
           placeholder="Ask your memory anything…"
+          aria-label="Search memories"
           spellCheck={false}
           autoComplete="off"
         />
 
         {/* Clear button */}
         {input && (
-          <button className="ec-hover-bright" style={{ ...styles.clearBtn, background: t.cardBg }} onClick={handleClear} title="Clear (Esc)">
-            <svg viewBox="0 0 16 16" fill="none" style={{ width: 10, height: 10 }}>
-              <path d="M3 3l10 10M13 3L3 13" stroke={t.textMuted} strokeWidth="1.8" strokeLinecap="round" />
+          <button className="ec-hover-tint" style={{ ...styles.clearBtn, color: t.textMuted }} onClick={handleClear} title="Clear (Esc)" aria-label="Clear search">
+            <svg viewBox="0 0 16 16" fill="none" style={{ width: 10, height: 10 }} aria-hidden="true">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
           </button>
         )}
 
         {/* Search button */}
         <button
-          className="ec-hover-bright"
-          style={{
-            ...styles.searchBtn,
-            background: `linear-gradient(135deg, ${t.accent} 0%, ${t.accentStrong} 100%)`,
-            boxShadow: `0 2px 8px ${t.accentGlow}`,
-            ...(loading ? styles.searchBtnLoading : {}),
-          }}
+          className="ec-primary"
+          style={{ ...styles.searchBtn, background: t.accentStrong, color: t.onAccent }}
           onClick={handleSearch}
           disabled={loading}
           title="Search (Enter)"
+          aria-label="Search"
         >
-          <svg viewBox="0 0 16 16" fill="none" style={{ width: 13, height: 13 }}>
-            <path d="M3 8h10M9 4l4 4-4 4" stroke={t.onAccent} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <svg viewBox="0 0 16 16" fill="none" style={{ width: 13, height: 13 }} aria-hidden="true">
+            <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
       </div>
@@ -160,15 +147,23 @@ export default function SearchBar() {
         </div>
       )}
 
-      {/* Hint row */}
+      {/* One line under the field, doing one job at a time: the two keys
+          while idle, and the live query once semantic recall is on. The old
+          "SEARCH" eyebrow above the field is gone — the placeholder already
+          says what the field is. */}
       <div style={{ ...styles.hint, color: t.textMuted }}>
-        <span>↵ search</span>
-        <span>·</span>
-        <span>esc clear</span>
-        {hasQuery && (
+        {hasQuery ? (
           <>
-            <span>·</span>
-            <span style={{ color: t.accent }}>&quot;{searchQuery}&quot;</span>
+            <span aria-hidden="true" style={{ ...styles.activeDot, background: t.accent }} />
+            <span style={{ color: t.textSecondary, flexShrink: 0 }}>Semantic recall for</span>
+            <span style={{ ...styles.query, color: t.textPrimary }} title={searchQuery}>&ldquo;{searchQuery}&rdquo;</span>
+          </>
+        ) : (
+          <>
+            <kbd className="ec-kbd">Enter</kbd>
+            <span>search</span>
+            <kbd className="ec-kbd" style={{ marginLeft: SPACE.xs }}>Esc</kbd>
+            <span>clear</span>
           </>
         )}
       </div>
@@ -178,41 +173,16 @@ export default function SearchBar() {
 
 const styles = {
   wrapper: {
-    padding: `${SPACE.lg} ${SPACE.lg} ${SPACE.sm}`,
+    padding: `${SPACE.md} ${SPACE.lg} ${SPACE.sm}`,
     borderBottom: '1px solid',
-  },
-  labelRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: SPACE.sm,
-  },
-  label: {
-    fontSize: TYPE.xs,
-    fontWeight: 700,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.1em',
-  },
-  activeTag: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: SPACE['2xs'],
-    fontSize: TYPE.micro,
-    fontWeight: 500,
-  },
-  activeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: '50%',
-    display: 'inline-block',
   },
   container: {
     display: 'flex',
     alignItems: 'center',
     border: '1px solid',
-    borderRadius: RADIUS.lg,
-    padding: '3px 3px 3px 10px',
-    gap: '2px',
+    borderRadius: RADIUS.md,
+    padding: '3px 3px 3px 9px',
+    gap: SPACE['3xs'],
   },
   iconWrap: {
     display: 'flex',
@@ -235,15 +205,15 @@ const styles = {
     flex: 1,
     background: 'transparent',
     border: 'none',
-    padding: `${SPACE.sm} ${SPACE.xs}`,
-    fontSize: TYPE.md,
+    padding: `${SPACE.xs} ${SPACE.xs}`,
+    fontSize: TYPE.base,
+    lineHeight: 1.4,
     // M5: form controls do not inherit font-family. Without this the search
     // field — the most prominent input in the app — computed to Arial while
-    // everything around it was Inter.
+    // everything around it was the body face.
     fontFamily: 'inherit',
     outline: 'none',
     minWidth: 0,
-    letterSpacing: '0.01em',
   },
   clearBtn: {
     display: 'flex',
@@ -252,6 +222,7 @@ const styles = {
     // M6: was 22x22, under the 24x24 WCAG 2.2 target minimum.
     width: 24,
     height: 24,
+    background: 'transparent',
     border: 'none',
     borderRadius: RADIUS.sm,
     flexShrink: 0,
@@ -260,30 +231,42 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 32,
-    height: 32,
+    width: 28,
+    height: 28,
     border: 'none',
     borderRadius: RADIUS.sm,
     flexShrink: 0,
   },
-  searchBtnLoading: {
-    opacity: 0.5,
-    cursor: 'not-allowed' as const,
-  },
   errorBanner: {
     marginTop: SPACE.xs,
-    padding: '6px 10px',
+    padding: `${SPACE.xs} ${SPACE.sm}`,
     borderRadius: RADIUS.sm,
     fontSize: TYPE.xs,
+    lineHeight: 1.4,
   },
   hint: {
     display: 'flex',
-    gap: '5px',
-    marginTop: SPACE.xs,
+    alignItems: 'center',
+    gap: SPACE['2xs'],
+    marginTop: SPACE.sm,
+    minHeight: 16,
     fontSize: TYPE.xs,
-    paddingLeft: '2px',
+    paddingLeft: SPACE['3xs'],
     overflow: 'hidden',
     whiteSpace: 'nowrap' as const,
+  },
+  activeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    display: 'inline-block',
+    flexShrink: 0,
+    marginRight: SPACE['3xs'],
+  },
+  query: {
+    minWidth: 0,
+    overflow: 'hidden',
     textOverflow: 'ellipsis',
+    fontWeight: WEIGHT.medium,
   },
 } as const;

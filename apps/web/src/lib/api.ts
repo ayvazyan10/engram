@@ -235,9 +235,12 @@ export const api = {
   /**
    * GET /api/decay/policy — the server's own decay configuration.
    *
-   * The 3D scene encodes recency as brightness, and the half-life it decays on
-   * has to be the server's, not a constant the client picked. See
-   * lib/decayPolicy.ts for why there is no client-side default.
+   * Every plate computes each memory's retention from this half-life, so it
+   * has to be the server's rather than a constant the client picked: a client
+   * default would draw a decay curve the store is not actually on, and it
+   * would keep drawing it after the server's policy changed. There is
+   * deliberately no fallback — see lib/plate/data.ts, which fails the load
+   * rather than guessing.
    */
   getDecayPolicy: () =>
     request<{ halfLifeDays: number; archiveThreshold: number }>('/decay/policy'),

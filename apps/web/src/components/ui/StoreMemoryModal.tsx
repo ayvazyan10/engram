@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import type { MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { RADIUS, SPACE, STATUS, TYPE, withAlpha } from '../../lib/tokens.js';
+import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import ModalShell from './ModalShell.js';
 
 interface Props {
@@ -74,20 +74,17 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
         <>
           <button
             className="ec-hover-tint"
-            style={{ ...styles.cancelBtn, background: t.inputBg, borderColor: t.panelBorder, color: t.textSecondary }}
+            style={{ ...styles.cancelBtn, borderColor: t.panelBorder, color: t.textSecondary }}
             onClick={onClose}
           >
             Cancel
           </button>
+          {/* One filled button per surface, and it is flat: the template's
+              accentStrong, the shade that keeps its label at 4.5:1. The
+              diagonal accent gradient and the glow it used to wear are gone. */}
           <button
-            className="ec-hover-bright"
-            style={{
-              ...styles.saveBtn,
-              background: `linear-gradient(135deg, ${t.accent} 0%, ${t.accentStrong} 100%)`,
-              color: t.onAccent,
-              boxShadow: `0 2px 8px ${t.accentGlow}`,
-              opacity: saving || !content.trim() ? 0.5 : 1,
-            }}
+            className="ec-primary"
+            style={{ ...styles.saveBtn, background: t.accentStrong, color: t.onAccent }}
             onClick={handleSave}
             disabled={saving || !content.trim()}
           >
@@ -123,7 +120,7 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
         </div>
         <div style={styles.field}>
           <label htmlFor="store-memory-importance" style={{ ...styles.label, color: t.textMuted }}>
-            Importance: <span className="ec-tabular">{Math.round(importance * 100)}%</span>
+            Importance <span className="ec-tabular" style={{ color: t.textSecondary }}>{Math.round(importance * 100)}%</span>
           </label>
           <input
             id="store-memory-importance"
@@ -152,34 +149,35 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
 
 const styles = {
   textarea: {
-    width: '100%', border: '1px solid', borderRadius: RADIUS.md,
-    padding: `${SPACE.sm} ${SPACE.md}`, fontSize: TYPE.md, resize: 'vertical' as const,
-    fontFamily: 'inherit', lineHeight: 1.5,
+    width: '100%', border: '1px solid', borderRadius: RADIUS.sm,
+    padding: `${SPACE.sm} ${SPACE.md}`, fontSize: TYPE.base, resize: 'vertical' as const,
+    fontFamily: 'inherit', lineHeight: 1.5, minHeight: 96,
   },
   row: { display: 'flex', gap: SPACE.md },
   field: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: SPACE['2xs'], minWidth: 0 },
-  label: { fontSize: TYPE.xs, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
+  // Sentence case: a field label names the field, it does not announce it.
+  label: { fontSize: TYPE.xs, fontWeight: WEIGHT.medium, letterSpacing: '0.01em' },
   select: {
     border: '1px solid', borderRadius: RADIUS.sm,
-    padding: `${SPACE.xs} ${SPACE.sm}`, fontSize: TYPE.base,
+    padding: `${SPACE.xs} ${SPACE.sm}`, fontSize: TYPE.sm, minHeight: 30,
     // M5: a select does not inherit font-family, so this one rendered in the
-    // UA default while the textarea beside it was Inter.
+    // UA default while the textarea beside it was the body face.
     fontFamily: 'inherit',
   },
   input: {
     border: '1px solid', borderRadius: RADIUS.sm,
-    padding: `${SPACE.xs} ${SPACE.sm}`, fontSize: TYPE.base,
+    padding: `${SPACE.xs} ${SPACE.sm}`, fontSize: TYPE.sm, minHeight: 30,
     fontFamily: 'inherit',
     minWidth: 0,
   },
-  range: { width: '100%' },
-  error: { fontSize: TYPE.base, padding: `${SPACE.xs} ${SPACE.md}`, borderRadius: RADIUS.sm },
+  range: { width: '100%', minHeight: 30 },
+  error: { fontSize: TYPE.sm, padding: `${SPACE.xs} ${SPACE.md}`, borderRadius: RADIUS.sm, lineHeight: 1.45 },
   cancelBtn: {
-    padding: `${SPACE.sm} ${SPACE.lg}`, border: '1px solid', borderRadius: RADIUS.sm,
-    fontSize: TYPE.base, fontWeight: 600, fontFamily: 'inherit',
+    padding: `${SPACE.xs} ${SPACE.lg}`, background: 'transparent', border: '1px solid', borderRadius: RADIUS.sm,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.medium, fontFamily: 'inherit', minHeight: 30,
   },
   saveBtn: {
-    padding: `${SPACE.sm} ${SPACE.xl}`, border: 'none', borderRadius: RADIUS.sm,
-    fontSize: TYPE.base, fontWeight: 600, fontFamily: 'inherit',
+    padding: `${SPACE.xs} ${SPACE.xl}`, border: 'none', borderRadius: RADIUS.sm,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.semibold, fontFamily: 'inherit', minHeight: 30,
   },
 } as const;

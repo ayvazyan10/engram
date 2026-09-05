@@ -110,9 +110,12 @@ describe('no component paints text in a memory-type colour (F2)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the 3D labels are ink — every ambient label used to be its node\'s type colour', () => {
-    const labels = readFileSync(join(COMPONENTS_DIR, 'canvas/NeuronLabels.tsx'), 'utf-8');
-    expect(labels).toContain('LABEL_INK');
-    expect(labels).not.toContain('TYPE_COLORS');
-  });
+  /**
+   * There used to be a second case here pinning canvas/NeuronLabels.tsx to
+   * `LABEL_INK`. That file was one of the four original offenders and it is
+   * gone with the WebGL scene it drew for. The invariant it protected is the
+   * one above, which sweeps every source file under components/ rather than
+   * naming one: the ambient labels the plates draw are inside that sweep, and
+   * none of them can reach TYPE_COLORS on a `color:` without failing it.
+   */
 });

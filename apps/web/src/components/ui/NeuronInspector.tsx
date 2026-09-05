@@ -179,7 +179,8 @@ export default function NeuronInspector() {
          * a screen reader or a sighted user needs; the instructional copy
          * below it (emptyText) is what had to clear 4.5:1 (V4). */}
         <div style={{ ...styles.emptyGlyph, color: t.panelBorder }} aria-hidden="true">{GLYPH.nothingSelected}</div>
-        <div style={{ ...styles.emptyText, color: t.textSecondary }}>Select a neuron<br />to inspect</div>
+        <div style={{ ...styles.emptyText, color: t.textSecondary }}>Select a neuron to inspect</div>
+        <div style={{ ...styles.emptyHint, color: t.textMuted }}>Click a node in the graph, or a memory in the list.</div>
       </div>
     );
   }
@@ -203,7 +204,7 @@ export default function NeuronInspector() {
         <div style={{ display: 'flex', gap: SPACE['2xs'] }}>
           <button
             className="ec-hover-tint"
-            style={{ ...styles.iconBtn, background: t.inputBg, color: STATUS.danger, opacity: deleting ? 0.4 : 1 }}
+            style={{ ...styles.iconBtn, background: t.inputBg, borderColor: t.panelBorder, color: STATUS.danger, opacity: deleting ? 0.4 : 1 }}
             onClick={() => setConfirmingArchive(true)}
             disabled={deleting}
             title="Archive memory"
@@ -215,12 +216,13 @@ export default function NeuronInspector() {
           </button>
           <button
             className="ec-hover-tint"
-            style={{ ...styles.iconBtn, background: t.inputBg }}
+            style={{ ...styles.iconBtn, background: t.inputBg, borderColor: t.panelBorder, color: t.textSecondary }}
             onClick={() => selectNeuron(null)}
             title="Close"
+            aria-label="Close inspector"
           >
-            <svg viewBox="0 0 16 16" fill="none" style={{ width: 10, height: 10 }}>
-              <path d="M3 3l10 10M13 3L3 13" stroke={t.textMuted} strokeWidth="1.8" strokeLinecap="round" />
+            <svg viewBox="0 0 16 16" fill="none" style={{ width: 10, height: 10 }} aria-hidden="true">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
           </button>
         </div>
@@ -234,7 +236,7 @@ export default function NeuronInspector() {
         </div>
         {/* F2: this read-out used to wear the type colour. The bar beside it
             is the mark; the number is ink. */}
-        <span className="ec-tabular" style={{ color: t.textSecondary, fontSize: TYPE.sm, fontWeight: 600, minWidth: '32px', textAlign: 'right' as const }}>{Math.round(memory.importance * 100)}%</span>
+        <span className="ec-tabular" style={{ color: t.textPrimary, fontSize: TYPE.sm, fontWeight: WEIGHT.semibold, minWidth: '32px', textAlign: 'right' as const }}>{Math.round(memory.importance * 100)}%</span>
       </div>
 
       <div style={{ ...styles.divider, background: t.panelBorder }} />
@@ -290,7 +292,7 @@ export default function NeuronInspector() {
         <Section label="Content" t={t}>
           <div
             className={showAllContent ? 'ec-wrap-anywhere' : 'ec-wrap-anywhere ec-clamp'}
-            style={{ ...styles.content, color: t.textSecondary, ...(showAllContent ? {} : clampVars) }}
+            style={{ ...styles.content, color: t.textPrimary, ...(showAllContent ? {} : clampVars) }}
           >
             {contentText}
           </div>
@@ -309,7 +311,7 @@ export default function NeuronInspector() {
         {/* Summary */}
         {summaryText && (
           <Section label="Summary" t={t}>
-            <div className="ec-wrap-anywhere" style={{ ...styles.summary, color: t.textMuted }}>{summaryText}</div>
+            <div className="ec-wrap-anywhere" style={{ ...styles.summary, color: t.textSecondary }}>{summaryText}</div>
           </Section>
         )}
 
@@ -388,7 +390,7 @@ function TagsSection({ t, tags, tagInput, onTagInputChange, onAddTag, onRemoveTa
           placeholder="Add tag…"
         />
         {tagInput && (
-          <button className="ec-hover-bright" style={{ ...styles.tagAddBtn, background: t.accentStrong, color: t.onAccent }} onClick={onAddTag}>+</button>
+          <button className="ec-primary" style={{ ...styles.tagAddBtn, background: t.accentStrong, color: t.onAccent }} onClick={onAddTag} aria-label="Add tag" title="Add tag">+</button>
         )}
       </div>
     </Section>
@@ -465,8 +467,8 @@ function ContradictionsSection({ contradictions, records, selectedNeuronId, reso
               {other?.content.slice(0, 100) ?? otherId.slice(0, 8)}
               {(other?.content.length ?? 0) > 100 ? '…' : ''}
             </div>
-            <div style={{ fontSize: TYPE.xs, color: STATUS.contradiction, marginTop: SPACE['2xs'] }}>
-              Confidence: {Math.round(c.confidence * 100)}%
+            <div className="ec-tabular" style={{ fontSize: TYPE.xs, color: STATUS.contradiction, marginTop: SPACE['2xs'] }}>
+              Confidence {Math.round(c.confidence * 100)}%
             </div>
             <div style={{ display: 'flex', gap: SPACE['2xs'], marginTop: SPACE.xs, flexWrap: 'wrap' }}>
               {['keep_newest', 'keep_oldest', 'keep_important', 'keep_both'].map((s) => (
@@ -513,44 +515,49 @@ function ConnectionsSection({ conns, color, t }: { conns: GraphConn[]; color: st
 
 const styles = {
   panel: { display: 'flex', flexDirection: 'column' as const, height: '100%', overflow: 'hidden' },
-  empty: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', height: '100%', gap: SPACE.sm },
-  emptyGlyph: { fontSize: '36px', lineHeight: 1 },
-  emptyText: { fontSize: TYPE.base, textAlign: 'center' as const, lineHeight: 1.6 },
-  header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: `${SPACE.lg} ${SPACE.lg} ${SPACE.sm}` },
-  headerMeta: { display: 'flex', flexDirection: 'column' as const, gap: SPACE['2xs'] },
-  badge: { padding: '3px 8px', borderRadius: RADIUS.sm, letterSpacing: '0.06em' },
-  source: { fontSize: TYPE.xs },
+  empty: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', height: '100%', gap: SPACE['2xs'], padding: SPACE.xl, textAlign: 'center' as const },
+  emptyGlyph: { fontSize: TYPE.glyph, lineHeight: 1, marginBottom: SPACE.xs },
+  emptyText: { fontSize: TYPE.base, fontWeight: WEIGHT.medium, lineHeight: 1.5 },
+  emptyHint: { fontSize: TYPE.xs, lineHeight: 1.5, maxWidth: 200 },
+  header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: SPACE.sm, padding: `${SPACE.md} ${SPACE.lg} ${SPACE.sm}` },
+  headerMeta: { display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-start', gap: SPACE['2xs'], minWidth: 0 },
+  badge: { padding: '3px 8px', borderRadius: RADIUS.sm },
+  source: { fontSize: TYPE.xs, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, maxWidth: '100%' },
   iconBtn: {
-    width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    border: 'none', borderRadius: RADIUS.sm, flexShrink: 0,
+    width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: '1px solid', borderRadius: RADIUS.sm, flexShrink: 0,
   },
-  importanceRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm, padding: `0 ${SPACE.lg} 12px` },
+  importanceRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm, padding: `${SPACE['2xs']} ${SPACE.lg} ${SPACE.md}` },
   dimLabel: { fontSize: TYPE.xs, minWidth: '60px' },
   importanceTrack: { flex: 1, height: '3px', borderRadius: '2px', overflow: 'hidden' },
-  importanceFill: { height: '100%', borderRadius: '2px', opacity: 0.9, transition: 'width 0.3s' },
-  divider: { height: '1px', marginBottom: SPACE['2xs'] },
-  body: { flex: 1, overflowY: 'auto' as const, padding: SPACE.lg, display: 'flex', flexDirection: 'column' as const, gap: SPACE.lg },
-  section: { display: 'flex', flexDirection: 'column' as const, gap: '5px' },
-  sectionLabel: { fontSize: TYPE.xs, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
-  conceptChip: { display: 'inline-block', fontSize: TYPE.base, fontWeight: 600, padding: `${SPACE['3xs']} ${SPACE.sm}`, borderRadius: RADIUS.sm, width: 'fit-content', maxWidth: '100%' },
-  content: { fontSize: TYPE.base, lineHeight: 1.65 },
+  importanceFill: { height: '100%', borderRadius: '2px', opacity: 0.9 },
+  divider: { height: '1px', flexShrink: 0 },
+  body: { flex: 1, overflowY: 'auto' as const, padding: SPACE.lg, display: 'flex', flexDirection: 'column' as const, gap: SPACE.xl },
+  section: { display: 'flex', flexDirection: 'column' as const, gap: SPACE.xs },
+  // Sentence case, medium, a shade under the body: a label names the block
+  // beneath it and then gets out of the way. The tracked capitals it used to
+  // wear made every label as loud as the content it introduced.
+  sectionLabel: { fontSize: TYPE.xs, fontWeight: WEIGHT.medium, letterSpacing: '0.01em', lineHeight: 1.3 },
+  conceptChip: { display: 'inline-block', fontSize: TYPE.base, fontWeight: WEIGHT.medium, padding: `${SPACE['3xs']} ${SPACE.sm}`, borderRadius: RADIUS.sm, width: 'fit-content', maxWidth: '100%', lineHeight: 1.45 },
+  content: { fontSize: TYPE.base, lineHeight: 1.6 },
   showAllBtn: {
     alignSelf: 'flex-start',
     marginTop: SPACE['2xs'],
     fontSize: TYPE.xs,
-    fontWeight: 600,
+    fontWeight: WEIGHT.medium,
     background: 'transparent',
     border: '1px solid',
     borderRadius: RADIUS.tight,
-    padding: `${SPACE['3xs']} ${SPACE.xs}`,
+    padding: `${SPACE['3xs']} ${SPACE.sm}`,
     fontFamily: 'inherit',
+    minHeight: 24,
   },
   actionError: {
     display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: SPACE.xs,
-    margin: `0 ${SPACE.lg} ${SPACE.sm}`,
+    margin: `${SPACE.sm} ${SPACE.lg} 0`,
     padding: `${SPACE.xs} ${SPACE.sm}`,
     borderRadius: RADIUS.sm,
   },
@@ -561,9 +568,9 @@ const styles = {
     background: 'none', border: 'none', padding: 0,
     fontSize: TYPE.base, lineHeight: 1, borderRadius: RADIUS.pill,
   },
-  confirmConcept: { fontSize: TYPE.sm, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
-  confirmExcerpt: { fontSize: TYPE.base, lineHeight: 1.55 },
-  summary: { fontSize: TYPE.sm, lineHeight: 1.6, fontStyle: 'italic' as const },
+  confirmConcept: { fontSize: TYPE.base, fontWeight: WEIGHT.semibold },
+  confirmExcerpt: { fontSize: TYPE.sm, lineHeight: 1.55 },
+  summary: { fontSize: TYPE.sm, lineHeight: 1.55 },
   tagRow: { display: 'flex', flexWrap: 'wrap' as const, alignItems: 'flex-start', gap: SPACE['2xs'], minWidth: 0 },
   // maxWidth + minWidth are the whole fix for the clipping: the inspector is
   // a fixed 252px with `overflow: hidden` (AppLayout), so a chip that cannot
@@ -571,7 +578,7 @@ const styles = {
   // `overflow: hidden` here — that would clip the remove button's
   // focus-visible ring, which sits 2px outside its box.
   tag: {
-    display: 'inline-flex', alignItems: 'center', gap: SPACE['2xs'],
+    display: 'inline-flex', alignItems: 'center', gap: SPACE['3xs'],
     maxWidth: '100%', minWidth: 0,
     fontSize: TYPE.sm, lineHeight: 1.4,
     padding: `${SPACE['3xs']} ${SPACE['3xs']} ${SPACE['3xs']} ${SPACE.xs}`,
@@ -590,24 +597,24 @@ const styles = {
   },
   tagInput: {
     flex: 1, border: '1px solid', borderRadius: RADIUS.sm,
-    padding: '4px 8px', fontSize: TYPE.xs, minWidth: 0,
+    padding: `${SPACE['2xs']} ${SPACE.sm}`, fontSize: TYPE.sm, minWidth: 0, minHeight: 26,
   },
   tagAddBtn: {
-    width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
     border: 'none', borderRadius: RADIUS.sm, fontSize: TYPE.lg,
-    fontWeight: 700, cursor: 'pointer', lineHeight: 1,
+    fontWeight: WEIGHT.medium, lineHeight: 1, flexShrink: 0,
   },
   meta: { fontSize: TYPE.sm },
   contradictionCard: {
     border: '1px solid', borderRadius: RADIUS.md, padding: SPACE.md,
   },
   resolveBtn: {
-    fontSize: TYPE.micro, fontWeight: 600, background: 'transparent', border: '1px solid',
-    borderRadius: RADIUS.tight, padding: '3px 8px', textTransform: 'capitalize' as const,
+    fontSize: TYPE.xs, fontWeight: WEIGHT.medium, background: 'transparent', border: '1px solid',
+    borderRadius: RADIUS.tight, padding: `${SPACE['3xs']} ${SPACE.sm}`, textTransform: 'capitalize' as const, minHeight: 24,
   },
-  connList: { display: 'flex', flexDirection: 'column' as const, gap: '5px' },
+  connList: { display: 'flex', flexDirection: 'column' as const, gap: SPACE.xs },
   connRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm },
-  relBadge: { fontSize: TYPE.xs, padding: '2px 7px', borderRadius: RADIUS.tight, whiteSpace: 'nowrap' as const, minWidth: '80px' },
+  relBadge: { fontSize: TYPE.xs, padding: `${SPACE['3xs']} ${SPACE.xs}`, borderRadius: RADIUS.tight, whiteSpace: 'nowrap' as const, minWidth: '82px', lineHeight: 1.4 },
   strengthTrack: { flex: 1, height: '3px', borderRadius: '2px', overflow: 'hidden' },
-  strengthFill: { height: '100%', borderRadius: '2px', opacity: 0.7 },
+  strengthFill: { height: '100%', borderRadius: '2px', opacity: 0.75 },
 } as const;

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { ON_STATUS, RADIUS, SPACE, STATUS, TYPE, withAlpha } from '../../lib/tokens.js';
+import { ON_STATUS, RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import ModalShell from './ModalShell.js';
 
 interface Props {
@@ -36,14 +36,14 @@ export default function ConfirmDialog({ title, message, subject, confirmLabel, b
         <>
           <button
             className="ec-hover-tint"
-            style={{ ...styles.cancelBtn, background: t.inputBg, borderColor: t.panelBorder, color: t.textSecondary }}
+            style={{ ...styles.cancelBtn, borderColor: t.panelBorder, color: t.textSecondary }}
             onClick={onCancel}
           >
             Cancel
           </button>
           <button
-            className="ec-hover-bright"
-            style={{ ...styles.confirmBtn, background: STATUS.danger, color: ON_STATUS.danger, opacity: busy ? 0.5 : 1 }}
+            className="ec-primary"
+            style={{ ...styles.confirmBtn, background: STATUS.danger, color: ON_STATUS.danger }}
             onClick={onConfirm}
             disabled={busy}
           >
@@ -63,18 +63,18 @@ export default function ConfirmDialog({ title, message, subject, confirmLabel, b
 }
 
 const styles = {
-  message: { fontSize: TYPE.md, lineHeight: 1.55, margin: 0 },
+  message: { fontSize: TYPE.base, lineHeight: 1.55, margin: 0 },
   subject: {
     border: '1px solid', borderRadius: RADIUS.md,
     padding: `${SPACE.md}`,
     display: 'flex', flexDirection: 'column' as const, gap: SPACE['2xs'],
   },
   cancelBtn: {
-    padding: `${SPACE.sm} ${SPACE.lg}`, border: '1px solid', borderRadius: RADIUS.sm,
-    fontSize: TYPE.base, fontWeight: 600, fontFamily: 'inherit',
+    padding: `${SPACE.xs} ${SPACE.lg}`, background: 'transparent', border: '1px solid', borderRadius: RADIUS.sm,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.medium, fontFamily: 'inherit', minHeight: 30,
   },
   confirmBtn: {
-    padding: `${SPACE.sm} ${SPACE.xl}`, border: 'none', borderRadius: RADIUS.sm,
-    fontSize: TYPE.base, fontWeight: 700, fontFamily: 'inherit',
+    padding: `${SPACE.xs} ${SPACE.xl}`, border: 'none', borderRadius: RADIUS.sm,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.semibold, fontFamily: 'inherit', minHeight: 30,
   },
 } as const;

@@ -59,3 +59,8 @@ yes.pub
 
 # Coverage reports
 coverage/
+
+# Three throwaway copies of apps/web used to run competing redesigns side by
+# side on their own ports. Full app trees, node_modules and all — history is
+# for branches, not for 99MB of duplicated working copies.
+.variants/

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { RADIUS, SPACE, TYPE } from '../../lib/tokens.js';
+import { RADIUS, SPACE, TYPE, WEIGHT } from '../../lib/tokens.js';
 
 const FOCUSABLE_SELECTOR = 'button:not(:disabled), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
@@ -80,9 +80,9 @@ export default function ModalShell({ title, onClose, children, footer, width = '
       >
         <div style={{ ...styles.header, borderBottomColor: t.panelBorder }}>
           <span id={titleId} style={{ ...styles.title, color: t.textPrimary }}>{title}</span>
-          <button className="ec-hover-tint" style={{ ...styles.closeBtn, background: t.inputBg }} onClick={onClose} aria-label="Close">
-            <svg viewBox="0 0 16 16" fill="none" style={{ width: 12, height: 12 }}>
-              <path d="M3 3l10 10M13 3L3 13" stroke={t.textMuted} strokeWidth="1.8" strokeLinecap="round" />
+          <button className="ec-hover-tint" style={{ ...styles.closeBtn, background: t.inputBg, borderColor: t.panelBorder, color: t.textSecondary }} onClick={onClose} aria-label="Close">
+            <svg viewBox="0 0 16 16" fill="none" style={{ width: 12, height: 12 }} aria-hidden="true">
+              <path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
             </svg>
           </button>
         </div>
@@ -98,23 +98,27 @@ export default function ModalShell({ title, onClose, children, footer, width = '
 const styles = {
   overlay: {
     position: 'fixed' as const, inset: 0, zIndex: 1000,
-    background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+    background: 'rgba(2, 6, 16, 0.62)', backdropFilter: 'blur(4px)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: SPACE.lg,
   },
+  // The one surface in the app that floats, so the one that carries a real
+  // shadow: a long soft drop plus a 1px dark seat, which separates the card
+  // from the blurred scene behind it in every template.
   modal: {
     maxWidth: '90vw', maxHeight: '90vh',
     border: '1px solid', borderRadius: RADIUS.xl,
+    boxShadow: '0 24px 64px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.35)',
     display: 'flex', flexDirection: 'column' as const, overflow: 'hidden',
   },
   header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: `${SPACE.lg} ${SPACE.xl}`, borderBottom: '1px solid',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.md,
+    padding: `${SPACE.md} ${SPACE.xl}`, borderBottom: '1px solid',
   },
-  title: { fontSize: TYPE.lg, fontWeight: 700 },
+  title: { fontSize: TYPE.lg, fontWeight: WEIGHT.semibold, letterSpacing: '-0.01em' },
   closeBtn: {
     width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    border: 'none', borderRadius: RADIUS.sm, flexShrink: 0,
+    border: '1px solid', borderRadius: RADIUS.sm, flexShrink: 0,
   },
   body: { padding: SPACE.xl, display: 'flex', flexDirection: 'column' as const, gap: SPACE.lg, overflowY: 'auto' as const },
   footer: {

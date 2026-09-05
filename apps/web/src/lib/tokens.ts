@@ -78,13 +78,28 @@ export const GLYPH = {
   // Compact-viewport panes (the mobile tab bar)
   //
   // Own entries rather than borrowed ones: the tab bar used to hard-code
-  // '⬡' for Graph and '◈' for Inspect, which are this registry's
+  // '⬡' for the plate pane and '◈' for Inspect, which are this registry's
   // `concept` and `pattern` — exactly the one-glyph-two-meanings collision
   // it exists to prevent. '☰' (stacked rules → the record list) was already
   // unclaimed and is kept.
   paneMemories: '☰',
-  paneGraph: '⊛',
+  panePlate: '⊛',
   paneInspect: '⊡',
+  // View modes (the header's primary tabs)
+  //
+  // The Plates tab draws `panePlate`: the mobile plate pane and the desktop
+  // plate surface are the same thing, so they share one glyph on purpose. The
+  // slot was `paneGraph` while the surface was one 3D graph; it is five plates
+  // now, only two of which are graphs, so the name follows the label. The
+  // other three were hard-coded in ViewSwitcher — '◎' for the plate tab and '◈' for
+  // Reflections, which are `confidence` and `pattern` here — and the
+  // reflections empty state re-typed '◈' a third time. One glyph each now.
+  // '❖' rather than a half-filled circle: '◐' is the glyph half the web
+  // uses for a light/dark toggle, and it would have sat one control away
+  // from the real theme switcher.
+  viewTimeline: '⏤',
+  viewAnalytics: '▧',
+  viewReflections: '❖',
   // States
   empty: '⊘',
   nothingSelected: '◌',
@@ -266,16 +281,24 @@ export const RADIUS = {
 //
 // Was 12 distinct font sizes from 9-36px. Named steps instead — every
 // component picks a step rather than inventing a new pixel value.
+//
+// Re-stepped with the move to IBM Plex Sans. The old scale bottomed out at
+// 9px and ran its body at 12px, which Inter's tall x-height just about
+// carried; Plex has a more moderate x-height and open counters, and reads
+// best a size up. Every step is one pixel larger below `lg` and grows a
+// little faster above it, so the hierarchy between a caption, a row and a
+// heading widens rather than merely shifts. `micro` is the floor: nothing in
+// the interface is set under 10px.
 export const TYPE = {
-  micro: '9px',
-  xs: '10px',
-  sm: '11px',
-  base: '12px',
-  md: '13px',
-  lg: '14px',
-  xl: '16px',
-  '2xl': '18px',
-  display: '24px',
+  micro: '10px',
+  xs: '11px',
+  sm: '12px',
+  base: '13px',
+  md: '14px',
+  lg: '15px',
+  xl: '17px',
+  '2xl': '20px',
+  display: '28px',
   /** Decorative glyph in an empty state — not text, and the only step above
    *  `display`. Named so it stops being a one-off literal. */
   glyph: '32px',
@@ -293,11 +316,14 @@ export const MEASURE = {
   readable: '68ch',
 } as const;
 
+// Three weights, and only three are loaded (styles/fonts.css). There is no
+// `bold`: at 11-15px Plex's 700 fills in, and a 700 nobody shipped would be
+// synthesised by the browser — smeared, not bold. Headings and figures take
+// `semibold`; the size and colour steps carry the rest of the hierarchy.
 export const WEIGHT = {
   regular: 400,
   medium: 500,
   semibold: 600,
-  bold: 700,
 } as const;
 
 // ─── Motion ─────────────────────────────────────────────────────────────────

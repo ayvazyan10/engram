@@ -128,7 +128,7 @@ const s = {
     flexWrap: 'wrap' as const,
   },
   headRight: { display: 'flex', alignItems: 'center', gap: SPACE.sm },
-  title: { fontSize: TYPE.md, fontWeight: WEIGHT.semibold, margin: 0 },
+  title: { fontSize: TYPE.md, fontWeight: WEIGHT.semibold, margin: 0, letterSpacing: '-0.005em' },
   caption: { fontSize: TYPE.sm },
   toggle: {
     background: 'transparent',
@@ -136,22 +136,24 @@ const s = {
     borderRadius: RADIUS.sm,
     padding: `${SPACE['3xs']} ${SPACE.sm}`,
     fontSize: TYPE.xs,
+    fontWeight: WEIGHT.medium,
     fontFamily: 'inherit',
-    minHeight: 22,
+    minHeight: 24,
   },
   tableScroll: { overflowX: 'auto' as const, maxHeight: 320, overflowY: 'auto' as const },
   table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: TYPE.sm },
   tableCaption: { textAlign: 'left' as const, fontSize: TYPE.xs, paddingBottom: SPACE.xs },
+  // Sentence case column heads, a shade under the cells: they name the
+  // column and then recede behind the figures they introduce.
   th: {
     fontSize: TYPE.xs,
-    fontWeight: WEIGHT.semibold,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.05em',
+    fontWeight: WEIGHT.medium,
+    letterSpacing: '0.01em',
     padding: `${SPACE['2xs']} ${SPACE.sm}`,
     borderBottom: '1px solid',
     position: 'sticky' as const,
     top: 0,
   },
-  td: { padding: `${SPACE['2xs']} ${SPACE.sm}`, borderBottom: '1px solid' },
+  td: { padding: `${SPACE.xs} ${SPACE.sm}`, borderBottom: '1px solid', lineHeight: 1.4 },
   tableEmpty: { fontSize: TYPE.sm, padding: SPACE.md },
 } as const;

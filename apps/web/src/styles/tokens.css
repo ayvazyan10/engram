@@ -8,6 +8,10 @@
  * there's no flash of unstyled interaction state before that effect runs.
  */
 :root {
+  /* Type */
+  --ec-font-sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --ec-font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+
   /* Spacing */
   --ec-space-3xs: 2px;
   --ec-space-2xs: 4px;
@@ -39,4 +43,11 @@
   --ec-focus: #6366f1;
   --ec-hover-overlay: rgba(255, 255, 255, 0.06);
   --ec-active-overlay: rgba(0, 0, 0, 0.18);
+  --ec-text-primary: #e2e8f0;
+  --ec-text-secondary: #94a3b8;
+  --ec-text-muted: #7b8ca3;
+  --ec-panel-border: #152b52;
+  --ec-panel-bg: #060e1e;
+  --ec-card-bg: #0a1628;
+  --ec-input-bg: #07101f;
 }

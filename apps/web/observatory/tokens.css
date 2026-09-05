@@ -1,0 +1,223 @@
+/**
+ * The Observatory token layer — the single source of colour, type and motion.
+ *
+ * This file is the design plan made executable. The comparison page on 4912
+ * uses it, and the rebuilt application is meant to use the same names, so the
+ * token names below are the contract: `--plate`, `--margin`, `--rule`,
+ * `--ink`, `--ink-2`, `--ink-3`, `--agrees`, `--contradicts`, `--memory`.
+ *
+ * ─── The colour rule, stated once ──────────────────────────────────────────
+ *
+ * HUE MEANS ONE THING: WHAT KIND OF LINK THIS IS.
+ *
+ * There are exactly two chromatic values in the whole harness — `--agrees`
+ * and `--contradicts` — and both are drawn on links. Everything else is the
+ * plate's own near-neutral blue-green: the ground, the ink, the memories.
+ *
+ * This is a reassignment, not a repaint. The app currently spends hue on
+ * memory TYPE. Measured against this store, type is a poor use of the
+ * channel: 514 of 651 memories are semantic (79%), and 2,989 of 3,099 links
+ * join two memories of the SAME type (96%) — so type neither partitions the
+ * store nor explains its structure, and colouring by it restates what
+ * position already shows. Relationship kind splits almost exactly in half
+ * (1,560 agrees / 1,539 contradicts), it is the one thing about this store
+ * that is genuinely surprising, and it is invisible today.
+ *
+ * The two encodings also cannot coexist. Against the app's validated
+ * TYPE_COLORS, `--agrees` sits ΔE 8.4 from episodic violet and
+ * `--contradicts` ΔE 11.3 from procedural amber (OKLab ×100) — both under the
+ * normal-vision floor of 15. Type is therefore off the colour channel; it
+ * survives as a word, a glyph and a filter.
+ *
+ * ─── Measurements ──────────────────────────────────────────────────────────
+ *
+ * Grounds (OKLCH):
+ *   plate  #0b1315  L 0.180  C 0.013  H 215
+ *   margin #101a1c  L 0.209  C 0.015  H 211
+ *   rule   #1f2b2c  L 0.278  C 0.017  H 203
+ *
+ * Text (WCAG 2.x, plate / margin):
+ *   --ink    #e9efed  16.13 / 15.20
+ *   --ink-2  #a6b7b4   8.99 /  8.47
+ *   --ink-3  #7d8f8c   5.53 /  5.21
+ * All three clear 4.5:1 on both grounds at every size used.
+ *
+ * Data, `validate_palette.js --mode dark --surface "#0b1315" --pairs all`
+ * on the two identities:
+ *   Lightness band      PASS  both inside L 0.48–0.67
+ *   Chroma floor        PASS  both >= 0.10
+ *   CVD separation      PASS  ΔE 24.8 protan · 27.7 tritan  (target >= 8)
+ *   Normal-vision floor PASS  ΔE 28.0                       (floor >= 15)
+ *   Contrast vs surface PASS  both >= 3:1  (4.38 / 4.23)
+ * `--pairs all` rather than the adjacent pairlist because a link graph is a
+ * scatter: any two links can end up side by side.
+ *
+ * Strength rides WITHIN each identity as a three-step ordinal ramp,
+ * `--ordinal --mode dark --surface "#0b1315"`, both PASS:
+ *   agrees        3.17 / 4.38 / 6.18   monotone L 0.51 / 0.585 / 0.67
+ *   contradicts   3.06 / 4.23 / 5.95   same lightnesses, ΔL 0.075 & 0.085
+ * Every step clears the 3:1 mark floor, so no relief channel is owed.
+ *
+ * A memory (`--memory`, 5.44:1) is neutral by design — it carries no
+ * identity, and it sits ΔE 16.4 / 16.1 from the two link hues, clear of the
+ * 15 floor, so a memory is never mistaken for a link.
+ *
+ * ─── What is NOT here, and why ─────────────────────────────────────────────
+ *
+ * A density ramp. "Where knowledge is dense" needs an encoding, and a
+ * luminance wash under the links was the obvious one — it fails. Measured: a
+ * link on the densest step of a plate-family wash drops to 1.73:1 (agrees) and
+ * 1.67:1 (contradicts), well under the 3:1 mark floor, and the wash's top step
+ * lands ΔE 0.8 from `--memory`. Density on this plate is carried by GEOMETRY
+ * instead — how many links cross a region, how thick an aggregated bundle is,
+ * how large a binned mark is. That is also the more honest encoding: density
+ * IS link accumulation, so painting it separately re-encodes the same fact in
+ * a channel that then destroys the first one.
+ *
+ * A retention ramp. Retention is 35 vivid / 10 holding / 42 fading / 564 at
+ * threshold — 87% in one band. A four-colour scale for that distribution is
+ * eight hues for a story that is one number, so retention is a named band and
+ * a count wherever it is reported, and an optional node-RADIUS channel where
+ * it is drawn. It is never on colour, which is stronger than never on colour
+ * alone.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* ─── The plate: six values, and the harness is built from them ────────── */
+  --plate: #0b1315; /* the observation ground; the visualization bleeds to it */
+  --margin: #101a1c; /* a lifted reading surface — panels, sheets, rows */
+  --rule: #1f2b2c; /* hairlines, and the fill of a selected row */
+  --ink: #e9efed; /* what is being said */
+  --ink-2: #a6b7b4; /* what is being measured */
+  --ink-3: #7d8f8c; /* what a thing is called */
+
+  /* ─── The only two hues in the product ─────────────────────────────────── */
+  --agrees: #4a76da; /* relates_to — 1,560 links */
+  --contradicts: #bf5a33; /* contradicts — 1,539 links */
+
+  /* Strength within an identity: weak → strong, dark → light. */
+  --agrees-weak: #355fc0;
+  --agrees-mid: #4a76da;
+  --agrees-strong: #6291f7;
+  --contradicts-weak: #a5431a;
+  --contradicts-mid: #bf5a33;
+  --contradicts-strong: #dc744d;
+
+  /* ─── Marks ────────────────────────────────────────────────────────────── */
+  --memory: #7f8d8b; /* a memory at rest — recessive, on purpose */
+  --memory-live: #e9efed; /* the one memory under the pointer or selected */
+
+  /* ─── Type ─────────────────────────────────────────────────────────────── */
+  --font-instrument: 'Archivo', ui-sans-serif, 'Helvetica Neue', Arial, sans-serif;
+  --font-note: 'Spectral', 'Iowan Old Style', Georgia, Cambria, serif;
+
+  /* A 1.20 minor-third from 12px, plus one display step that breaks it.
+     Nothing is set below 11px; nothing is set in all caps. */
+  --t-label: 11px; /* field names, in a narrow cut */
+  --t-body: 12.5px;
+  --t-figure: 15px; /* catalogue figures */
+  --t-claim: 16px; /* the observer's note, in Spectral */
+  --t-stat: 22px; /* the one figure a block is about */
+  --t-mast: 30px; /* the masthead, Spectral 200 */
+
+  --lead-tight: 1.15;
+  --lead-body: 1.5;
+
+  /* ─── Rhythm ───────────────────────────────────────────────────────────── */
+  /* Deliberately uneven: the margin's blocks are separated by a larger step
+     than the rows inside them, so grouping is legible without a box. */
+  --gap-row: 6px;
+  --gap-block: 14px;
+  --gap-section: 26px;
+
+  /* ─── Motion ───────────────────────────────────────────────────────────── */
+  /* Compositor-friendly only: transform and opacity. Nothing animates a
+     layout property anywhere in this harness. */
+  --dur: 140ms;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--plate);
+  color: var(--ink);
+  font-family: var(--font-instrument);
+  font-size: var(--t-body);
+  line-height: var(--lead-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Field names. Register is carried by WIDTH, not by capitals or tracking —
+   Archivo's wdth axis is the reason this family is loaded at all. */
+.obs-label {
+  font-size: var(--t-label);
+  font-stretch: 78%;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--ink-3);
+}
+
+/* Figures. Tabular only where numbers stack in a column. */
+.obs-figure {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* The one figure a block is about. Proportional figures at display size —
+   tabular digits make a large standalone number read loose. */
+.obs-stat {
+  font-size: var(--t-stat);
+  font-weight: 600;
+  line-height: var(--lead-tight);
+  color: var(--ink);
+}
+
+.obs-note {
+  font-family: var(--font-note);
+  font-weight: 300;
+  font-size: var(--t-claim);
+  line-height: 1.42;
+  color: var(--ink-2);
+  max-width: 34ch;
+}
+
+/* One visible focus treatment, everywhere. */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}

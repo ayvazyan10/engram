@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { startOfDay } from 'date-fns';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
-import { GLYPH, RADIUS, SPACE, STATUS, TYPE } from '../../lib/tokens.js';
+import { GLYPH, RADIUS, SPACE, STATUS, TYPE, WEIGHT } from '../../lib/tokens.js';
 import { TypeTag } from '../ui/DataMark.js';
 import { safeParseISO, formatDayHeading, formatTimeOfDay, UNKNOWN_DATE_LABEL } from '../../lib/dates.js';
 import { toPlainText } from '../../lib/plainText.js';
@@ -90,7 +90,8 @@ export default function TimelineView({ loading, error, onRetry }: Props) {
   if (records.length === 0) {
     return (
       <div style={{ ...s.empty, color: t.textMuted }}>
-        No memories yet. Store something to see the timeline.
+        <span aria-hidden="true" style={{ ...s.emptyGlyph, color: t.panelBorder }}>{GLYPH.empty}</span>
+        <span style={{ color: t.textSecondary }}>No memories yet. Store something to see the timeline.</span>
       </div>
     );
   }
@@ -108,7 +109,13 @@ export default function TimelineView({ loading, error, onRetry }: Props) {
         </div>
         {groups.map((group) => (
           <div key={group.date} style={s.dayGroup}>
-            <div style={{ ...s.dateLabel, color: t.accent }}>{group.label}</div>
+            {/* The day heading is ink, not accent — a date is a heading, not
+                a control — and the rail marks it with a dot where the day
+                begins. */}
+            <div style={{ ...s.dateLabel, color: t.textPrimary }}>
+              <span aria-hidden="true" style={{ ...s.dateDot, background: t.accent, boxShadow: `0 0 0 3px ${t.rootBg}` }} />
+              {group.label}
+            </div>
             <div style={{ ...s.line, background: t.panelBorder }} />
             <div style={s.cards}>
               {group.memories.map((mem) => (
@@ -179,27 +186,45 @@ const s = {
   empty: {
     flex: 1,
     display: 'flex',
+    flexDirection: 'column' as const,
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: TYPE.lg,
+    gap: SPACE.xs,
+    fontSize: TYPE.md,
+    textAlign: 'center' as const,
+    padding: SPACE.xl,
+  },
+  emptyGlyph: {
+    fontSize: TYPE.glyph,
+    lineHeight: 1,
+    marginBottom: SPACE.xs,
   },
   center: {
     flex: 1,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: TYPE.lg,
+    fontSize: TYPE.md,
   },
   dayGroup: {
     position: 'relative' as const,
     paddingLeft: SPACE['2xl'],
   },
   dateLabel: {
+    position: 'relative' as const,
+    display: 'flex',
+    alignItems: 'center',
     fontSize: TYPE.base,
-    fontWeight: 700,
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase' as const,
+    fontWeight: WEIGHT.semibold,
+    lineHeight: 1.4,
     marginBottom: SPACE.md,
+  },
+  dateDot: {
+    position: 'absolute' as const,
+    left: `calc(-1 * ${SPACE['2xl']} + 3px)`,
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
   },
   line: {
     position: 'absolute' as const,
@@ -217,21 +242,21 @@ const s = {
   card: {
     border: '1px solid',
     borderRadius: RADIUS.lg,
-    padding: `${SPACE.lg} ${SPACE.lg}`,
-    transition: 'transform 0.15s, box-shadow 0.15s',
+    padding: `${SPACE.md} ${SPACE.lg} ${SPACE.lg}`,
   },
   cardHeader: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: SPACE.sm,
     marginBottom: SPACE.sm,
   },
   time: {
-    fontSize: TYPE.sm,
+    fontSize: TYPE.xs,
   },
   content: {
-    fontSize: TYPE.md,
-    lineHeight: 1.5,
+    fontSize: TYPE.base,
+    lineHeight: 1.55,
     marginBottom: SPACE.sm,
   },
   cardFooter: {

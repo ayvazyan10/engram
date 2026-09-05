@@ -4,10 +4,10 @@
  * entirely (`grep -rn ":hover" src/` returned one hit before this file).
  */
 
-/* Inter is loaded from index.html via <link rel="stylesheet"> (preconnect +
- * display=swap) rather than @import here — @import is render-blocking and
- * can't be discovered by the preloader until this stylesheet itself has
- * already been fetched and parsed. */
+/* The faces are declared in fonts.css (self-hosted IBM Plex Sans) and
+ * imported from main.tsx ahead of this file — never via @import here, which
+ * is render-blocking and invisible to the preloader until this stylesheet
+ * has itself been fetched and parsed. */
 
 *, *::before, *::after {
   margin: 0;
@@ -21,8 +21,24 @@ html, body, #root {
   overflow: hidden;
   background: #020817;
   color: #e2e8f0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: var(--ec-font-sans);
+  font-size: 13px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Form controls do not inherit the body face; every one of them opts back in
+ * here so no field can compute to Arial beside Plex text (M5). */
+button, input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+code, kbd {
+  font-family: var(--ec-font-mono);
 }
 
 /* ─── Scrollbars (L4) ────────────────────────────────────────────────────────
@@ -35,31 +51,31 @@ html, body, #root {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.38);
-  background: color-mix(in srgb, var(--ec-accent, #6366f1) 38%, transparent);
+  background: rgba(148, 163, 184, 0.3);
+  background: color-mix(in srgb, var(--ec-accent, #6366f1) 30%, transparent);
   border-radius: var(--ec-radius-pill, 999px);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.62);
-  background: color-mix(in srgb, var(--ec-accent, #6366f1) 62%, transparent);
+  background: rgba(148, 163, 184, 0.55);
+  background: color-mix(in srgb, var(--ec-accent, #6366f1) 55%, transparent);
   background-clip: padding-box;
 }
 /* Firefox has no ::-webkit-scrollbar; this is the whole treatment there.
  * Both properties inherit, so the root element is enough. */
 html {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
-  scrollbar-color: color-mix(in srgb, var(--ec-accent, #6366f1) 38%, transparent) transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.3) transparent;
+  scrollbar-color: color-mix(in srgb, var(--ec-accent, #6366f1) 30%, transparent) transparent;
 }
 
 @keyframes ec-spin { to { transform: rotate(360deg); } }
 
 /* ─── Numerals (M13) ─────────────────────────────────────────────────────────
  * Nothing in the app set this, so the live recall-latency readout and every
- * right-aligned timestamp reflowed as their digits changed (proportional '1'
- * is narrower than '0' in Inter). Applied to the readouts and timestamps that
+ * right-aligned timestamp reflowed as their digits changed (a proportional
+ * '1' is narrower than '0'). Applied to the readouts and timestamps that
  * sit in a column or update in place. */
 .ec-tabular {
   font-variant-numeric: tabular-nums;
@@ -97,8 +113,31 @@ html {
   padding-right: 28px;
 }
 
-input::placeholder { color: #64748b; }
-input:focus::placeholder { color: #94a3b8; }
+/* Placeholder ink follows the template's muted role — it was a fixed slate
+ * that sat on Midnight's violet and Mono's black alike. */
+input::placeholder, textarea::placeholder { color: var(--ec-text-muted, #7b8ca3); opacity: 1; }
+
+/* ─── Keycap ─────────────────────────────────────────────────────────────────
+ * The search hint names two keys. A key is drawn as a key — a small raised
+ * cap on the input surface — so "Enter" reads as the thing you press rather
+ * than as a word in the sentence. */
+.ec-kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--ec-panel-border, #152b52);
+  border-bottom-width: 2px;
+  border-radius: var(--ec-radius-tight, 4px);
+  background: var(--ec-input-bg, #07101f);
+  color: var(--ec-text-secondary, #94a3b8);
+  font-family: var(--ec-font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  text-align: center;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+}
 
 /* ─── Focus (V2) ────────────────────────────────────────────────────────────
  * One rule, applied globally, covers every native interactive element —
@@ -119,26 +158,33 @@ select:focus-visible,
 }
 
 /* ─── Hover / active (V1) ────────────────────────────────────────────────────
- * Two flavours, chosen so neither ever has to fight an element's own inline
+ * Three flavours, chosen so none ever has to fight an element's own inline
  * `background` (inline always wins that fight, pseudo-class or not):
  *
  * .ec-hover-tint  — for elements with a transparent/conditional inline
  *                    background (list rows, switcher buttons). Painted with
  *                    an inset box-shadow instead of `background`, so it
  *                    layers over whatever the inline style already set.
- * .ec-hover-bright — for elements with a solid/gradient inline background
- *                    (icon buttons, CTA buttons). `filter: brightness()`
- *                    post-processes the rendered layer regardless of what
- *                    produced its colour.
+ * .ec-hover-bright — for elements with a solid inline background (icon
+ *                    buttons). `filter: brightness()` post-processes the
+ *                    rendered layer regardless of what produced its colour.
+ * .ec-primary     — the one filled call-to-action on a surface. Its fill is
+ *                    the template's accentStrong; the hover mixes a little of
+ *                    the ON-accent ink into it, which lightens Neural's and
+ *                    Midnight's indigo/violet and darkens Mono's white — the
+ *                    same rule reads correctly in every template, where a
+ *                    fixed white overlay vanished on a white button.
  */
 .ec-hover-tint,
 .ec-hover-bright,
+.ec-primary,
 .ec-press {
   cursor: pointer;
 }
 
 .ec-hover-tint:disabled,
 .ec-hover-bright:disabled,
+.ec-primary:disabled,
 .ec-press:disabled {
   cursor: not-allowed;
 }
@@ -157,6 +203,24 @@ select:focus-visible,
 
 .ec-hover-bright:not(:disabled):active {
   filter: brightness(0.9);
+}
+
+.ec-primary {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.ec-primary:not(:disabled):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 0 0 999px rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 0 0 999px color-mix(in srgb, var(--ec-on-accent, #ffffff) 14%, transparent);
+}
+
+.ec-primary:not(:disabled):active {
+  box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.16);
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--ec-on-accent, #ffffff) 26%, transparent);
+}
+
+.ec-primary:disabled {
+  opacity: 0.5;
 }
 
 /* ─── Heat cell (F6) ────────────────────────────────────────────────────────
@@ -189,17 +253,21 @@ select:focus-visible,
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .ec-hover-tint, .ec-hover-bright, .ec-press, .ec-row-transition {
+  .ec-hover-tint, .ec-hover-bright, .ec-primary, .ec-press, .ec-row-transition {
     transition:
       filter var(--ec-duration-fast) var(--ec-ease-out),
       box-shadow var(--ec-duration-fast) var(--ec-ease-out),
       border-color var(--ec-duration-fast) var(--ec-ease-out),
       color var(--ec-duration-fast) var(--ec-ease-out),
+      opacity var(--ec-duration-fast) var(--ec-ease-out),
       transform var(--ec-duration-fast) var(--ec-ease-out);
   }
 
-  button:active {
-    transform: scale(0.95);
+  /* Only the filled and icon buttons press in. It used to be every
+   * <button>, which made a 260px list row shrink when clicked. */
+  .ec-hover-bright:not(:disabled):active,
+  .ec-primary:not(:disabled):active {
+    transform: scale(0.97);
   }
 }
 
@@ -261,8 +329,8 @@ select:focus-visible,
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 7px 4px 8px;
+  gap: 3px;
+  padding: 8px 4px 9px;
   background: transparent;
   border: none;
   font-family: inherit;

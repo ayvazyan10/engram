@@ -1,19 +1,25 @@
 /**
- * The switcher renders whatever VIEWS holds rather than naming views itself,
- * so the things worth pinning are that removing Nebula and Galaxy really did
- * remove them from the UI, and that the active view is announced rather than
- * only tinted.
+ * The switcher renders whatever VIEWS holds rather than naming plates itself,
+ * so the things worth pinning are that the mode tab no longer claims a
+ * dimension it cannot keep, that the chooser offers exactly the five and reads
+ * each one's claim rather than hiding it in a tooltip, and that the active
+ * plate is announced rather than only filled in.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import ViewSwitcher from '../ViewSwitcher.js';
-import { useViewStore, VIEWS } from '../../../store/viewStore.js';
+import { useViewStore, VIEWS, DEFAULT_VIEW_ID } from '../../../store/viewStore.js';
 import { useDashboardStore } from '../../../store/dashboardStore.js';
 
-describe('ViewSwitcher', () => {
+function openChooser() {
+  fireEvent.click(screen.getByRole('button', { name: /^Plate: / }));
+  return screen.getByRole('group', { name: /choose a plate/i });
+}
+
+describe('ViewSwitcher mode tabs', () => {
   beforeEach(() => {
-    useViewStore.getState().setView('cosmos');
+    useViewStore.getState().setView(DEFAULT_VIEW_ID);
     useDashboardStore.setState({ viewMode: '3d' });
   });
 
@@ -23,37 +29,86 @@ describe('ViewSwitcher', () => {
     expect(useDashboardStore.getState().viewMode).toBe('timeline');
   });
 
-  it('shows 3D sub-views only in 3D mode', () => {
+  /**
+   * The regression this replaces: the tab said "3D" while the surface behind
+   * it was one WebGL scene. It is five plates now, only two of which are 3D,
+   * so a tab labelled "3D" would be false about three of them.
+   */
+  it('does not label the plate surface with a dimension', () => {
+    render(<ViewSwitcher />);
+    expect(screen.getByRole('button', { name: 'Plates' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '3D' })).not.toBeInTheDocument();
+  });
+
+  it('offers the plate chooser only on the plate surface', () => {
     const { rerender } = render(<ViewSwitcher />);
-    expect(screen.getByTitle(VIEWS[1]!.description)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Plate: / })).toBeInTheDocument();
 
-    useDashboardStore.setState({ viewMode: 'timeline' });
+    useDashboardStore.setState({ viewMode: 'analytics' });
     rerender(<ViewSwitcher />);
-    expect(screen.queryByTitle(VIEWS[1]!.description)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Plate: / })).not.toBeInTheDocument();
+  });
+});
+
+describe('the plate chooser', () => {
+  beforeEach(() => {
+    useViewStore.getState().setView(DEFAULT_VIEW_ID);
+    useDashboardStore.setState({ viewMode: '3d' });
   });
 
-  it('switches the active 3D sub-view on click', () => {
+  it('names the active plate and its dimension on the closed control', () => {
     render(<ViewSwitcher />);
-    fireEvent.click(screen.getByTitle(VIEWS[1]!.description));
-    expect(useViewStore.getState().activeViewId).toBe(VIEWS[1]!.id);
+    const active = VIEWS.find((v) => v.id === DEFAULT_VIEW_ID)!;
+    const trigger = screen.getByRole('button', { name: `Plate: ${active.name}, ${active.dimension}` });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveTextContent(active.name);
   });
 
-  it('offers exactly the surviving views', () => {
+  it('opens to exactly the five plates, each with its own name and claim in full', () => {
     render(<ViewSwitcher />);
+    const panel = openChooser();
+    const options = within(panel).getAllByRole('button');
+    expect(options).toHaveLength(VIEWS.length);
+
     for (const view of VIEWS) {
-      expect(screen.getByText(view.name)).toBeInTheDocument();
+      expect(within(panel).getByText(view.name)).toBeInTheDocument();
+      // The claim is rendered, not hidden in a title attribute — it is the
+      // sentence a reader chooses on.
+      expect(within(panel).getByText(view.claim)).toBeInTheDocument();
     }
-    expect(screen.queryByText(/nebula/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/galaxy/i)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/cosmos|neural net|clusters/i)).not.toBeInTheDocument();
   });
 
-  it('marks the active view with aria-pressed, not just a background tint', () => {
+  it('marks the active plate with aria-pressed, not just a filled ground', () => {
     render(<ViewSwitcher />);
-    const clusters = screen.getByText('Clusters').closest('button')!;
-    expect(clusters).toHaveAttribute('aria-pressed', 'false');
+    const panel = openChooser();
+    const active = within(panel).getByText(VIEWS[0]!.name).closest('button')!;
+    const other = within(panel).getByText(VIEWS[2]!.name).closest('button')!;
+    expect(active).toHaveAttribute('aria-pressed', 'true');
+    expect(other).toHaveAttribute('aria-pressed', 'false');
+  });
 
-    fireEvent.click(clusters);
-    expect(useViewStore.getState().activeViewId).toBe('clusters');
-    expect(clusters).toHaveAttribute('aria-pressed', 'true');
+  it('switches the active plate on a click and closes', () => {
+    render(<ViewSwitcher />);
+    const panel = openChooser();
+    fireEvent.click(within(panel).getByText(VIEWS[2]!.name).closest('button')!);
+
+    expect(useViewStore.getState().activeViewId).toBe(VIEWS[2]!.id);
+    expect(screen.queryByRole('group', { name: /choose a plate/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * AppLayout binds a window-level Escape that clears the memory selection.
+   * Closing the drawer must mark the key handled so that listener stands down
+   * — otherwise dismissing the chooser silently throws away the selection.
+   */
+  it('closes on Escape and marks the key handled', () => {
+    render(<ViewSwitcher />);
+    const panel = openChooser();
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    fireEvent(panel, event);
+
+    expect(screen.queryByRole('group', { name: /choose a plate/i })).not.toBeInTheDocument();
+    expect(event.defaultPrevented).toBe(true);
   });
 });

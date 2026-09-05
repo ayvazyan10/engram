@@ -14,7 +14,11 @@ export interface UITemplate {
   /** Header */
   headerBg: string;
   headerBorder: string;
-  /** Sidebar + Inspector */
+  /** Sidebar + Inspector. `panelBorder` is every hairline in the app —
+   *  panel edges, card edges, input edges, dividers, the switcher frames. It
+   *  sits about 1.6:1 above its surface: a border is not a mark, so it needs
+   *  no 3:1, but the old values (~1.3:1) were so close to the surface that
+   *  panels had no edges and cards floated as slightly-lighter smudges. */
   panelBg: string;
   panelBorder: string;
   /** Root background */
@@ -58,9 +62,9 @@ export const TEMPLATES: UITemplate[] = [
     id: 'neural',
     name: 'Neural',
     headerBg: '#040d1e',
-    headerBorder: '#0f2040',
+    headerBorder: '#152b52',
     panelBg: '#060e1e',
-    panelBorder: '#0f2040',
+    panelBorder: '#152b52',
     rootBg: '#020817',
     textPrimary: '#e2e8f0',
     textSecondary: '#94a3b8',
@@ -83,9 +87,9 @@ export const TEMPLATES: UITemplate[] = [
     id: 'vercel',
     name: 'Mono',
     headerBg: '#000000',
-    headerBorder: '#1a1a1a',
+    headerBorder: '#262626',
     panelBg: '#0a0a0a',
-    panelBorder: '#1a1a1a',
+    panelBorder: '#262626',
     rootBg: '#000000',
     textPrimary: '#ededed',
     textSecondary: '#888888',
@@ -112,9 +116,9 @@ export const TEMPLATES: UITemplate[] = [
     id: 'midnight',
     name: 'Midnight',
     headerBg: '#0c0014',
-    headerBorder: '#1a0a30',
+    headerBorder: '#2a1449',
     panelBg: '#0e0018',
-    panelBorder: '#1a0a30',
+    panelBorder: '#2a1449',
     rootBg: '#080010',
     textPrimary: '#e0d4f5',
     textSecondary: '#9b8ab8',

@@ -408,7 +408,7 @@ describe('NeuronInspector write failures (H7 — all four caught into console.er
     render(<NeuronInspector />);
 
     fireEvent.change(screen.getByPlaceholderText(/add tag/i), { target: { value: 'new-tag' } });
-    fireEvent.click(screen.getByRole('button', { name: '+' }));
+    fireEvent.click(screen.getByRole('button', { name: /add tag/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not add that tag/i);
   });
@@ -440,11 +440,11 @@ describe('NeuronInspector write failures (H7 — all four caught into console.er
 
     const input = screen.getByPlaceholderText(/add tag/i);
     fireEvent.change(input, { target: { value: 'first' } });
-    fireEvent.click(screen.getByRole('button', { name: '+' }));
+    fireEvent.click(screen.getByRole('button', { name: /add tag/i }));
     await screen.findByRole('alert');
 
     fireEvent.change(input, { target: { value: 'ok' } });
-    fireEvent.click(screen.getByRole('button', { name: '+' }));
+    fireEvent.click(screen.getByRole('button', { name: /add tag/i }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 
