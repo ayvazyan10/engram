@@ -88,8 +88,8 @@ describe('consolidate() with contradiction auto-resolution', () => {
   it('leaves the cluster alone when its summary is discarded on write', async () => {
     const episodes = [
       await brain.store({ content: 'The nightly backup did not complete successfully', type: 'episodic' }),
-      await brain.store({ content: 'The nightly backup did not complete successfully again', type: 'episodic' }),
-      await brain.store({ content: 'The nightly backup did not complete successfully today', type: 'episodic' }),
+      await brain.store({ content: 'The nightly backup did not complete successfully because the disk filled up', type: 'episodic' }),
+      await brain.store({ content: 'The nightly backup did not complete successfully after the network connection failed', type: 'episodic' }),
     ];
     const episodeIds = episodes.map((e) => e.memory.id);
 

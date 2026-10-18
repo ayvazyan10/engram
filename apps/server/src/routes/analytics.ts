@@ -1,6 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, getDeviceId, schema, embed, packFP16 } from '@engram-ai-memory/core';
-import type { MemoryType } from '@engram-ai-memory/core';
+import { getDb, getDeviceId, schema } from '@engram-ai-memory/core';
 import { isNull, and, eq, inArray, sql, gte, lt, desc } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { brain, notifySyncWrite } from '../index.js';
@@ -291,66 +290,17 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     handler: async (req, reply) => {
-      const db = getDb();
-      const { id } = req.params;
-      const { content, importance, tags, concept } = req.body;
-
-      const [existing] = await db
-        .select()
-        .from(schema.memories)
-        .where(eq(schema.memories.id, id))
-        .limit(1);
-
-      if (!existing || existing.archivedAt !== null || !brain.canAccessNamespace(existing.namespace)) {
-        reply.code(404);
-        return { error: 'Memory not found' };
+      try {
+        const updated = await brain.updateMemory(req.params.id, req.body);
+        notifySyncWrite();
+        return updated;
+      } catch (error) {
+        if (error instanceof Error && error.message === `Memory not found: ${req.params.id}`) {
+          reply.code(404);
+          return { error: 'Memory not found' };
+        }
+        throw error;
       }
-
-      const updates: Record<string, unknown> = {
-        updatedAt: new Date().toISOString(),
-        deviceId: getDeviceId(),
-      };
-      if (content !== undefined) updates['content'] = content;
-      if (importance !== undefined) updates['importance'] = importance;
-      if (tags !== undefined) updates['tags'] = JSON.stringify(tags);
-      if (concept !== undefined) updates['concept'] = concept;
-
-      // Editing content invalidates the stored vector. Without re-embedding, the
-      // persisted embedding and the in-memory index keep describing the OLD text,
-      // so search silently returns the wrong rows (and survives restart).
-      let newVector: Float32Array | null = null;
-      if (content !== undefined && content !== existing.content) {
-        const embeddableText = existing.concept
-          ? `${concept ?? existing.concept}: ${content}`
-          : content;
-        newVector = await embed(embeddableText);
-        updates['embedding'] = packFP16(newVector);
-        updates['embeddingDim'] = newVector.length;
-        updates['embeddingModel'] = brain.getEmbeddingModel();
-      }
-
-      await db
-        .update(schema.memories)
-        .set(updates)
-        .where(eq(schema.memories.id, id));
-      notifySyncWrite();
-
-      if (newVector) {
-        brain.getVectorSearch().upsert({
-          id,
-          vector: newVector,
-          type: existing.type as MemoryType,
-          namespace: existing.namespace ?? undefined,
-        });
-      }
-
-      const [updated] = await db
-        .select()
-        .from(schema.memories)
-        .where(eq(schema.memories.id, id))
-        .limit(1);
-
-      return updated;
     },
   });
 
@@ -436,7 +386,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       const { ids } = req.body;
 
       // Resolve what is actually archivable first, in one query.
-      // brain.forget() only verifies existence in isolated mode, so unknown
+      // Exact ids only (brain.forget() would also accept prefixes). Unknown
       // ids used to be counted as archived and — worse — fired a 'forgotten'
       // webhook and an onForget plugin hook for a memory that never existed.
       const unique = [...new Set(ids)];

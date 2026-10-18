@@ -14,11 +14,11 @@ import os from 'os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
-import { partitionByExistence, forgetReport, hasMissingIds } from '../forget.js';
+import { partitionByExistence, forgetReport, hasMissingIds } from '../forget.ts';
 
 /** A brain that only knows which ids exist — enough for the partition logic. */
-function presenceOf(known: string[]): { getGraph(): { getNode(id: string): unknown } } {
-  return { getGraph: () => ({ getNode: (id: string) => (known.includes(id) ? { id } : undefined) }) };
+function presenceOf(known: string[]): { resolveMemoryId(id: string): string | undefined } {
+  return { resolveMemoryId: (id) => known.includes(id) ? id : undefined };
 }
 
 const dbPath = path.join(os.tmpdir(), `engram-mcp-forget-${Date.now()}.db`);
@@ -112,7 +112,7 @@ describe('forget', () => {
 });
 
 describe('partitionByExistence', () => {
-  it('splits ids by whether the graph knows them', () => {
+  it('splits ids by whether core resolves them', () => {
     const partition = partitionByExistence(presenceOf(['a', 'c']), ['a', 'b', 'c', 'd']);
     expect(partition.existing).toEqual(['a', 'c']);
     expect(partition.missing).toEqual(['b', 'd']);
@@ -131,9 +131,9 @@ describe('partitionByExistence', () => {
     expect(hasMissingIds(partition)).toBe(false);
   });
 
-  it('asks the graph once per unique id, not once per element', () => {
+  it('resolves once per unique id, not once per element', () => {
     const asked: string[] = [];
-    const brain = { getGraph: () => ({ getNode: (id: string) => { asked.push(id); return undefined; } }) };
+    const brain = { resolveMemoryId: (id: string) => { asked.push(id); return undefined; } };
     partitionByExistence(brain, ['x', 'x', 'y']);
     expect(asked).toEqual(['x', 'y']);
   });

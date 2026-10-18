@@ -400,6 +400,18 @@ export class ContradictionDetector {
   private detectValueChange(a: string, b: string): number {
     let score = 0;
 
+    // A changed number in the same statement is a value change even without
+    // an explicit "changed to" phrase (for example, "port 4901" / "port 4902").
+    const numbers = /\b\d+(?:\.\d+)*\b/g;
+    const valuesA = a.match(numbers) ?? [];
+    const valuesB = b.match(numbers) ?? [];
+    if (valuesA.length > 0 && valuesB.length > 0
+      && valuesA.join('|') !== valuesB.join('|')
+      && this.tokenize(a.replace(numbers, 'number')).join(' ')
+        === this.tokenize(b.replace(numbers, 'number')).join(' ')) {
+      score += 0.6;
+    }
+
     for (const pattern of CHANGE_PATTERNS) {
       if (pattern.test(a) || pattern.test(b)) {
         score += 0.3;

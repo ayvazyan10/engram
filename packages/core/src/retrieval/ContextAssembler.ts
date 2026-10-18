@@ -475,23 +475,23 @@ function formatContext(memories: Memory[]): string {
   if (semantic.length > 0) {
     sections.push('\n[KNOWLEDGE]');
     for (const m of semantic) {
-      sections.push(`• ${m.summary ?? m.content}`);
+      sections.push(`• [${m.id.slice(0, 8)} · ${m.createdAt.slice(0, 10)}] ${m.summary ?? m.content}`);
     }
   }
 
   if (procedural.length > 0) {
     sections.push('\n[PATTERNS & SKILLS]');
     for (const m of procedural) {
-      sections.push(`• ${m.summary ?? m.content}`);
+      sections.push(`• [${m.id.slice(0, 8)} · ${m.createdAt.slice(0, 10)}] ${m.summary ?? m.content}`);
     }
   }
 
   if (episodic.length > 0) {
     sections.push('\n[PAST EVENTS & CONVERSATIONS]');
     for (const m of episodic) {
-      const when = m.eventAt ? new Date(m.eventAt).toLocaleDateString() : '';
-      const src = m.source ? `[${m.source}]` : '';
-      sections.push(`• ${when} ${src} ${m.summary ?? m.content}`.trim());
+      const when = (m.eventAt ?? m.createdAt).slice(0, 10);
+      const src = m.source ? `[${m.source}] ` : '';
+      sections.push(`• [${m.id.slice(0, 8)} · ${when}] ${src}${m.summary ?? m.content}`);
     }
   }
 

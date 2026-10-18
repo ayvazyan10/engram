@@ -75,7 +75,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       reply.code(201);
-      return result;
+      return { ...result, deduplicated: result.deduplicated ?? false };
     },
   });
 
@@ -240,8 +240,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     schema: { tags: ['memory'], summary: 'Archive (soft-delete) a memory' },
     handler: async (req, reply) => {
       const db = getDb();
-      // brain.forget() checks existence only in isolated mode, so deleting an
-      // id that was never stored answered 204 and still fired a 'forgotten'
+      // An exact-id lookup, because brain.forget() also accepts id prefixes and
+      // REST DELETE must not. Before brain.forget() checked existence at all,
+      // deleting an id that was never stored answered 204 and still fired a 'forgotten'
       // webhook and an onForget plugin hook — subscribers saw archives of
       // memories that never existed. Already-archived rows are excluded too,
       // so a second DELETE is a 404 rather than a second phantom event.

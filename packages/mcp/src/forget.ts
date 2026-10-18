@@ -1,21 +1,13 @@
 /**
  * What `forget` is allowed to claim.
  *
- * The handler used to loop `await brain.forget(id)` over whatever it was given
- * and answer `{"archived": ids.length}`. Outside isolated mode `brain.forget`
- * on an unknown id resolves without doing anything, so a mistyped or
- * hallucinated id came back as "Archived 1 memory(ies)" — and the `forgotten`
- * webhook and the `onForget` plugin hook fired for a memory that never existed.
- *
- * Existence is checked against the knowledge graph node every stored memory
- * has: `getNode` answers for memories written by any process (the graph is
- * loaded from the database on initialize) and answers `undefined` once a memory
- * has been archived, which is exactly the question `forget` needs answered.
+ * Resolve ids against live database rows through core, so full ids and short
+ * prefixes share namespace checks and ambiguous prefixes count as missing.
  */
 
 /** The one capability this module needs from the brain. */
 export interface MemoryPresence {
-  getGraph(): { getNode(id: string): unknown };
+  resolveMemoryId(id: string): string | undefined;
 }
 
 export interface IdPartition {
@@ -33,7 +25,6 @@ export interface IdPartition {
  * counting it twice would overstate the result exactly as the old code did.
  */
 export function partitionByExistence(brain: MemoryPresence, ids: readonly string[]): IdPartition {
-  const graph = brain.getGraph();
   const existing: string[] = [];
   const missing: string[] = [];
   const seen = new Set<string>();
@@ -41,8 +32,9 @@ export function partitionByExistence(brain: MemoryPresence, ids: readonly string
   for (const id of ids) {
     if (seen.has(id)) continue;
     seen.add(id);
-    if (graph.getNode(id) === undefined) missing.push(id);
-    else existing.push(id);
+    const resolvedId = brain.resolveMemoryId(id);
+    if (resolvedId === undefined) missing.push(id);
+    else if (!existing.includes(resolvedId)) existing.push(resolvedId);
   }
 
   return { existing, missing };

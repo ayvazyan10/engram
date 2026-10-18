@@ -12,7 +12,7 @@
  * sneaks an await back inside.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'node:os';
 import path from 'path';
@@ -182,13 +182,16 @@ describe('forget() and consolidate() atomicity', () => {
   afterEach(async () => {
     await closeDb();
     cleanupTestDb(dbPath);
+    vi.unstubAllEnvs();
   });
 
   it('overlapping consolidation creates only one live summary', async () => {
     const brain = new NeuralBrain({ dbPath });
     try {
       await brain.initialize();
-      for (let i = 0; i < 3; i++) await brain.store({ content: 'I drank green tea at the office', type: 'episodic' });
+      for (const activity of ['planning the release', 'reviewing pull requests', 'writing documentation']) {
+        await brain.store({ content: `I drank green tea at the office while ${activity}`, type: 'episodic' });
+      }
       const results = await Promise.all([brain.consolidate(3, 0.6), brain.consolidate(3, 0.6)]);
       expect(results.flat()).toHaveLength(1);
       const live = getDb().select().from(schema.memories)
@@ -238,18 +241,21 @@ describe('forget() and consolidate() atomicity', () => {
   });
 
   it('consolidate() archives the whole cluster, never a partial one', async () => {
+    // Distinct daily episodes must survive store() to exercise consolidation.
+    vi.stubEnv('ENGRAM_DEDUP_THRESHOLD', '1');
     const brain = new NeuralBrain({ dbPath });
     await brain.initialize();
 
     const ids: string[] = [];
-    for (let i = 0; i < 4; i++) {
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday']) {
       const { memory } = await brain.store({
-        content: 'The nightly backup job completed successfully',
+        content: `The nightly backup job completed successfully on ${day}`,
         type: 'episodic',
         source: 'unit-test',
       });
       ids.push(memory.id);
     }
+    expect(new Set(ids).size).toBe(4);
 
     const created = await brain.consolidate(3, 0.8);
     expect(created.length).toBeGreaterThan(0);
@@ -301,7 +307,9 @@ describe('resolveContradiction() atomicity', () => {
   });
 
   it('archives the loser and tombstones the contradicts edge together', async () => {
-    const brain = new NeuralBrain({ dbPath });
+    // This fixture supplies its own edge; automatic detection now recognizes
+    // bare numeric changes and would create the same edge before the insert.
+    const brain = new NeuralBrain({ dbPath, contradictionConfig: { enabled: false } });
     await brain.initialize();
 
     const a = await brain.store({ content: 'The API listens on port 4901', type: 'semantic', importance: 0.6 });
@@ -358,7 +366,8 @@ describe('resolveContradiction() atomicity', () => {
   });
 
   it('keep_both leaves both memories and the edge intact', async () => {
-    const brain = new NeuralBrain({ dbPath });
+    // Keep the manually supplied edge independent of detector heuristics.
+    const brain = new NeuralBrain({ dbPath, contradictionConfig: { enabled: false } });
     await brain.initialize();
 
     const a = await brain.store({ content: 'Cache TTL is 60 seconds', type: 'semantic', importance: 0.6 });

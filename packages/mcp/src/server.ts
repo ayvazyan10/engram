@@ -127,6 +127,8 @@ const server = new McpServer(
       '  Use type="semantic" for facts, "episodic" for events, "procedural" for workflows.',
       '',
       'RECALL before answering:',
+      '  Recall shows [id · date] before each memory; id is an eight-character prefix.',
+      '  Use update_memory with that id to correct a stale fact.',
       '  - Past decisions, project history, conventions → search_memory first',
       '  - User preferences or prior corrections → search_memory first',
       '',
@@ -188,6 +190,7 @@ server.tool(
       id: result.memory.id,
       type: result.memory.type,
       importance: result.memory.importance,
+      deduplicated: result.deduplicated ?? false,
       message: 'Memory stored successfully',
     };
 
@@ -211,6 +214,32 @@ server.tool(
           text: JSON.stringify(response),
         },
       ],
+    };
+  }
+);
+
+// ─── Tool: update_memory ──────────────────────────────────────────────────────
+server.tool(
+  'update_memory',
+  'Correct a stale fact or edit an existing memory by its full ID or unique prefix of at least 8 characters.',
+  {
+    id: z.string().describe('Memory ID or unique prefix (at least 8 characters)'),
+    content: z.string().min(1).optional().describe('Replacement memory content'),
+    importance: z.number().min(0).max(1).optional().describe('Importance score 0.0–1.0'),
+    tags: z.array(z.string()).optional().describe('Replacement tags'),
+    concept: z.string().optional().describe('Replacement concept name'),
+  },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  async ({ id, ...updates }) => {
+    await ensureInitialized();
+    const memory = await brain.updateMemory(id, updates);
+    syncEngine?.notifyWrite();
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        id: memory.id, content: memory.content, importance: memory.importance,
+        tags: JSON.parse(memory.tags), concept: memory.concept,
+        message: 'Memory updated successfully',
+      }) }],
     };
   }
 );
@@ -436,16 +465,14 @@ server.tool(
   'forget',
   'Archive outdated or incorrect memories. Use when info is superseded, user asks to forget, or after resolving contradictions.',
   {
-    ids: z.array(z.string()).describe('Memory IDs to archive'),
+    ids: z.array(z.string()).describe('Memory IDs or unique prefixes (at least 8 characters) to archive'),
     reason: z.string().optional().describe('Reason for forgetting (logged only)'),
   },
   { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async ({ ids, reason }) => {
     await ensureInitialized();
 
-    // Check first, archive second. `brain.forget` on an unknown id resolves
-    // without doing anything, so archiving blind and counting the request was
-    // how a hallucinated id came back as "Archived 1 memory(ies)".
+    // Resolve first so aliases count once and missing or ambiguous ids are reported.
     const partition = partitionByExistence(brain, ids);
     for (const id of partition.existing) {
       await brain.forget(id);

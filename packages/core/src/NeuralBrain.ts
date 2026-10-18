@@ -13,7 +13,7 @@
 
 import fs from 'fs';
 import { createHash } from 'crypto';
-import { and, desc, eq, gt, gte, inArray, isNull, like, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
@@ -33,7 +33,7 @@ import { DecayEngine } from './lifecycle/DecayEngine.js';
 import type { DecaySweepResult } from './lifecycle/DecayEngine.js';
 import type { DecayPolicyConfig } from './lifecycle/DecayPolicy.js';
 import { mergePolicy } from './lifecycle/DecayPolicy.js';
-import { readEnvString } from './lifecycle/envConfig.js';
+import { readDedupThreshold, readEnvString } from './lifecycle/envConfig.js';
 import { ContradictionDetector } from './lifecycle/ContradictionDetector.js';
 import { decideResolution, planAutoResolution, writeResolution } from './lifecycle/contradictionResolution.js';
 import type {
@@ -122,6 +122,8 @@ export interface StoreInput {
 export interface StoreResult {
   /** The stored memory */
   memory: Memory;
+  /** True when tags and importance were merged into an existing live memory. */
+  deduplicated?: boolean;
   /** Contradiction check results (empty if detection is disabled) */
   contradictions: ContradictionCheckResult;
   /**
@@ -908,6 +910,7 @@ export class NeuralBrain {
    */
   async store(input: StoreInput): Promise<StoreResult> {
     this.assertInitialized();
+    const dedupThreshold = readDedupThreshold(process.env);
     // Checked before anything is embedded or written. `input.importance ??
     // default` let any number through — NaN is not nullish, so it reached
     // SQLite, which stores NaN as NULL and then rejects the row on a NOT NULL
@@ -950,6 +953,13 @@ export class NeuralBrain {
       updatedAt: now,
       deviceId,
     };
+
+    await this.syncIndexFromStore();
+    const duplicate = this.deduplicateStore(record, embedding, dedupThreshold);
+    if (duplicate) {
+      await this.refreshIndexBaseline();
+      return duplicate;
+    }
 
     // ── Auto-link: pick the most similar neighbours to connect to.
     // This builds the neural network organically — every new memory connects to
@@ -1132,6 +1142,35 @@ export class NeuralBrain {
     return { memory: inserted!, contradictions: contradictionResult };
   }
 
+  private deduplicateStore(record: NewMemory, embedding: Float32Array, threshold: number): StoreResult | undefined {
+    const db = getDb();
+    const [neighbour] = this.vectorSearch.search(embedding, 1, threshold);
+    if (!neighbour) return undefined;
+    const live = and(eq(schema.memories.id, neighbour.id), isNull(schema.memories.archivedAt));
+    const existing = db.select().from(schema.memories).where(live).get();
+    // Only the closest live neighbour is eligible; never fall through to a
+    // less similar memory with a matching type, namespace, or content.
+    if (!existing || existing.type !== record.type || existing.namespace !== (record.namespace ?? null)
+      || this.contradictionDetector.analyzeContradiction(record.content, existing.content).length > 0) {
+      return undefined;
+    }
+    const oldTags: string[] = JSON.parse(existing.tags);
+    const newTags: string[] = JSON.parse(record.tags ?? '[]');
+    this.checkIndexClaimBeforeWrite();
+    const memory = db.update(schema.memories).set({
+      tags: JSON.stringify([...new Set([...oldTags, ...newTags])]),
+      importance: Math.max(existing.importance, record.importance ?? existing.importance),
+      updatedAt: record.updatedAt,
+      deviceId: record.deviceId,
+    }).where(live).returning().get();
+    if (!memory) return undefined;
+    return {
+      memory,
+      deduplicated: true,
+      contradictions: { hasContradictions: false, contradictions: [], candidatesChecked: 1, latencyMs: 0 },
+    };
+  }
+
   /**
    * Recall the most relevant context for a query.
    * Returns a formatted string ready to inject into an AI prompt.
@@ -1271,19 +1310,59 @@ export class NeuralBrain {
     });
   }
 
+  /** Resolve a full id or a unique prefix of at least eight characters. */
+  resolveMemoryId(id: string): string | undefined {
+    this.assertInitialized();
+    const match = id.length >= 8
+      ? sql`substr(${schema.memories.id}, 1, ${id.length}) = ${id}`
+      : eq(schema.memories.id, id);
+    const matches = getDb().select({ id: schema.memories.id })
+      .from(schema.memories)
+      .where(and(...this.liveConditions(), match))
+      .limit(2).all();
+    return matches.length === 1 ? matches[0]!.id : undefined;
+  }
+
+  async updateMemory(
+    id: string,
+    input: Partial<Pick<StoreInput, 'content' | 'importance' | 'tags' | 'concept'>>,
+  ): Promise<Memory> {
+    const resolvedId = this.resolveMemoryId(id);
+    if (!resolvedId) throw new Error(`Memory not found: ${id}`);
+    if (input.importance !== undefined) assertValidImportance(input.importance);
+    const db = getDb();
+    const existing = db.select().from(schema.memories)
+      .where(eq(schema.memories.id, resolvedId)).get()!;
+    const { content, importance, tags, concept } = input;
+    const updates: Partial<NewMemory> = {
+      updatedAt: new Date().toISOString(), deviceId: getDeviceId(),
+    };
+    if (content !== undefined) updates.content = content;
+    if (importance !== undefined) updates.importance = importance;
+    if (tags !== undefined) updates.tags = JSON.stringify(tags);
+    if (concept !== undefined) updates.concept = concept;
+    const text = memoryEmbeddingText({ ...existing, ...updates });
+    const newVector = text !== memoryEmbeddingText(existing) ? await embed(text) : null;
+    if (newVector) {
+      updates.embedding = packFP16(newVector);
+      updates.embeddingDim = newVector.length;
+      updates.embeddingModel = this.getEmbeddingModel();
+    }
+    await db.update(schema.memories).set(updates).where(eq(schema.memories.id, resolvedId));
+    if (newVector) {
+      this.vectorSearch.upsert({
+        id: resolvedId, vector: newVector, type: existing.type,
+        namespace: existing.namespace ?? undefined,
+      });
+    }
+    return db.select().from(schema.memories).where(eq(schema.memories.id, resolvedId)).get()!;
+  }
+
   async forget(id: string): Promise<void> {
     this.assertInitialized();
-
-    if (this.namespaceMode === 'isolated') {
-      const db = getDb();
-      const [memory] = await db.select({ namespace: schema.memories.namespace })
-        .from(schema.memories)
-        .where(eq(schema.memories.id, id))
-        .limit(1);
-      if (!memory || !this.canAccessNamespace(memory.namespace)) {
-        throw new Error(`Memory not found: ${id}`);
-      }
-    }
+    const resolvedId = this.resolveMemoryId(id);
+    if (!resolvedId) throw new Error(`Memory not found: ${id}`);
+    id = resolvedId;
 
     this.archiveAtomic([id]);
 
@@ -1451,7 +1530,7 @@ export class NeuralBrain {
 
       const summary = this.summarizeCluster(contents);
 
-      const { memory: semantic, discarded } = await this.store({
+      const { memory: semantic, discarded, deduplicated } = await this.store({
         content: summary,
         type: 'semantic',
         concept,
@@ -1469,7 +1548,9 @@ export class NeuralBrain {
       // replaced it with nothing — three episodes and a summary, none of them
       // live — while store()'s return value was still reported as created.
       // Leave the cluster intact and report no summary for it.
-      if (discarded) continue;
+      // A reused summary belongs to another consolidation attempt. It must
+      // retain ownership of archiving its sources and reporting the new row.
+      if (discarded || deduplicated) continue;
 
       // Archive the whole cluster in ONE transaction. Calling forget() per
       // episode meant a failure mid-loop left the cluster half-archived: a
