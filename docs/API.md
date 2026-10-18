@@ -401,7 +401,7 @@ Bulk store memories in a single transaction. High-throughput path.
 
 The `contradictions` field reports how many contradictions were detected across the batch. Use `GET /api/contradictions` to retrieve details.
 
-`memories` accepts at most **1000** items. Every item is embedded, so the fan-out is bounded — 16 embeds in flight at a time by default, tunable with `ENGRAM_BATCH_CONCURRENCY`. `ids` come back in the order the memories were submitted.
+The batch is embedded in one call and stored in order; `memories` accepts at most **1000** items and `ids` come back in submission order.
 
 ---
 

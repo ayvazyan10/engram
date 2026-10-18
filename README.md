@@ -389,7 +389,6 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_ALLOWED_HOSTS` | *(empty)* | Hostnames allowed in the `Host` header on `/api/*` (DNS-rebinding defense). IP literals and `localhost` always pass; anything reached by name — a reverse proxy, a Docker service name — must be listed. `*` disables the check. |
 | `ENGRAM_RATE_LIMIT_MAX` | `1000` | Requests per window in the `global` tier. Also `ENGRAM_RATE_LIMIT_HEAVY_MAX` (300), `ENGRAM_RATE_LIMIT_WHOLE_STORE_MAX` (30), `ENGRAM_RATE_LIMIT_WINDOW_MS` (60000), `ENGRAM_RATE_LIMIT_DISABLED`. |
 | `ENGRAM_CSP` | *(built-in policy)* | Override the Content-Security-Policy sent on every response, or `off` to send none. |
-| `ENGRAM_BATCH_CONCURRENCY` | `16` | Parallel embeds inside `POST /api/memory/batch`. |
 | `ENGRAM_WEBHOOK_ALLOW_PRIVATE` | `false` | Allow webhook delivery to loopback/private addresses. Denied by default to prevent SSRF; set `true` if your webhook consumers are on localhost or a private network. |
 | `ENGRAM_SYNC_URL` | *(none)* | PostgreSQL connection string for multi-device sync. Unset = sync disabled. See [Cloud Sync](docs/CLOUD-SYNC.md). |
 | `ENGRAM_SYNC_MODE` | `auto` | Sync behavior: `auto` (background sync on interval + debounce), `manual` (explicit only), `off`. |

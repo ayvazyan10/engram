@@ -19,7 +19,6 @@ One exception to "environment variables only": the CLI keeps `~/.engram/config.j
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived. Must be 0–1; a finite value outside that range aborts startup |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Path to persist the vector index for fast startup |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model used for vectorization |
-| `ENGRAM_BATCH_CONCURRENCY` | `16` | How many `POST /api/memory/batch` items may embed at once. Raise it when the embedder is remote and latency-bound |
 | `ENGRAM_DATABASE` | *(unset)* | Legacy backend selector. Setting it to `postgresql` aborts startup by design — see [Database](#database) |
 
 Security-related variables (`ENGRAM_API_KEY`, host and origin allowlists, rate limits, headers) have their own section: [Security](#security). Cloud-sync variables are in [Cloud Sync](#cloud-sync).
