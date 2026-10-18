@@ -2,23 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
 import { eq, isNull, desc, and, or, getTableColumns } from 'drizzle-orm';
 import { brain, realtime, notifySyncWrite } from '../index.js';
-import { readEnvNumberOr } from '@engram-ai-memory/core';
-import { mapWithConcurrency } from '../lib/concurrency.js';
 import { strictQueryString } from '../lib/strictBody.js';
-
-/**
- * How many batched stores may embed at once. Override with
- * ENGRAM_BATCH_CONCURRENCY when the embedder is remote and latency-bound
- * rather than CPU-bound.
- *
- * A tuning knob, so a malformed value warns and keeps the default rather than
- * aborting startup. `|| 16` already caught NaN, but it also caught a
- * deliberate 0 and let a negative through to Math.max — and it said nothing
- * either way, so a typo was indistinguishable from not setting the variable.
- */
-const BATCH_CONCURRENCY = readEnvNumberOr(
-  process.env, 'ENGRAM_BATCH_CONCURRENCY', 16, { min: 1 }
-);
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/memory — store a memory
@@ -131,27 +115,15 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
         }
         const start = Date.now();
-        // Bounded fan-out, not Promise.all over the whole array: every store
-        // embeds its text, so 1000 items meant 1000 concurrent embedder calls
-        // and no gap for the event loop to serve anything else. Order is
-        // preserved because the response returns `ids` positionally.
-        const results = await mapWithConcurrency(
-          req.body.memories,
-          BATCH_CONCURRENCY,
-          // Forward every documented per-item field. Only content and type were
-          // passed through, so importance/source/tags/concept/namespace were
-          // silently dropped for batched writes.
-          (m) =>
-            brain.store({
-              content: m.content,
-              type: (m.type as 'episodic' | 'semantic' | 'procedural') ?? 'episodic',
-              source: m.source,
-              importance: m.importance,
-              tags: m.tags,
-              concept: m.concept,
-              namespace: m.namespace,
-            })
-        );
+        const results = await brain.storeBatch(req.body.memories.map((m) => ({
+          content: m.content,
+          type: (m.type as 'episodic' | 'semantic' | 'procedural') ?? 'episodic',
+          source: m.source,
+          importance: m.importance,
+          tags: m.tags,
+          concept: m.concept,
+          namespace: m.namespace,
+        })));
         notifySyncWrite();
         reply.code(201);
         return {

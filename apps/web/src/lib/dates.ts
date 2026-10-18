@@ -1,4 +1,4 @@
-import { parseISO, isValid, format } from 'date-fns';
+import { parseISO, isValid, format, formatDistanceToNowStrict } from 'date-fns';
 
 /**
  * Parses an ISO date string defensively — returns `null` instead of
@@ -64,4 +64,12 @@ export function formatTimeOfDay(value: string): string {
 export function formatDateTime(value: string): string {
   const parsed = safeParseISO(value);
   return parsed ? format(parsed, "MMM d, yyyy · HH:mm") : UNKNOWN_DATE_LABEL;
+}
+
+/** `3 hours ago` — a card's age at a glance. Under a minute reads "just now". */
+export function formatRelative(value: string): string {
+  const parsed = safeParseISO(value);
+  if (!parsed) return UNKNOWN_DATE_LABEL;
+  if (Date.now() - parsed.getTime() < 60_000) return 'just now';
+  return formatDistanceToNowStrict(parsed, { addSuffix: true });
 }

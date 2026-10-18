@@ -15,6 +15,7 @@
     }
   },
   "scripts": {
+    "bench:longmemeval": "tsx bench/longmemeval.ts",
     "build": "tsc && pnpm run copy:pg-migrations",
     "copy:pg-migrations": "node -e \"const fs=require('fs');const src='src/db/pg/migrations';if(fs.existsSync(src)){fs.cpSync(src,'dist/db/pg/migrations',{recursive:true});}\"",
     "dev": "tsc --watch",

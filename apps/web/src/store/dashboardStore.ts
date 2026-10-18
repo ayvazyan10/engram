@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
-export type ViewMode = '3d' | 'timeline' | 'analytics' | 'reflections';
+/** 'home' is the landing view: search and the newest memories as cards. */
+export type ViewMode = 'home' | '3d' | 'timeline' | 'analytics' | 'reflections';
 
 interface DashboardState {
   viewMode: ViewMode;
@@ -8,6 +9,6 @@ interface DashboardState {
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
-  viewMode: '3d',
+  viewMode: 'home',
   setViewMode: (mode) => set({ viewMode: mode }),
 }));

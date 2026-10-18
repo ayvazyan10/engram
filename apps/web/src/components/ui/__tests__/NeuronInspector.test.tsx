@@ -13,6 +13,7 @@ vi.mock('../../../lib/api.js', () => ({
     addTag: vi.fn(),
     removeTag: vi.fn(),
     resolveContradiction: vi.fn(),
+    updateMemory: vi.fn(),
   },
 }));
 
@@ -550,5 +551,101 @@ describe('NeuronInspector connections name the memory at the other end', () => {
 
     render(<NeuronInspector />);
     expect(await screen.findByText(/could not load this memory’s connections/i)).toBeInTheDocument();
+  });
+});
+
+describe('NeuronInspector edit in place', () => {
+  type Updated = Awaited<ReturnType<typeof api.updateMemory>>;
+
+  function updated(overrides: Partial<Updated> = {}): Updated {
+    return { id: 'a', content: 'hello world', importance: 0.5, tags: '["keep"]', concept: 'greeting', updatedAt: '2026-10-18T00:00:00.000Z', ...overrides };
+  }
+
+  beforeEach(() => {
+    resetStores();
+    vi.mocked(api.getGraph).mockReset();
+    vi.mocked(api.getGraph).mockResolvedValue(graphResponse([]));
+    vi.mocked(api.updateMemory).mockReset();
+    const record = makeRecord({ id: 'a', tags: '["keep"]', concept: 'greeting' });
+    useMemoryStore.setState({ records: [record], searchResults: [record] });
+    act(() => useNeuralStore.getState().selectNeuron('a'));
+  });
+
+  function startEditing() {
+    render(<NeuronInspector />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    return screen.getByRole('form', { name: 'Edit memory' });
+  }
+
+  it('opens on the current values, and saves nothing until something changes', () => {
+    const form = startEditing();
+    expect(within(form).getByLabelText('Content')).toHaveValue('hello world');
+    expect(within(form).getByLabelText('Concept')).toHaveValue('greeting');
+    expect(within(form).getByLabelText(/importance/i)).toHaveValue('50');
+    expect(within(form).getByLabelText('Tags')).toHaveValue('keep');
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
+  it('will not save an empty memory', () => {
+    const form = startEditing();
+    fireEvent.change(within(form).getByLabelText('Content'), { target: { value: '   ' } });
+    expect(screen.getByText('A memory needs some content.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
+  it('sends only what changed, shows the new values everywhere, and says it saved', async () => {
+    vi.mocked(api.updateMemory).mockResolvedValueOnce(
+      updated({ content: 'hello there', importance: 0.8, tags: '["keep","fixed"]' })
+    );
+    const form = startEditing();
+    fireEvent.change(within(form).getByLabelText('Content'), { target: { value: 'hello there' } });
+    fireEvent.change(within(form).getByLabelText(/importance/i), { target: { value: '80' } });
+    fireEvent.change(within(form).getByLabelText('Tags'), { target: { value: 'keep, fixed, keep,' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved and re-indexed for search.');
+    expect(api.updateMemory).toHaveBeenCalledWith('a', { content: 'hello there', importance: 0.8, tags: ['keep', 'fixed'] });
+    expect(screen.queryByRole('form', { name: 'Edit memory' })).not.toBeInTheDocument();
+    expect(screen.getByText('hello there')).toBeInTheDocument();
+    expect(screen.getByText('80%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove tag fixed' })).toBeInTheDocument();
+    // The cards read these two lists.
+    const { records, searchResults } = useMemoryStore.getState();
+    expect(records[0]).toMatchObject({ content: 'hello there', importance: 0.8, tags: '["keep","fixed"]' });
+    expect(searchResults[0]).toMatchObject({ content: 'hello there' });
+  });
+
+  it('shows the save in flight and keeps the form still while it is', async () => {
+    let finish!: (value: Updated) => void;
+    vi.mocked(api.updateMemory).mockReturnValueOnce(new Promise((res) => { finish = res; }));
+    const form = startEditing();
+    fireEvent.change(within(form).getByLabelText('Concept'), { target: { value: 'salutation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(within(form).getByLabelText('Content')).toBeDisabled();
+
+    await act(async () => finish(updated({ concept: 'salutation' })));
+    expect(screen.getByRole('status')).toHaveTextContent('Saved');
+  });
+
+  it("keeps the edit open and shows the server's reason when the save fails", async () => {
+    vi.mocked(api.updateMemory).mockRejectedValueOnce(new Error('Memory not found'));
+    const form = startEditing();
+    fireEvent.change(within(form).getByLabelText('Content'), { target: { value: 'hello there' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save your changes: Memory not found');
+    expect(within(form).getByLabelText('Content')).toHaveValue('hello there');
+    expect(useMemoryStore.getState().records[0]?.content).toBe('hello world');
+  });
+
+  it('cancelling leaves the memory alone', () => {
+    const form = startEditing();
+    fireEvent.change(within(form).getByLabelText('Content'), { target: { value: 'scrap this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(api.updateMemory).not.toHaveBeenCalled();
+    expect(screen.getByText('hello world')).toBeInTheDocument();
   });
 });

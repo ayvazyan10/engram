@@ -35,12 +35,23 @@ describe('global.css scrollbars (L4)', () => {
 });
 
 describe('global.css responsive labels (M12)', () => {
-  it('still collapses the view switcher label below 860px', () => {
-    expect(css).toMatch(/@media \(max-width: 860px\)\s*\{\s*\.ec-switcher-label/);
+  // The header stays one row with labeled tabs: below 860px it is the tab
+  // icons that go, never the tab labels.
+  it('drops the view switcher icons, not its labels, below 860px', () => {
+    expect(css).toMatch(/@media \(max-width: 860px\)\s*\{\s*\.ec-switcher-icon/);
+    expect(rules).not.toContain('.ec-switcher-label');
   });
 
-  it('never hides the template switcher label — its "icon" is an unlabelled colour dot', () => {
-    expect(rules).not.toContain('.ec-template-label');
+  it('keeps the header on one row', () => {
+    expect(rules).toMatch(/\.ec-header\s*\{\s*flex-wrap:\s*nowrap/);
+  });
+
+  // The theme's name only goes on a phone, where the compact switcher's dot
+  // carries it in its aria-label (TemplateSwitcher.test.tsx).
+  it('hides the template switcher label only below 640px', () => {
+    const phone = rules.match(/@media \(max-width: 640px\)\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(phone).toContain('.ec-template-label');
+    expect(rules.replace(phone, '')).not.toContain('.ec-template-label');
   });
 });
 

@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import type { StoreResult } from '../../../../packages/core/src/NeuralBrain.ts';
 import { getDb, schema } from '../../../../packages/core/src/db/index.ts';
 
 vi.mock('@engram-ai-memory/core', () => import('../../../../packages/core/src/index.ts'));
 vi.mock('../../../../packages/core/src/embedding/Embedder.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../../../packages/core/src/embedding/Embedder.ts')>(),
   embed: async () => new Float32Array(384).fill(1),
+  embedBatch: async (texts: string[]) => texts.map(() => new Float32Array(384).fill(1)),
 }));
 
 const directory = mkdtempSync(join(tmpdir(), 'engram-rest-dedup-'));
@@ -47,6 +49,41 @@ it('exposes deduplicated and the existing memory in POST /api/memory', async () 
   expect(second.json()).toMatchObject({
     memory: { id: first.json().memory.id }, deduplicated: true,
   });
+});
+
+it('POST /api/memory/batch delegates once and preserves fields and positional ids', async () => {
+  const storeBatch = vi.spyOn(brain, 'storeBatch');
+  const memories = [
+    { content: 'Batch service listens on port 4901', type: 'episodic', source: 'import', importance: 0.9,
+      tags: ['batch'], concept: 'Batch service' },
+    { content: 'Batch service listens on port 4902', type: 'episodic' },
+  ];
+  try {
+    const response = await app.inject({ method: 'POST', url: '/api/memory/batch', payload: { memories } });
+    expect(response.statusCode).toBe(201);
+    expect(storeBatch).toHaveBeenCalledExactlyOnceWith(memories);
+    const results: StoreResult[] = await storeBatch.mock.results[0]!.value;
+    expect(response.json()).toEqual({
+      count: 2, latencyMs: expect.any(Number), ids: results.map((result) => result.memory.id),
+      contradictions: results.filter((result) => result.contradictions.hasContradictions).length,
+    });
+    expect(results[0]!.memory).toMatchObject({ source: 'import', importance: 0.9, tags: '["batch"]', concept: 'Batch service' });
+  } finally {
+    storeBatch.mockRestore();
+  }
+});
+
+it('POST /api/memory/batch accepts empty batches and retains validation and the 1000 item limit', async () => {
+  const empty = await app.inject({ method: 'POST', url: '/api/memory/batch', payload: { memories: [] } });
+  expect(empty.statusCode).toBe(201);
+  expect(empty.json()).toMatchObject({ count: 0, ids: [], contradictions: 0 });
+  for (const memories of [
+    [{ content: '' }], [{ content: 'Invalid importance', importance: 2 }],
+    Array.from({ length: 1001 }, () => ({ content: 'Too many' })),
+  ]) {
+    const response = await app.inject({ method: 'POST', url: '/api/memory/batch', payload: { memories } });
+    expect(response.statusCode).toBe(400);
+  }
 });
 
 it('PATCH delegates to core and returns the updated memory for a prefix', async () => {

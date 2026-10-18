@@ -32,6 +32,9 @@ interface MemoryState {
    */
   loadedCount: number;
   currentContext: string;
+  /** Full ids of the memories `currentContext` was assembled from. The block
+   *  itself only prints 8-character prefixes. */
+  contextIds: string[];
   recallLatencyMs: number | null;
   highlightedIds: Set<string>;
   /**
@@ -47,7 +50,7 @@ interface MemoryState {
   setSearchQuery: (query: string) => void;
   setSearching: (searching: boolean) => void;
   /** `latencyMs: null` clears the status bar's recall read-out. */
-  setContext: (context: string, latencyMs: number | null) => void;
+  setContext: (context: string, latencyMs: number | null, ids?: string[]) => void;
   setHighlightedIds: (ids: Set<string>) => void;
   /** The next page of the list, appended. Rows already present (a socket
    *  arrival shifts the server's offsets) are skipped. */
@@ -56,6 +59,9 @@ interface MemoryState {
   removeRecord: (id: string) => void;
   /** Persist a tag edit into the record so re-selecting it doesn't show stale tags. */
   updateRecordTags: (id: string, tags: string[]) => void;
+  /** An edited record, as the server returned it, replacing its old copy in
+   *  the list and in the search results. */
+  updateRecord: (record: MemoryRecord) => void;
 }
 
 export const useMemoryStore = create<MemoryState>((set) => ({
@@ -65,6 +71,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   isSearching: false,
   loadedCount: 0,
   currentContext: '',
+  contextIds: [],
   recallLatencyMs: null,
   highlightedIds: new Set(),
   storeChanges: 0,
@@ -73,7 +80,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   setSearchResults: (results) => set({ searchResults: results }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setSearching: (searching) => set({ isSearching: searching }),
-  setContext: (context, latencyMs) => set({ currentContext: context, recallLatencyMs: latencyMs }),
+  setContext: (context, latencyMs, ids = []) => set({ currentContext: context, recallLatencyMs: latencyMs, contextIds: ids }),
   setHighlightedIds: (ids) => set({ highlightedIds: ids }),
   appendRecords: (page) =>
     set((state) => {
@@ -111,5 +118,10 @@ export const useMemoryStore = create<MemoryState>((set) => ({
       records: state.records.map((r) =>
         r.id === id ? { ...r, tags: JSON.stringify(tags) } : r
       ),
+    })),
+  updateRecord: (record) =>
+    set((state) => ({
+      records: state.records.map((r) => (r.id === record.id ? record : r)),
+      searchResults: state.searchResults.map((r) => (r.id === record.id ? record : r)),
     })),
 }));

@@ -286,29 +286,56 @@ select:focus-visible,
 /* ─── Responsive header (V3) ─────────────────────────────────────────────── */
 
 .ec-header {
-  flex-wrap: wrap;
-  row-gap: var(--ec-space-sm);
+  flex-wrap: nowrap;
 }
 
-/* Mode-tab / view-switcher text labels collapse to icon-only first — the
- * icons plus each button's `title` tooltip keep every control usable, they
- * just stop demanding horizontal space.
+/* The header is one row at every width. Labels always show — an unlabeled
+ * glyph is not navigation — so it is the ICONS that go first, below 860px.
  *
- * M12: the template switcher deliberately does NOT use this class. Its
- * "icon" is an 8px dot of the template's accent colour, which names nothing
- * — hiding its label turned the theme control into three anonymous dots
- * whose only label was a `title`, and `title` never appears on touch. It
- * uses `.ec-template-label` and collapses to a single *named* button below
- * 640px instead (see TemplateSwitcher.tsx). */
+ * Below 640px the remaining chrome shrinks to its marks: the wordmark, the
+ * version badge, the theme name and the "Live" word go; the theme's own dot
+ * (named by its aria-label) and the status dot stay. Below 480px the brand
+ * mark goes too, so the five labeled tabs fit. If they still do not, their
+ * track scrolls sideways rather than wrapping into a second row. */
 @media (max-width: 860px) {
-  .ec-switcher-label {
+  .ec-switcher-icon {
     display: none;
   }
 }
 
+.ec-tabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ec-tabs::-webkit-scrollbar {
+  display: none;
+}
+
 @media (max-width: 640px) {
-  .ec-logo-badge {
+  /* SPACE.xs / SPACE.md / SPACE.sm from lib/tokens.ts. */
+  .ec-tabs > button {
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+  }
+
+  .ec-header {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    gap: 8px !important;
+  }
+
+  .ec-logo-badge,
+  .ec-logo-text,
+  .ec-template-label,
+  .ec-live-label {
     display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .ec-logo {
+    display: none !important;
   }
 }
 

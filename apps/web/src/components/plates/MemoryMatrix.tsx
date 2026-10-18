@@ -92,7 +92,7 @@
  * bleeds; the inset windows are the form.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -162,8 +162,10 @@ const CAM_NEAR_Y = 1.06;
 const INSET_W = 210;
 const INSET_H = 154;
 const INSET_GAP = 18;
-const INSET_TOP = 100;
-const INSET_LEFT = 252;
+/** Inset windows sit at the top of the stage (the area under the head), over
+ *  the plane's far side, which the camera fit leaves clear. */
+const INSET_TOP = 30;
+const INSET_LEFT = 24;
 const INSET_RIGHT_CLEAR = 132;
 const INSET_MAP_H = INSET_H - 48;
 const NAME_CHARS = 30;
@@ -181,9 +183,9 @@ const pct = (part: number, whole: number) => (whole ? Math.round((100 * part) / 
 type View = 'district' | 'meaning' | 'type';
 
 const VIEWS: readonly { id: View; name: string; caps: string; widthWord: string }[] = [
-  { id: 'district', name: 'Link communities', caps: 'From the links alone', widthWord: 'district' },
-  { id: 'meaning', name: 'Projection', caps: 'PC1, binned', widthWord: 'meaning' },
-  { id: 'type', name: 'Memory type', caps: 'Three strips', widthWord: 'type' },
+  { id: 'district', name: 'Link groups', caps: 'found from the links', widthWord: 'group' },
+  { id: 'meaning', name: 'Meaning', caps: 'main axis of the text', widthWord: 'meaning' },
+  { id: 'type', name: 'Memory type', caps: 'one strip each', widthWord: 'type' },
 ];
 
 const TYPE_NAME: Record<MemoryType, string> = {
@@ -511,18 +513,16 @@ function groundNote(data: ObsData, view: View, communities: Communities, stripCo
   const { stats, nodes, links } = data;
   if (view === 'district') {
     return (
-      `${nf.format(communities.count)} communities found from the drawn links alone, modularity ` +
-      `${communities.modularity.toFixed(2)}. Strips that share links stand side by side; the gap ` +
-      `between two strips is not a distance.`
+      `${nf.format(communities.count)} groups of memories that link to each other. Groups that ` +
+      `share links stand side by side; the gap between two strips is not a distance.`
     );
   }
   if (view === 'meaning') {
     const spans = meanSpans(data);
     return (
-      `PC1 of the projection, in ${nf.format(stripCount)} columns. The three components keep ` +
-      `${Math.round(stats.explainedVariance * 100)}% of the embedding variance, and linked memories ` +
-      `sit ${spans.linked.toFixed(1)} apart against ${spans.random.toFixed(1)} for a random pair, ` +
-      `so districts pile onto each other here.`
+      `Memories sorted by the main direction of meaning in their text, in ` +
+      `${nf.format(stripCount)} slices. Linked memories sit ${spans.linked.toFixed(1)} apart on ` +
+      `average, against ${spans.random.toFixed(1)} for a random pair.`
     );
   }
   const same = links.reduce(
@@ -530,9 +530,9 @@ function groundNote(data: ObsData, view: View, communities: Communities, stripCo
     0
   );
   return (
-    `${nf.format(stats.byType.semantic)} of ${nf.format(nodes.length)} memories are semantic and ` +
-    `${pct(same, links.length)}% of links join two of the same type. Type sorts the plane and ` +
-    `explains little of it.`
+    `One strip per memory type: ${nf.format(stats.byType.semantic)} semantic, ` +
+    `${nf.format(stats.byType.episodic)} episodic, ${nf.format(stats.byType.procedural)} procedural. ` +
+    `${pct(same, links.length)}% of links join two memories of the same type.`
   );
 }
 
@@ -684,7 +684,7 @@ function buildGround(data: ObsData, view: View, communities: Communities): Groun
     standing: links.length - arcs.length,
     note: groundNote(data, view, communities, specs.length),
     widthWord: viewMeta.widthWord,
-    stripWord: view === 'district' ? 'district' : view === 'meaning' ? 'column' : 'type',
+    stripWord: view === 'district' ? 'group' : view === 'meaning' ? 'slice' : 'type',
     isolatedStrip: strips.findIndex((s) => s.isolated),
   };
 }
@@ -1405,7 +1405,7 @@ const LAYER_ORDER: readonly (keyof Layers)[] = ['cells', 'arcs', 'insets', 'glow
 const LAYER_NAME: Record<keyof Layers, string> = {
   cells: 'Cells',
   arcs: 'Arcs',
-  insets: 'Insets',
+  insets: 'Windows',
   glow: 'Glow',
 };
 const STEP_NAME = ['weak', 'mid', 'strong'] as const;
@@ -1423,47 +1423,46 @@ function Figure({ value, label, note }: { value: string; label: string; note?: s
 interface ChromeProps {
   data: ObsData;
   ground: Ground;
-  communities: Communities;
   layers: Layers;
   onLayer: (layer: keyof Layers) => void;
 }
 
-function Chrome({ data, ground, communities, layers, onLayer }: ChromeProps) {
+function Chrome({ data, ground, layers, onLayer }: ChromeProps) {
   const { stats } = data;
   const stripCount = ground.strips.filter((s) => !s.isolated).length;
   const stripNote =
     ground.view === 'district'
-      ? `modularity ${communities.modularity.toFixed(2)}`
+      ? 'found from the links'
       : ground.view === 'meaning'
-        ? `of ${PC1_BINS} bins on PC1`
-        : 'of 3 in the store';
+        ? `of ${PC1_BINS} on the main axis`
+        : 'one per type';
   return (
-    <>
+    <div className="mm-head">
       <div className="mm-title">
-        <h2>Living memory matrix</h2>
+        <h2>Overview</h2>
         <div className="mm-caps mm-title-sub">
-          {nf.format(stripCount)} {ground.stripWord}s on {ground.bands.length} depth bands
+          {nf.format(stripCount)} {ground.stripWord}s across {ground.bands.length} age bands
         </div>
-        <div className="mm-title-rule" aria-hidden="true" />
+        <nav className="mm-nav" aria-label="Layers">
+          <span className="mm-caps">Show</span>
+          {LAYER_ORDER.map((layer) => (
+            <button
+              key={layer}
+              type="button"
+              className="mm-nav-item"
+              aria-pressed={layers[layer]}
+              onClick={() => onLayer(layer)}
+            >
+              {LAYER_NAME[layer]}
+            </button>
+          ))}
+        </nav>
       </div>
-      <nav className="mm-nav" aria-label="Layers">
-        {LAYER_ORDER.map((layer) => (
-          <button
-            key={layer}
-            type="button"
-            className="mm-caps mm-nav-item"
-            aria-pressed={layers[layer]}
-            onClick={() => onLayer(layer)}
-          >
-            {LAYER_NAME[layer]}
-          </button>
-        ))}
-      </nav>
       <div className="mm-figures">
         <Figure
           value={nf.format(stats.memories)}
           label="memories"
-          note={`${nf.format(stats.isolated)} with no link`}
+          note={`${nf.format(stats.isolated)} with no links`}
         />
         <Figure
           value={nf.format(stats.linksDrawn)}
@@ -1474,10 +1473,10 @@ function Chrome({ data, ground, communities, layers, onLayer }: ChromeProps) {
         <Figure
           value={nf.format(ground.arcs.length)}
           label="arcs"
-          note={`${nf.format(ground.standing)} more stand as height`}
+          note={`${nf.format(ground.standing)} more shown as height`}
         />
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1515,7 +1514,7 @@ function InsetWindow({ ground, data, strip, left, top, lit, neighbours, onHover,
   const contraShare = pct(s.insideContra, s.inside);
   const caps = [
     `${nf.format(s.members.length)} memories`,
-    `${nf.format(s.inside)} in`,
+    `${nf.format(s.inside)} links inside`,
     `${nf.format(s.out)} out`,
   ];
   const capsTitle = `${nf.format(s.inside)} links join two memories of this ${ground.stripWord}; ${nf.format(s.out)} reach another.`;
@@ -1680,7 +1679,28 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 
   const communities = useMemo(() => findCommunities(data), [data]);
   const ground = useMemo(() => buildGround(data, view, communities), [data, view, communities]);
-  const fit = useMemo(() => cameraFit(ground, width / Math.max(1, height)), [ground, width, height]);
+  // The plane is drawn in the stage between the head and the foot, never under
+  // their text. The stage is measured; before the first measurement it is
+  // taken as the whole box less a typical head and foot.
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stage, setStage] = useState({ width, height: Math.max(1, height - 180) });
+  useLayoutEffect(() => {
+    const element = stageRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const box = entry.contentRect;
+      if (box.width > 0 && box.height > 0) {
+        setStage({ width: Math.round(box.width), height: Math.round(box.height) });
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const fit = useMemo(
+    () => cameraFit(ground, stage.width / Math.max(1, stage.height)),
+    [ground, stage.width, stage.height]
+  );
 
   const focus = useMemo(() => {
     if (!selectedId) return null;
@@ -1717,9 +1737,9 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
   // it is not among them.
   const insetCount = useMemo(() => {
     const fitCount = Math.floor((width - INSET_LEFT - INSET_RIGHT_CLEAR + INSET_GAP) / (INSET_W + INSET_GAP));
-    const byHeight = height < 520 ? 2 : 4;
+    const byHeight = stage.height < 460 ? 0 : 4;
     return Math.max(0, Math.min(4, fitCount, byHeight));
-  }, [width, height]);
+  }, [width, stage.height]);
   const insetStrips = useMemo(() => {
     const ranked = ground.strips
       .map((s, i) => ({ s, i }))
@@ -1754,17 +1774,21 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 
   const ticks = useMemo<Tick[]>(() => {
     const half = data.stats.halfLifeDays;
-    const out: Tick[] = ground.bands.map((b, i) => {
+    // An empty band has no depth, so its tick would land on its neighbour's
+    // and the two labels would print over each other: only bands that hold
+    // memories get one.
+    const out: Tick[] = ground.bands.flatMap((b, i) => {
+      if (b.count === 0) return [];
       const next = ground.bands[i + 1];
-      return {
+      return [{
         key: b.band,
         z: next ? ground.depth / 2 - (next.row0 - 0.5) * DZ : -ground.depth / 2,
         band: RETENTION_LABEL[b.band],
         count: b.count,
         days: next
-          ? `${Math.round(daysAtFloor(BAND_FLOOR[b.band], half))} d`
-          : `${Math.round(oldestDays)} d oldest`,
-      };
+          ? `${Math.round(daysAtFloor(BAND_FLOOR[b.band], half))} days`
+          : `${Math.round(oldestDays)} days, oldest`,
+      }];
     });
     out.push({ key: 'now', z: ground.depth / 2, band: null, count: null, days: 'now' });
     return out;
@@ -1816,13 +1840,15 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
     }
     const iso = ground.strips[ground.isolatedStrip];
     if (iso) {
+      // Pinned past the strip's far end, so the label stands on empty plane
+      // rather than over the strip's own cells.
       out.push({
         key: 'isolated',
         kind: 'label',
         world: new THREE.Vector3(
           (iso.col0 + iso.width / 2 - ground.cols / 2) * DX,
           0,
-          ground.depth / 2 - ((iso.minRow + iso.maxRow + 1) / 2) * DZ
+          ground.depth / 2 - (iso.maxRow + 1.6) * DZ
         ),
       });
     }
@@ -1850,7 +1876,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
       ? `All ${placements.length} types, sized by their links`
       : `${placements.length} largest ${ground.stripWord}s of ${nf.format(
           ground.strips.filter((s) => !s.isolated).length
-        )}, each named by its most-linked memory. The store has no topics.`;
+        )}, each named by its most-linked memory`;
   const summary =
     `${nf.format(data.stats.memories)} memories as cells on a ruled plane: nearer is newer across ` +
     `${ground.bands.length} retention bands, each strip is one ${ground.stripWord}, and a cell's ` +
@@ -1864,6 +1890,10 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
       <style href="plate-matrix" precedence="medium">
         {SHEET_CSS}
       </style>
+
+      <Chrome data={data} ground={ground} layers={layers} onLayer={toggleLayer} />
+
+      <div className="mm-stage" ref={stageRef}>
 
       {webgl ? (
         <div className="mm-canvas" role="img" aria-label={summary}>
@@ -1922,12 +1952,12 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
           : null}
         {ticks.map((t) => (
           <g key={t.key} ref={refFor(`tick-${t.key}:tick`)} visibility="hidden">
-            <line className="mm-tick-line" x1={width - 30} x2={width - 22} y1={0} y2={0} />
-            <text className="mm-scale-days" x={width - 36} y={-4} textAnchor="end">
+            <line className="mm-tick-line" x1={stage.width - 30} x2={stage.width - 22} y1={0} y2={0} />
+            <text className="mm-scale-days" x={stage.width - 36} y={-4} textAnchor="end">
               {t.days}
             </text>
             {t.band ? (
-              <text className="mm-scale-band" x={width - 36} y={12} textAnchor="end">
+              <text className="mm-scale-band" x={stage.width - 36} y={14} textAnchor="end">
                 {t.band} <tspan className="mm-scale-count">{nf.format(t.count ?? 0)}</tspan>
               </text>
             ) : null}
@@ -1946,13 +1976,12 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
         ) : null}
       </svg>
 
-      <Chrome data={data} ground={ground} communities={communities} layers={layers} onLayer={toggleLayer} />
 
       {showInsets ? (
         <>
           <div
             className="mm-caps mm-insets-head"
-            style={{ left: INSET_LEFT, top: INSET_TOP - 18, maxWidth: width - INSET_LEFT - 24 }}
+            style={{ left: INSET_LEFT, top: INSET_TOP - 22, maxWidth: width - INSET_LEFT - 24 }}
           >
             {insetsHead}
           </div>
@@ -1987,16 +2016,17 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 
       {isolatedStrip ? (
         <div ref={refFor('isolated:label')} className="mm-caps mm-float-label">
-          {nf.format(isolatedStrip.members.length)} with no link
+          {nf.format(isolatedStrip.members.length)} with no links
         </div>
       ) : null}
 
-      <Switcher view={view} note={ground.note} onView={setView} />
+      </div>
 
-      <div className="mm-caps mm-tagline">
-        <span>Depth is age</span>
-        <span>Width is {ground.widthWord}</span>
-        <span>Height is links</span>
+      <div className="mm-foot">
+        <Switcher view={view} note={ground.note} onView={setView} />
+        <div className="mm-caps mm-tagline">
+          Nearer is newer · width is {ground.widthWord} · height is links
+        </div>
       </div>
     </div>
   );
@@ -2005,23 +2035,28 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 // ─── Style ──────────────────────────────────────────────────────────────────
 
 const SHEET_CSS = `
-.mm-box { position: relative; overflow: hidden; background: var(--plate); color: var(--ink); font-family: var(--font-instrument); user-select: none; }
+.mm-box { position: relative; display: flex; flex-direction: column; overflow: hidden; background: var(--plate); color: var(--ink); font-family: var(--font-instrument); user-select: none; }
+/* Three bands, so no text ever sits on the plane: the head (title, layers,
+   figures), the stage (the plane and everything pinned to it), the foot (what
+   width means, and the axes). */
+.mm-head { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px 24px; padding: 16px 24px 8px; }
+.mm-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.mm-foot { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px 24px; padding: 10px 24px 14px; border-top: 1px solid var(--rule); }
 .mm-canvas { position: absolute; inset: 0; }
 .mm-box[data-hover='1'] .mm-canvas { cursor: pointer; }
 .mm-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .mm-leader { stroke: var(--ink-3); stroke-width: 1; fill: none; }
 .mm-ring { fill: none; stroke: var(--ink-2); stroke-width: 1; }
 .mm-ring-live { stroke: var(--memory-live); }
-.mm-caps { font-size: 10px; font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); line-height: 1.4; }
-.mm-title { position: absolute; left: 24px; top: 20px; pointer-events: none; }
+.mm-caps { font-size: var(--t-label); font-weight: 500; color: var(--ink-3); line-height: 1.4; }
+.mm-title { min-width: 0; }
 .mm-title h2 { margin: 0; font-family: var(--font-note); font-weight: 200; font-size: var(--t-mast); line-height: 1.1; letter-spacing: -0.01em; color: var(--ink); }
-.mm-title-sub { margin-top: 6px; }
-.mm-title-rule { width: 28px; height: 1px; background: var(--ink); margin-top: 10px; }
-.mm-nav { position: absolute; left: 24px; top: 118px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
-.mm-nav-item { color: var(--ink-3); transition: color var(--dur) var(--ease); }
+.mm-title-sub { margin-top: 4px; }
+.mm-nav { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-top: 8px; }
+.mm-nav-item { font-size: var(--t-body); color: var(--ink-3); border-bottom: 1px solid transparent; transition: color var(--dur) var(--ease); }
 .mm-nav-item:hover { color: var(--ink-2); }
-.mm-nav-item[aria-pressed='true'] { color: var(--ink); }
-.mm-figures { position: absolute; right: 24px; top: 18px; display: flex; align-items: flex-start; pointer-events: none; }
+.mm-nav-item[aria-pressed='true'] { color: var(--ink); border-bottom-color: var(--ink-3); }
+.mm-figures { display: flex; flex-wrap: wrap; align-items: flex-start; row-gap: 8px; pointer-events: none; }
 .mm-fig { padding: 0 16px; border-left: 1px solid var(--rule); min-width: 0; }
 .mm-fig:first-child { border-left: none; padding-left: 0; }
 .mm-fig-n { font-size: var(--t-stat); font-weight: 400; line-height: 1.1; letter-spacing: -0.01em; color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -2029,7 +2064,7 @@ const SHEET_CSS = `
 .mm-insets-head { position: absolute; pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-inset { position: absolute; border: 1px solid var(--rule); background: var(--plate); padding: 8px 10px 6px; display: flex; flex-direction: column; }
 .mm-inset-name { margin: 0; font-size: var(--t-body); font-weight: 400; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
-.mm-inset-caps { display: flex; gap: 9px; white-space: nowrap; overflow: hidden; margin-top: 1px; letter-spacing: 0.11em; }
+.mm-inset-caps { display: flex; gap: 9px; white-space: nowrap; overflow: hidden; margin-top: 1px; }
 .mm-inset-map { display: block; width: 100%; height: ${INSET_MAP_H}px; margin-top: 6px; overflow: visible; }
 .mm-inset-band { stroke: var(--ink-3); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0.6; }
 .mm-inset-link { stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0.26; }
@@ -2038,34 +2073,45 @@ const SHEET_CSS = `
 .mm-inset-cell[data-state='near'] { fill: var(--ink-2); }
 .mm-inset-cell[data-state='live'] { fill: var(--memory-live); }
 .mm-inset-hit { fill: none; pointer-events: all; cursor: pointer; }
-.mm-scale-band { fill: var(--ink-2); font-size: 11px; }
+.mm-scale-band { fill: var(--ink-2); font-size: var(--t-label); }
 .mm-scale-count { fill: var(--ink); font-weight: 500; }
-.mm-scale-days { fill: var(--ink-3); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
+.mm-scale-days { fill: var(--ink-3); font-size: var(--t-label); }
 .mm-tick-line { stroke: var(--ink-3); stroke-width: 1; }
 .mm-callout { position: absolute; left: 0; top: 0; width: ${CALLOUT_W}px; pointer-events: none; visibility: hidden; }
 .mm-callout-name { font-size: var(--t-body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
 .mm-callout-caps { display: flex; gap: 10px; white-space: nowrap; margin-top: 2px; color: var(--ink-2); }
 .mm-float-label { position: absolute; left: 0; top: 0; pointer-events: none; visibility: hidden; white-space: nowrap; padding-bottom: 4px; }
-.mm-switch { position: absolute; left: 24px; bottom: 22px; display: flex; flex-direction: column; align-items: flex-start; }
-.mm-radios { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.mm-switch { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.mm-radios { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
 .mm-radio { display: flex; align-items: baseline; gap: 10px; color: var(--ink-3); transition: color var(--dur) var(--ease); }
 .mm-radio:hover { color: var(--ink-2); }
 .mm-radio[aria-checked='true'] { color: var(--ink); }
 .mm-radio-dot { width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--ink-2); flex: 0 0 auto; align-self: center; transition: opacity var(--dur) var(--ease); }
 .mm-radio[aria-checked='true'] .mm-radio-dot { background: var(--ink); border-color: var(--ink); }
 .mm-radio-name { font-size: var(--t-body); }
-.mm-note { margin: 8px 0 0; max-width: 44ch; font-size: var(--t-label); line-height: 1.45; color: var(--ink-3); }
-.mm-tagline { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; gap: 22px; pointer-events: none; white-space: nowrap; }
-.mm-nogl { position: absolute; left: 24px; top: 210px; margin: 0; max-width: 56ch; }
+.mm-note { margin: 8px 0 0; max-width: 64ch; font-size: var(--t-label); line-height: 1.45; color: var(--ink-3); }
+.mm-tagline { pointer-events: none; }
+.mm-nogl { position: absolute; left: 24px; top: 24px; margin: 0; max-width: 56ch; }
+/* A phone: the stage needs the height more than the head and foot need their
+   second lines, which the caption's "?" carries anyway. */
+@media (max-width: 640px) {
+  .mm-head { padding: 12px 16px 6px; }
+  .mm-foot { padding: 8px 16px 10px; }
+  .mm-title h2 { font-size: 24px; }
+  .mm-fig { padding: 0 10px; }
+  .mm-fig-note, .mm-note, .mm-radio .mm-caps { display: none; }
+}
 `;
 
 // ─── Module ─────────────────────────────────────────────────────────────────
 
 export const memoryMatrix: DemoModule = {
   id: 'matrix',
-  name: 'Living Memory Matrix',
+  name: 'Overview',
   dimension: '3D',
-  claim:
-    'A ruled plane in perspective can hold every memory at once — nearer is newer, each strip one link community, height the link count — and four magnified windows are what let the crowded horizon be read.',
+  caption:
+    'Every memory as one cell on a plane: newer is nearer, each strip is a group, and taller cells have more links. Windows at the top magnify the largest groups.',
+  method:
+    'Memories are laid out on a ruled plane seen in perspective. Depth is age, cut into the four retention bands — vivid, holding, fading, at threshold — so the newest are nearest. Width is the grouping chosen at the bottom: groups found from the links alone (Louvain communities), slices along the main direction of meaning in the text embeddings, or memory type. A cell’s height is its link count. Links that jump between strips or between age bands are drawn as arcs; the rest only add height. The windows magnify the largest strips, each named by its most-linked memory, so the crowded far side of the plane can be read. The layer buttons turn cells, arcs, windows and glow on and off.',
   Plate,
 };

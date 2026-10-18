@@ -153,10 +153,6 @@ const RETENTION_ORDER: RetentionBand[] = ['vivid', 'holding', 'fading', 'thresho
 
 const nf = new Intl.NumberFormat('en-US');
 
-const NOTE_FULL =
-  'Every link in the store is counted on this field and not one of them is drawn. A mark is all the links between two blocks of memories — its area is how many, and its cut is how many agree against how many contradict.';
-const NOTE_TIGHT =
-  'A mark is every link between two blocks: its area is how many, its cut is agree against contradict.';
 
 // ─── Structure: communities → blocks → lattice cells ────────────────────────
 
@@ -464,6 +460,10 @@ interface Plan {
   titleWidth: number;
   labelLeft: number;
   labelWidth: number;
+  /** False when the key would run under the rail's arcs (a narrow box): the
+   *  title then takes the key's place, and the caption above the box and the
+   *  title's own figures carry what the key would have said. */
+  showKey: boolean;
   /** True when the box is too small to carry the field and the rail at once. */
   degenerate: boolean;
 }
@@ -513,8 +513,10 @@ function planScene(width: number, height: number, blocks: number): Plan {
   const bandTop = originY - SE * Math.max(bz * CA, ax * SA);
 
   const reach = Math.max(84, Math.min(Math.round(width * 0.16), 230));
-  const keyWidth = Math.max(150, Math.min(originX - reach - 46, 300));
-  const titleLeft = PAD + keyWidth + 24;
+  const keyRoom = originX - reach - 46;
+  const showKey = keyRoom >= 150;
+  const keyWidth = Math.min(keyRoom, 300);
+  const titleLeft = showKey ? PAD + keyWidth + 24 : PAD;
   const titleWidth = Math.max(180, width - titleLeft - 20);
   const labelLeft = originX + 16;
   const labelWidth = Math.max(120, Math.min(width - labelLeft - 18, 400));
@@ -542,6 +544,7 @@ function planScene(width: number, height: number, blocks: number): Plan {
     titleWidth,
     labelLeft,
     labelWidth,
+    showKey,
     degenerate: coreHeight < 120 || width < 380,
   };
 }
@@ -1652,7 +1655,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
         // --t-claim cannot put them there in 200 pixels of height.
         <p className={`oad-nogl ${height < 430 ? 'obs-label oad-nogl-tight' : 'obs-note'}`}>
           {webgl
-            ? 'This box is too short to carry the field and the rail at once. '
+            ? 'This area is too small to draw the field and the list together. '
             : 'This reading is drawn with WebGL and this browser did not give the page a context. '}
           The measurements still hold: {summary}
         </p>
@@ -1671,7 +1674,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
       </header>
       )}
 
-      {!plan.degenerate ? (
+      {!plan.degenerate && plan.showKey ? (
         <FieldKey
           data={data}
           structure={structure}
@@ -1771,15 +1774,17 @@ function CellTip({ cell, structure, plan }: { cell: Cell; structure: Structure; 
 }
 
 /**
- * The field's own voice: what a mark is, how big a mark of a given size is,
- * and the denominators the field is drawn against. It sits over the empty
- * upper-left of the box, clear of both the arcs and the field.
+ * The field's key: how big a mark of a given size is, and the denominators
+ * the field is drawn against. It sits over the empty upper-left of the box,
+ * clear of both the arcs and the field, and is left out of a box too narrow
+ * for that (`plan.showKey`). What a mark IS is the caption's job, above the
+ * box.
  *
  * What it may say is decided by the room between the title and the field's
- * apex. Lines are added in order of what the plate owes a reader — the note
- * that says what a mark is, then the size ramp that makes a mark measurable,
- * then the two denominators rule 8 owes — and the flourishes only go in if
- * they still fit. Nothing is clipped mid-sentence.
+ * apex. Lines are added in order of what the plate owes a reader — the size
+ * ramp that makes a mark measurable, the band names, then the two
+ * denominators rule 8 owes — and the flourishes only go in if they still fit.
+ * Nothing is clipped mid-sentence.
  */
 function FieldKey({
   data,
@@ -1798,51 +1803,35 @@ function FieldKey({
   const room = plan.bandTop - top - 12;
 
   const linksLong =
-    `All ${nf.format(data.stats.linksDrawn)} renderable links of the store’s ` +
-    `${nf.format(data.stats.linksStored)} are counted here; none is drawn. The bars in front of ` +
-    `the edge are every link touching that block.`;
-  const linksShort =
-    `All ${nf.format(data.stats.linksDrawn)} renderable links of the store’s ` +
-    `${nf.format(data.stats.linksStored)} are counted here; none is drawn.`;
+    `All ${nf.format(data.stats.linksDrawn)} drawable links are counted here; none is drawn as a ` +
+    `line. The bars along the front edge count every link touching that block.`;
+  const linksShort = `All ${nf.format(data.stats.linksDrawn)} drawable links are counted here.`;
   const blocksLong =
-    `${nf.format(data.stats.memories)} memories ordered into ${structure.blocks.length} blocks by ` +
-    `what they link to — ${structure.neighbourhoods} neighbourhoods, ${structure.smallClusters} ` +
-    `smaller clusters, ${structure.isolated} with no link at all, which is why the right end of ` +
-    `the front edge is bare.`;
+    `${nf.format(data.stats.memories)} memories in ${structure.blocks.length} blocks by what they ` +
+    `link to: ${structure.neighbourhoods} neighbourhoods, ${structure.smallClusters} smaller ` +
+    `clusters and ${structure.isolated} with no links.`;
   const blocksShort =
-    `${nf.format(data.stats.memories)} memories in ${structure.blocks.length} blocks — ` +
-    `${structure.neighbourhoods} neighbourhoods, ${structure.smallClusters} smaller clusters, ` +
-    `${structure.isolated} with no link at all.`;
+    `${nf.format(data.stats.memories)} memories in ${structure.blocks.length} blocks.`;
   const bandsText =
-    'Bead size is retention — ' +
+    'Bead size is how fresh a memory is: ' +
     RETENTION_ORDER.map((band) => `${RETENTION_LABEL[band]} ${data.stats.retention[band]}`).join(' · ');
   const hintLong =
-    'Point at a mark to read the pair it stands for, or click it to fill the rail; arrow keys ' +
-    'walk the field. Click a memory on the rail for its own links.';
-  const hintShort = 'Click a mark to fill the rail; click a memory for its own links.';
+    'Point at a square to see which blocks it joins, or click it to list them on the right; ' +
+    'arrow keys move across the field. Click a memory in the list for its own links.';
+  const hintShort = 'Click a square to list its memories; click a memory for its links.';
 
   // There is no text metrics API here, so the panel is fitted arithmetically.
-  // The constants are measured off the rendered panel, not guessed: `.obs-note`
-  // sets Spectral at --t-claim over a 22.72px line and runs about 8.5px to the
-  // character; `.obs-label`'s narrow Archivo at 11px runs about 5.0px over a
-  // 15px line. Word wrap makes any such estimate a line out either way, so a
-  // line and a bit of slack is allowed — the DOM order below is the priority
-  // order, which means an overshoot can only ever clip the least important
-  // line on the panel.
-  const noteCols = Math.max(10, Math.floor(width / 8.5));
-  const footCols = Math.max(12, Math.floor(width / 5.0));
-  const noteCost = (text: string) => Math.ceil(text.length / noteCols) * 22.8 + 11;
-  const footCost = (text: string) => Math.ceil(text.length / footCols) * 15 + 10;
-  const sizeCost = width >= 150 ? 44 : 0;
+  // `.obs-label` sets Archivo at 12px, which runs about 6.2px to the
+  // character over an 18px line. Word wrap makes any such estimate a line out
+  // either way, so a line of slack is allowed — the DOM order below is the
+  // priority order, which means an overshoot can only ever clip the least
+  // important line on the panel.
+  const footCols = Math.max(12, Math.floor(width / 6.2));
+  const footCost = (text: string) => Math.ceil(text.length / footCols) * 18 + 10;
+  const sizeCost = width >= 150 ? 46 : 0;
   const budget = room + 18;
 
-  // The long note is a luxury: it only goes in if everything the plate owes —
-  // the band names, the size ramp and both denominators — still fits under it.
-  const core = (text: string) =>
-    noteCost(text) + footCost(bandsText) + sizeCost + footCost(linksLong) + footCost(blocksShort);
-  const note = width >= 200 && core(NOTE_FULL) <= budget ? NOTE_FULL : NOTE_TIGHT;
-
-  let used = noteCost(note);
+  let used = 0;
   let stopped = false;
   /** A strict cascade: once one line does not fit, nothing below it goes in
    *  either, so what survives is always a prefix of the priority order. */
@@ -1868,14 +1857,14 @@ function FieldKey({
     return null;
   };
 
-  // Fitted in the order the plate owes them, not the order they are drawn in:
-  // rule 5's band names go in before anything optional, because retention is
-  // drawn as a radius and a radius without its words is not an encoding.
-  const showBands = fits(footCost(bandsText));
+  // The size key goes first: it is what makes a square readable at all. Then
+  // the band names — retention is drawn as a radius, and a radius without its
+  // words is not an encoding — then the counts and the hint.
   const showSize = fits(sizeCost);
+  const showBands = fits(footCost(bandsText));
   const linksText = pick(linksLong, linksShort);
   const blocksText = pick(blocksLong, blocksShort);
-  const showStrength = fits(29);
+  const showStrength = fits(31);
   const hintText = pick(hintLong, hintShort);
 
   const steps = [1, structure.medianCell, structure.maxCell].filter(
@@ -1890,10 +1879,6 @@ function FieldKey({
   // always the least important thing on the panel.
   return (
     <aside className="oad-key" style={{ left, top, width, maxHeight: Math.max(60, room) }}>
-      <p className="obs-note oad-key-note">{note}</p>
-
-      {showBands ? <p className="obs-label oad-key-foot oad-key-bands">{bandsText}</p> : null}
-
       {showSize ? (
         <div className="oad-sizekey">
           <svg width={Math.min(width, swatchX + full + 2)} height={full + 10} aria-hidden>
@@ -1932,6 +1917,8 @@ function FieldKey({
         </div>
       ) : null}
 
+      {showBands ? <p className="obs-label oad-key-foot oad-key-bands">{bandsText}</p> : null}
+
       {linksText ? <p className="obs-label oad-key-foot">{linksText}</p> : null}
       {blocksText ? <p className="obs-label oad-key-foot">{blocksText}</p> : null}
 
@@ -1959,7 +1946,7 @@ function FieldKey({
               />
             ))}
           </svg>
-          <span className="obs-label">on the rail, an arc&rsquo;s level is its strength</span>
+          <span className="obs-label">list arcs, weak to strong</span>
         </div>
       ) : null}
 
@@ -1986,21 +1973,18 @@ const CSS = `
 }
 .oad-sub { margin: 4px 0 0; line-height: 1.4; }
 .oad-back {
-  margin-top: 6px; color: var(--ink-2); font-size: var(--t-label); font-stretch: 78%;
+  margin-top: 6px; color: var(--ink-2); font-size: var(--t-label);
   border-bottom: 1px solid var(--rule); padding-bottom: 1px;
   transition: color var(--dur) var(--ease);
 }
 .oad-back:hover { color: var(--ink); }
 
 .oad-key { position: absolute; pointer-events: none; overflow: hidden; }
-/* .obs-note from the token layer sets the face, the size and the leading;
-   only the measure and the margin are this panel's business. */
-.oad-key-note { margin: 0 0 11px; max-width: none; }
 .oad-key-foot { margin: 10px 0 0; line-height: 1.36; color: var(--ink-3); }
 .oad-key-bands { color: var(--ink-2); }
 .oad-key-ramp { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .oad-sizekey { position: relative; }
-.oad-sizekey-labels { position: relative; height: 14px; }
+.oad-sizekey-labels { position: relative; height: 18px; }
 .oad-sizekey-tick { position: absolute; top: 0; white-space: nowrap; }
 
 .oad-tip {
@@ -2021,7 +2005,7 @@ const CSS = `
 }
 .oad-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oad-row-figs { flex: 0 0 auto; display: flex; align-items: baseline; gap: 4px; }
-.oad-row-band { color: var(--ink-3); font-size: var(--t-label); font-stretch: 78%; margin-right: 4px; }
+.oad-row-band { color: var(--ink-3); font-size: var(--t-label); margin-right: 4px; }
 .oad-row-here { font-variant-numeric: tabular-nums; }
 .oad-row-all { color: var(--ink-3); font-size: var(--t-label); font-variant-numeric: tabular-nums; }
 .oad-row-live { color: var(--ink); }
@@ -2037,9 +2021,11 @@ const CSS = `
 
 export const overviewAndDetail: DemoModule = {
   id: 'overview-detail',
-  name: 'Where, then what',
+  name: 'Hotspots',
   dimension: '3D',
-  claim:
-    'Where knowledge is dense and what a dense region contains are two questions, so the overview sorts the store into link-dense blocks and draws not one edge — density is the area of a mark — while the detail draws every real edge inside the block you point at, the claim being that this beats any single view and that the densest neighbourhoods here turn out to be the ones where memories contradict each other.',
+  caption:
+    'Where your memories link most densely. A bigger square means more links between two blocks of memories; click one to list those memories and their links.',
+  method:
+    'Memories are sorted into blocks by what they link to: link communities, then smaller clusters, then memories with no links. The floor is a grid of block pairs, and each square counts every link between two blocks — its area is how many, and its split colour is how many agree (blue) against how many contradict (orange). No link is drawn on the floor itself. Pointing at or clicking a square fills the list beside it with that block’s memories, joined by arcs for their links, set higher the stronger the link. Bead size is how fresh a memory is (retention). Arrow keys move across the field.',
   Plate,
 };

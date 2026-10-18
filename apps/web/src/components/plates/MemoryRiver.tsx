@@ -219,9 +219,9 @@ type TypeFilter = MemoryType | 'all';
 
 const VIEWS: readonly { id: ViewId; name: string }[] = [
   { id: 'all', name: 'All links' },
-  { id: 'far', name: 'Across a half-life' },
+  { id: 'far', name: 'Far apart in time' },
   { id: 'cross', name: 'Between sources' },
-  { id: 'contradicts', name: 'Contradicts' },
+  { id: 'contradicts', name: 'Contradictions' },
 ];
 
 const TYPES: readonly { id: TypeFilter; name: string }[] = [
@@ -1420,7 +1420,7 @@ function railPlan(width: number, height: number): RailPlan {
   const railWidth = width >= 1000 ? 250 : width >= 720 ? 228 : Math.max(186, Math.round(width * 0.34));
   return {
     width: railWidth,
-    rowHeight: height >= 860 ? 16 : height >= 700 ? 13.4 : 12.6,
+    rowHeight: height >= 860 ? 19 : height >= 700 ? 17.5 : 16.5,
     showSpans: railWidth >= 210,
     showNote: height >= 430,
     tight: height < 660,
@@ -1449,20 +1449,20 @@ function Figures({ data, reading }: { data: ObsData; reading: Reading }) {
         </dd>
       </div>
       <div>
-        <dt className="obs-label">Silent days</dt>
-        <dd className="obs-figure">{reading.axis.silentDays}, drawn narrow</dd>
+        <dt className="obs-label">Days with nothing</dt>
+        <dd className="obs-figure">{reading.axis.silentDays}</dd>
       </div>
       <div>
-        <dt className="obs-label">Reaches</dt>
-        <dd className="obs-figure">{reading.reaches.length}, oldest at the back</dd>
+        <dt className="obs-label">Rows</dt>
+        <dd className="obs-figure">{reading.reaches.length}</dd>
       </div>
       <div>
-        <dt className="obs-label">Inside 24 hours</dt>
-        <dd className="obs-figure">{pct(reading.within24h, drawn)}% of links</dd>
+        <dt className="obs-label">Links within a day</dt>
+        <dd className="obs-figure">{pct(reading.within24h, drawn)}%</dd>
       </div>
       <div>
-        <dt className="obs-label">Over {stats.halfLifeDays} days apart</dt>
-        <dd className="obs-figure">{nf.format(reading.farLinks)} links</dd>
+        <dt className="obs-label">Links over {stats.halfLifeDays} days apart</dt>
+        <dd className="obs-figure">{nf.format(reading.farLinks)}</dd>
       </div>
     </dl>
   );
@@ -1521,9 +1521,9 @@ function SourceList({ reading, plan, lit, pinned, onHover, onPin }: SourceListPr
     <section className="mr-block mr-block-grow">
       <h3 className="obs-label mr-head">
         {shown.length === sources.length
-          ? `${sources.length} sources, nearest lane first`
+          ? `${sources.length} sources, front lane first`
           : shown.length === 0
-            ? `${sources.length} sources as lanes, nearest first`
+            ? `${sources.length} sources as lanes, front first`
             : `${shown.length} largest of ${sources.length} sources`}
       </h3>
       <div className="mr-rows-box" ref={boxRef}>
@@ -1864,7 +1864,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
         style={{ width: rail.width }}
       >
         <header className="mr-title">
-          <h2>Memory River</h2>
+          <h2>Over time</h2>
           <p className="obs-label mr-sub">
             {nf.format(stats.memories)} memories, {dayMonth(firstMs)} to {fullDate(lastMs)}
             {reading.axis.undated ? `, ${reading.axis.undated} undated drawn at today` : ''}
@@ -1875,16 +1875,15 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 
         {rail.showNote ? (
           <p className="mr-note">
-            Left to right. A day is as wide as what was written in it, and a fold falls only where
-            the store went silent, so no sitting is cut.
+            Read each row left to right; a day is as wide as what was written in it.
             {webgl ? (
               <>
                 {' '}
-                The far reach is drawn at{' '}
+                The back row is drawn at{' '}
                 <span className="mr-ratio obs-figure" ref={refFor('ratio')}>
                   —
                 </span>{' '}
-                of the near.
+                of the front row&rsquo;s size.
               </>
             ) : null}
           </p>
@@ -2085,9 +2084,11 @@ p.mr-nogl { position: absolute; inset: 0; margin: 0; padding: 26px 22px; max-wid
 
 export const memoryRiver: DemoModule = {
   id: 'river',
-  name: 'Memory River',
+  name: 'Over time',
   dimension: '3D',
-  claim:
-    'Time is the one axis this store genuinely has: laid out by order of writing, it becomes a few dense sittings joined by a handful of long threads, and one five-day flood of reflections holds almost every contradiction.',
+  caption:
+    'Your memories in the order they were written, oldest row at the back. Arcs join linked memories and rise higher the further apart in time they were written.',
+  method:
+    'Each row is a stretch of days, read left to right, with the oldest row at the back. A day is as wide as what was written in it, and a row only breaks where nothing was written, so no working session is cut in two. Each source — the tool that stored the memory — is a lane across the rows. Links arch above the rows and rise with the time between their two ends. The panel on the right filters which links are drawn and which memory types are shown, and lists the sources: point at one to light its lane, click to keep it lit.',
   Plate,
 };

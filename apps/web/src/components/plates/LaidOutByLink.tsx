@@ -1110,9 +1110,8 @@ const CSS = `
   background: var(--margin); border-top: 1px solid var(--rule);
   border-right: 1px solid var(--rule); }
 .lbc-note p { margin: 0; }
-.lbc-note .lbc-prose { max-width: 50ch; }
-.lbc-note .lbc-denom, .lbc-nogl .lbc-denom { margin-top: var(--gap-block);
-  max-width: 62ch; line-height: 1.38; }
+.lbc-nogl .lbc-denom { margin-top: var(--gap-block); }
+.lbc-denom { max-width: 62ch; line-height: 1.38; }
 
 .lbc-read { position: absolute; right: 0; bottom: 0; width: 274px;
   padding: 13px 20px 14px 16px; background: var(--margin);
@@ -1201,7 +1200,7 @@ function KeySheet({
           <Swatch kind="agrees" />
           <span>
             <span className="obs-label" style={{ display: 'block' }}>
-              Agrees, above the coil
+              Agree, above the ring
             </span>
             <span className="lbc-key-n">{nf.format(agrees)}</span>
           </span>
@@ -1210,7 +1209,7 @@ function KeySheet({
           <Swatch kind="contradicts" />
           <span>
             <span className="obs-label" style={{ display: 'block' }}>
-              Contradicts, below it
+              Contradict, below it
             </span>
             <span className="lbc-key-n">{nf.format(contradicts)}</span>
           </span>
@@ -1220,14 +1219,14 @@ function KeySheet({
         <div className="lbc-regs">
           <div className="lbc-reg">
             <RegisterGlyph leap={false} />
-            <span className="obs-label">Inside a community, along its own coil</span>
+            <span className="obs-label">Inside a group</span>
             <span className="lbc-reg-n">
               {nf.format(inside)} · {insidePercent}%
             </span>
           </div>
           <div className="lbc-reg">
             <RegisterGlyph leap />
-            <span className="obs-label">Crossing, clear above every ridge</span>
+            <span className="obs-label">Between groups</span>
             <span className="lbc-reg-n">{nf.format(crossing)}</span>
           </div>
         </div>
@@ -1259,8 +1258,8 @@ function Readout({
         <span className="obs-label">
           {node.type} ·{' '}
           {node.degree === 0
-            ? 'joins nothing at all'
-            : `one of ${nf.format(communitySize)} on its stretch of coil`}{' '}
+            ? 'no links'
+            : `in a group of ${nf.format(communitySize)}`}{' '}
           · {RETENTION_LABEL[node.retentionBand]} at {Math.round(node.retention * 100)}%
         </span>
       </div>
@@ -1285,8 +1284,8 @@ type Lens = 'all' | 'crossing' | 'ambivalent';
 
 const LENSES: readonly { id: Lens; name: string }[] = [
   { id: 'all', name: 'All links' },
-  { id: 'crossing', name: 'Crossing communities' },
-  { id: 'ambivalent', name: 'Both ways' },
+  { id: 'crossing', name: 'Between groups' },
+  { id: 'ambivalent', name: 'Agree and contradict' },
 ];
 
 function passes(lens: Lens, arc: Arc): boolean {
@@ -1393,7 +1392,11 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
     // The coil disc plus the canopy over it, as one bounding radius. The
     // canopy only stands over the middle, so the radius is pulled in a little
     // rather than taken as the corner of the box it would fit in.
-    const fit = Math.hypot(R_OUTER, LEAP_MAX) * (height < SHORT_HEIGHT ? CAM_FIT_SHORT : CAM_FIT);
+    // A box narrower than it is tall loses the coil's ends off the sides, so
+    // it is pulled back by the same margin a short box gets.
+    const fit =
+      Math.hypot(R_OUTER, LEAP_MAX) *
+      (height < SHORT_HEIGHT || width < height ? CAM_FIT_SHORT : CAM_FIT);
     const vertical = (CAM_FOV * Math.PI) / 180;
     const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * Math.max(0.4, width / height));
     const distance = fit / Math.sin(Math.min(vertical, horizontal) / 2);
@@ -1449,10 +1452,11 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 
   const denominator = (
     <p className="obs-label lbc-denom">
-      {nf.format(drawn)} of {nf.format(data.stats.linksDrawn)} renderable links drawn ·{' '}
-      {nf.format(data.stats.linksToArchived)} more of the {nf.format(data.stats.linksStored)} stored
-      point at archived memories and can be drawn by no one · {nf.format(data.stats.isolated)} of{' '}
-      {nf.format(data.stats.memories)} memories have no link at all
+      {nf.format(drawn)} of {nf.format(data.stats.linksDrawn)} links drawn ·{' '}
+      {nf.format(data.stats.isolated)} of {nf.format(data.stats.memories)} memories have no links
+      {data.stats.linksToArchived > 0
+        ? ` · ${nf.format(data.stats.linksToArchived)} more link to archived memories`
+        : ''}
     </p>
   );
 
@@ -1475,8 +1479,8 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
     />
   ) : (
     <p className="obs-label lbc-hint">
-      Point at a memory on the coil, or walk the order with the arrow keys, to follow its links.
-      Drag to orbit: flat on gives back the straight axis, from overhead you see the nest.
+      Point at a memory to follow its links, or step through them with the arrow keys. Drag to
+      turn the view.
     </p>
   );
 
@@ -1575,12 +1579,6 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
         <>
           {keySheet}
           <div className="lbc-note" style={{ maxWidth: Math.max(240, width - READ_WIDTH - 44) }}>
-            <p className="obs-note lbc-prose">
-              Position is the link structure and nothing else: {layout.communities} communities
-              found in the graph itself, wound onto one coil so that what connects sits close. The
-              embedding is unused — distance here is order, not similarity, and height inside each
-              of the two bands is span along that order, compressed so short links stay visible.
-            </p>
             {denominator}
           </div>
           <div
@@ -1610,9 +1608,11 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highl
 
 export const laidOutByLink: DemoModule = {
   id: 'by-link',
-  name: 'Ordered by link',
+  name: 'Links',
   dimension: '3D',
-  claim:
-    'Laid out from the links alone, this store is not one cloud but dozens of tight communities that keep nine of every ten links inside themselves — so the connections that were ever genuinely invisible are the few hundred crossing between them, and those are the ones this puts in plain sight.',
+  caption:
+    'Each dot is a memory, laid around a ring so linked memories sit close. Arcs above the ring agree, arcs below contradict, and the tallest cross between groups.',
+  method:
+    'Position comes from the links alone. Groups of memories that mostly link to each other (communities) are found in the link graph and wound onto one coil, ordered so connected groups sit side by side. The text embedding is not used, so distance along the coil is order, not similarity. A link inside a group rides a low ridge along its own stretch of coil; a link between groups leaps clear above every ridge, and arc height grows with how far apart its two ends are, compressed so short links stay visible. Memories with no links hold the outer end of the coil. The buttons at the top right show only the links between groups, or only the pairs of memories that both agree and contradict.',
   Plate,
 };

@@ -97,6 +97,7 @@ export const GLYPH = {
   // '❖' rather than a half-filled circle: '◐' is the glyph half the web
   // uses for a light/dark toggle, and it would have sat one control away
   // from the real theme switcher.
+  viewHome: '⌂',
   viewTimeline: '⏤',
   viewAnalytics: '▧',
   viewReflections: '❖',

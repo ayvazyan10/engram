@@ -9,6 +9,8 @@ import TemplateSwitcher from '../ui/TemplateSwitcher.js';
 import StoreMemoryModal from '../ui/StoreMemoryModal.js';
 import UnlockGate from '../ui/UnlockGate.js';
 import CompactMain from './CompactMain.js';
+// Home is the landing view, so it is in the main chunk rather than split.
+import HomeView from '../views/HomeView.js';
 import type { MobilePane } from './MobileTabBar.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
@@ -21,7 +23,7 @@ import { loadPlateData } from '../../lib/plate/data.js';
 import { refreshServerStats } from '../../lib/serverStats.js';
 import type { ObsData } from '../../lib/plate/contract.js';
 import { useWebSocket, asMemoryRecord } from '../../hooks/useWebSocket.js';
-import { useMediaQuery } from '../../hooks/useMediaQuery.js';
+import { COMPACT_QUERY, useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { useThemeVars } from '../../hooks/useThemeVars.js';
 import { SPACE, STATUS, TYPE, WEIGHT } from '../../lib/tokens.js';
 
@@ -63,7 +65,7 @@ export default function AppLayout() {
 
   // Below ~900px the fixed 260px sidebar + 252px inspector alone exceed a
   // 375px viewport — see MobileTabBar.tsx for the full reasoning (V3).
-  const isCompact = useMediaQuery('(max-width: 900px)');
+  const isCompact = useMediaQuery(COMPACT_QUERY);
   const [mobilePane, setMobilePane] = useState<MobilePane>('canvas');
 
   useThemeVars(t);
@@ -119,9 +121,9 @@ export default function AppLayout() {
       .catch(() => {});
   }, []);
 
-  /** Re-run the plate load after a failure. The failure already reset the
-   *  ref-counted guard, so bumping the attempt counter is what actually
-   *  re-fires the effect. */
+  /** Re-run the plate load after a failure. A failed load never set the
+   *  guard, so bumping the attempt counter is what actually re-fires the
+   *  effect. */
   const retryPlate = useCallback(() => {
     setPlateError(null);
     setPlateAttempt((n) => n + 1);
@@ -170,16 +172,22 @@ export default function AppLayout() {
   // this store's real shape, and an id-derived sphere is invented data — the
   // one surface that used to confess it (the scene key) has been retired
   // because each plate now states its own denominators.
+  //
+  // The guard is earned when a load LANDS, not when it starts. A run whose
+  // cleanup fires first (StrictMode's dev-only double effect, or leaving the
+  // plates mid-load) discards its response, so the next run must fetch again —
+  // setting the guard up front left the dev server on "Reading the store"
+  // forever, waiting on a response its own cleanup had thrown away.
   const sceneFetchedForRef = useRef(-1);
   useEffect(() => {
     if (viewMode !== '3d') return;
     if (sceneFetchedForRef.current === storeChanges) return;
-    sceneFetchedForRef.current = storeChanges;
 
     let cancelled = false;
     loadPlateData()
       .then(({ data, layout, edges }) => {
         if (cancelled) return;
+        sceneFetchedForRef.current = storeChanges;
         setPlateData(data);
         setPlateError(null);
         setSceneNodes(layout.nodes);
@@ -202,7 +210,6 @@ export default function AppLayout() {
         if (err instanceof ApiError && err.status === 401) return;
         // Anything else is stated on the plate box. It must not be allowed to
         // look like an empty store — see PlateSurface for the two treatments.
-        sceneFetchedForRef.current = -1;
         setPlateError(err instanceof Error ? err.message : 'Could not reach Engram API');
       });
 
@@ -274,9 +281,9 @@ export default function AppLayout() {
     <div style={{ ...s.root, background: t.rootBg }}>
       {/* Header */}
       <header className="ec-header" style={{ ...s.header, background: t.headerBg, borderBottomColor: t.headerBorder }}>
-        <div style={s.logo}>
+        <div className="ec-logo" style={s.logo}>
           <BrandMark color={t.accent} />
-          <span style={{ ...s.logoText, color: t.textPrimary }}>Engram</span>
+          <span className="ec-logo-text" style={{ ...s.logoText, color: t.textPrimary }}>Engram</span>
           {/* The server's version, from /health. It was the web package's
               (0.4.1) while the release was 0.7.0; hidden until known. */}
           {serverVersion && (
@@ -286,14 +293,23 @@ export default function AppLayout() {
 
         <ViewSwitcher />
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: SPACE.md }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SPACE.md, flexShrink: 0 }}>
           <TemplateSwitcher />
           <ConnectionDot />
         </div>
       </header>
 
       {/* Main — mode aware */}
-      {viewMode === '3d' ? (
+      {viewMode === 'home' ? (
+        <HomeView
+          loading={loading}
+          error={loadError}
+          onRetry={loadMemories}
+          onLoadMore={loadMore}
+          loadingMore={loadingMore}
+          onStore={() => setShowStoreModal(true)}
+        />
+      ) : viewMode === '3d' ? (
         isCompact ? (
           <CompactMain
             pane={mobilePane}
@@ -411,11 +427,13 @@ function ConnectionDot() {
   const color = isConnected ? STATUS.success : t.textMuted;
   return (
     <div
+      role="status"
+      aria-label={isConnected ? 'Live' : 'Offline'}
       style={{ display: 'flex', alignItems: 'center', gap: SPACE.xs, fontSize: TYPE.sm, fontWeight: WEIGHT.medium, color }}
       title={isConnected ? 'Live updates connected' : 'Live updates disconnected — the dashboard shows what it last loaded'}
     >
       <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: color, display: 'inline-block', flexShrink: 0 }} />
-      {isConnected ? 'Live' : 'Offline'}
+      <span className="ec-live-label">{isConnected ? 'Live' : 'Offline'}</span>
     </div>
   );
 }

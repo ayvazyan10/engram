@@ -173,6 +173,32 @@ describe('SearchBar human error copy and clearing', () => {
   });
 });
 
+describe('SearchBar recall context', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.mocked(api.search).mockReset();
+    vi.mocked(api.recall).mockReset();
+  });
+
+  it("asks at recall_context's own budget and keeps the full ids behind the block", async () => {
+    vi.mocked(api.search).mockResolvedValueOnce({ count: 0, results: [] });
+    vi.mocked(api.recall).mockResolvedValueOnce({
+      context: '• [094a5819 · 2026-10-18] deploys',
+      memories: [{ id: '094a5819-c599-40e3-be56-4ab69755d647' }, { nope: true }],
+      latencyMs: 5,
+    });
+
+    render(<SearchBar />);
+    const input = screen.getByPlaceholderText(/ask your memory/i);
+    fireEvent.change(input, { target: { value: 'deploy' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(useMemoryStore.getState().contextIds).toEqual(['094a5819-c599-40e3-be56-4ab69755d647']));
+    expect(api.recall).toHaveBeenCalledWith('deploy', 2000);
+    expect(useMemoryStore.getState().currentContext).toBe('• [094a5819 · 2026-10-18] deploys');
+  });
+});
+
 describe('SearchBar controls (M5, M6)', () => {
   it('makes the search input inherit the body font — it computed to Arial while the body was Inter', () => {
     render(<SearchBar />);

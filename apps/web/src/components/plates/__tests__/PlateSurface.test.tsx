@@ -24,7 +24,8 @@ const stub: DemoModule = {
   id: 'stub',
   name: 'Stub plate',
   dimension: '2D',
-  claim: 'A stand-in that records its props so the box can be asserted without a WebGL context.',
+  caption: 'A stand-in that records its props.',
+  method: 'It renders an empty div so the box can be asserted without a WebGL context.',
   Plate: (props: DemoProps) => {
     handed = props;
     return <div data-testid="stub-plate" />;
@@ -129,6 +130,21 @@ describe('PlateSurface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /try again/i }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the plate caption, and its method only behind the "?"', () => {
+    render(<PlateSurface data={emptyData} error={null} onRetry={() => {}} />);
+    expect(screen.getByText(stub.caption)).toBeInTheDocument();
+    expect(screen.queryByText(stub.method)).not.toBeInTheDocument();
+
+    const help = screen.getByRole('button', { name: `How ${stub.name} is built` });
+    expect(help).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(help);
+    expect(help).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(stub.method)).toBeInTheDocument();
+
+    fireEvent.click(help);
+    expect(screen.queryByText(stub.method)).not.toBeInTheDocument();
   });
 
   it('draws no key of its own — each plate states its own denominators', () => {

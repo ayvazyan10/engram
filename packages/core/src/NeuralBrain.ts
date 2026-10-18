@@ -504,6 +504,7 @@ export class NeuralBrain {
     const initStart = Date.now();
 
     const db = getDb(this.config.dbPath);
+    this.decayEngine.updatePolicy(this.getDecayPolicy());
     const indexPath = this.resolveIndexPath();
 
     // Every node and edge below is replayed from the database, so start from an
@@ -909,6 +910,24 @@ export class NeuralBrain {
    * Store a new memory.
    */
   async store(input: StoreInput): Promise<StoreResult> {
+    return this.storeWithEmbedding(input);
+  }
+
+  /** Embed once, then store in order so deduplication and links see earlier writes. */
+  async storeBatch(inputs: StoreInput[]): Promise<StoreResult[]> {
+    this.assertInitialized();
+    if (inputs.length === 0) return [];
+    const embeddings = await embedBatch(inputs.map((input) => memoryEmbeddingText({
+      ...input, concept: input.concept ?? extractConcept(input.content),
+    })));
+    const results: StoreResult[] = [];
+    for (const [index, input] of inputs.entries()) {
+      results.push(await this.storeWithEmbedding(input, embeddings[index]!));
+    }
+    return results;
+  }
+
+  private async storeWithEmbedding(input: StoreInput, precomputedEmbedding?: Float32Array): Promise<StoreResult> {
     this.assertInitialized();
     const dedupThreshold = readDedupThreshold(process.env);
     // Checked before anything is embedded or written. `input.importance ??
@@ -929,7 +948,7 @@ export class NeuralBrain {
     const deviceId = getDeviceId();
 
     const concept = input.concept ?? extractConcept(input.content);
-    const embedding = await embed(memoryEmbeddingText({ ...input, type, concept }));
+    const embedding = precomputedEmbedding ?? await embed(memoryEmbeddingText({ ...input, type, concept }));
     const embeddingBuf = packFP16(embedding);
 
     const record: NewMemory = {
@@ -1289,6 +1308,11 @@ export class NeuralBrain {
         .set({ archivedAt, updatedAt: archivedAt, deviceId })
         .where(inArray(schema.memories.id, ids))
         .run();
+
+      tx.delete(schema.contextAssemblies).where(sql`exists (
+        select 1 from json_each(${schema.contextAssemblies.assembledContext}) as entry
+        where ${inArray(sql`json_extract(entry.value, '$.memoryId')`, ids)}
+      )`).run();
 
       // Tombstone instead of hard-delete: a physical DELETE can't be
       // represented in a `WHERE updated_at > cursor` sync query either, so a
@@ -1753,6 +1777,7 @@ export class NeuralBrain {
    */
   async runDecaySweep(dryRun = false): Promise<DecaySweepResult> {
     this.assertInitialized();
+    this.decayEngine.updatePolicy(this.getDecayPolicy());
 
     const result = await this.decayEngine.sweep(
       (id) => this.forget(id),
@@ -1812,17 +1837,35 @@ export class NeuralBrain {
 
   /** Get the current decay policy configuration. */
   getDecayPolicy(): DecayPolicyConfig {
-    return this.decayEngine.getPolicy();
+    const current = this.decayEngine.getPolicy();
+    const stored = getDb(this.config.dbPath).select().from(schema.localMeta)
+      .where(eq(schema.localMeta.key, 'decay_policy')).get();
+    if (!stored) return current;
+    const persisted = JSON.parse(stored.value) as Partial<DecayPolicyConfig>;
+    return mergePolicy({ ...current, ...persisted,
+      consolidation: { ...current.consolidation, ...persisted.consolidation },
+      // Predicates are executable code, so protection rules stay process-local.
+      protectionRules: current.protectionRules,
+    });
   }
 
   /** Update the decay policy at runtime. */
   updateDecayPolicy(partial: Omit<Partial<DecayPolicyConfig>, 'consolidation'> & {
     consolidation?: Partial<DecayPolicyConfig['consolidation']>;
   }): void {
-    const current = this.decayEngine.getPolicy();
-    this.decayEngine.updatePolicy(mergePolicy({ ...current, ...partial,
-      consolidation: { ...current.consolidation, ...partial.consolidation },
-    }));
+    const db = getDb(this.config.dbPath);
+    const policy = db.transaction((tx) => {
+      const current = this.getDecayPolicy();
+      const merged = mergePolicy({ ...current, ...partial,
+        consolidation: { ...current.consolidation, ...partial.consolidation },
+      });
+      const { protectionRules: _rules, ...persisted } = merged;
+      const value = JSON.stringify(persisted);
+      tx.insert(schema.localMeta).values({ key: 'decay_policy', value })
+        .onConflictDoUpdate({ target: schema.localMeta.key, set: { value } }).run();
+      return merged;
+    }, { behavior: 'immediate' });
+    this.decayEngine.updatePolicy(policy);
   }
 
   // ─── Tagging & Collections ───────────────────────────────────────────────

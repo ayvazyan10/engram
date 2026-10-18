@@ -4,7 +4,13 @@ import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 
-export default function SearchBar() {
+/** `large` is Home's version: the same field, front and centre — no strip
+ *  around it, a bigger target and type. */
+/** recall_context's own default budget, so the context Home shows under
+ *  "What my AI knows" is the block an MCP client gets for the same words. */
+const RECALL_MAX_TOKENS = 2000;
+
+export default function SearchBar({ large = false, placeholder = 'Ask your memory anything…' }: { large?: boolean; placeholder?: string }) {
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -34,7 +40,7 @@ export default function SearchBar() {
     try {
       const [searchRes, recallRes] = await Promise.all([
         api.search(query, 20),
-        api.recall(query, 1500),
+        api.recall(query, RECALL_MAX_TOKENS),
       ]);
       if (requestId !== latestRequestId.current) return; // superseded — drop it
       const results = searchRes.results as MemoryRecord[];
@@ -46,7 +52,7 @@ export default function SearchBar() {
       setSearchQuery(query);
       setSearchResults(results);
       setHighlightedIds(new Set(results.map((r) => r.id)));
-      setContext(recallRes.context, recallRes.latencyMs);
+      setContext(recallRes.context, recallRes.latencyMs, recallIds(recallRes.memories));
     } catch (err) {
       if (requestId !== latestRequestId.current) return; // superseded — drop it
       // Status 0 is a request that never got an answer (lib/api.ts); its raw
@@ -88,9 +94,9 @@ export default function SearchBar() {
   const iconStroke  = focused || hasQuery ? t.accent : t.textMuted;
 
   return (
-    <div style={{ ...styles.wrapper, background: t.panelBg, borderBottomColor: t.panelBorder }}>
+    <div style={large ? styles.wrapperLarge : { ...styles.wrapper, background: t.panelBg, borderBottomColor: t.panelBorder }}>
       {/* Input row */}
-      <div style={{ ...styles.container, background: t.inputBg, borderColor, boxShadow }}>
+      <div style={{ ...styles.container, ...(large ? styles.containerLarge : {}), background: t.inputBg, borderColor, boxShadow }}>
         {/* Search icon / spinner */}
         <div style={styles.iconWrap}>
           {loading ? (
@@ -107,7 +113,7 @@ export default function SearchBar() {
 
         <input
           ref={inputRef}
-          style={{ ...styles.input, color: t.textPrimary }}
+          style={{ ...styles.input, ...(large ? styles.inputLarge : {}), color: t.textPrimary }}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onFocus={() => setFocused(true)}
@@ -116,7 +122,7 @@ export default function SearchBar() {
             if (e.key === 'Enter') handleSearch();
             if (e.key === 'Escape') handleClear();
           }}
-          placeholder="Ask your memory anything…"
+          placeholder={placeholder}
           aria-label="Search memories"
           spellCheck={false}
           autoComplete="off"
@@ -134,7 +140,7 @@ export default function SearchBar() {
         {/* Search button */}
         <button
           className="ec-primary"
-          style={{ ...styles.searchBtn, background: t.accentStrong, color: t.onAccent }}
+          style={{ ...styles.searchBtn, ...(large ? styles.searchBtnLarge : {}), background: t.accentStrong, color: t.onAccent }}
           onClick={handleSearch}
           disabled={loading}
           title="Search (Enter)"
@@ -180,10 +186,31 @@ export default function SearchBar() {
   );
 }
 
+/** The full ids behind the recall block, which prints only 8-character
+ *  prefixes. */
+function recallIds(memories: unknown[]): string[] {
+  return memories.flatMap((m) =>
+    m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string' ? [(m as { id: string }).id] : []
+  );
+}
+
 const styles = {
   wrapper: {
     padding: `${SPACE.md} ${SPACE.lg} ${SPACE.sm}`,
     borderBottom: '1px solid',
+  },
+  wrapperLarge: {},
+  containerLarge: {
+    borderRadius: RADIUS.lg,
+    padding: '5px 5px 5px 12px',
+  },
+  inputLarge: {
+    fontSize: TYPE.lg,
+    padding: `${SPACE.sm} ${SPACE.xs}`,
+  },
+  searchBtnLarge: {
+    width: 36,
+    height: 36,
   },
   container: {
     display: 'flex',

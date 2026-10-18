@@ -40,6 +40,19 @@ describe('ViewSwitcher mode tabs', () => {
     expect(screen.queryByRole('button', { name: '3D' })).not.toBeInTheDocument();
   });
 
+  it('opens on Home, the first tab', () => {
+    useDashboardStore.setState(useDashboardStore.getInitialState());
+    render(<ViewSwitcher />);
+    expect(useDashboardStore.getState().viewMode).toBe('home');
+    const tabs = ['Home', 'Plates', 'Timeline', 'Analytics', 'Reflections'].map((name) =>
+      screen.getByRole('button', { name })
+    );
+    expect(tabs[0]).toHaveAttribute('aria-pressed', 'true');
+    for (let i = 1; i < tabs.length; i++) {
+      expect(tabs[i - 1]!.compareDocumentPosition(tabs[i]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   it('offers the plate chooser only on the plate surface', () => {
     const { rerender } = render(<ViewSwitcher />);
     expect(screen.getByRole('button', { name: /^Plate: / })).toBeInTheDocument();
@@ -64,7 +77,7 @@ describe('the plate chooser', () => {
     expect(trigger).toHaveTextContent(active.name);
   });
 
-  it('opens to exactly the five plates, each with its own name and claim in full', () => {
+  it('opens to exactly the five plates, each with its own name and caption in full', () => {
     render(<ViewSwitcher />);
     const panel = openChooser();
     const options = within(panel).getAllByRole('button');
@@ -72,9 +85,9 @@ describe('the plate chooser', () => {
 
     for (const view of VIEWS) {
       expect(within(panel).getByText(view.name)).toBeInTheDocument();
-      // The claim is rendered, not hidden in a title attribute — it is the
+      // The caption is rendered, not hidden in a title attribute — it is the
       // sentence a reader chooses on.
-      expect(within(panel).getByText(view.claim)).toBeInTheDocument();
+      expect(within(panel).getByText(view.caption)).toBeInTheDocument();
     }
     expect(within(panel).queryByText(/cosmos|neural net|clusters/i)).not.toBeInTheDocument();
   });

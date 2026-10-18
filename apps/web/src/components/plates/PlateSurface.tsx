@@ -1,8 +1,9 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMemoryStore } from '../../store/memoryStore.js';
 import { useViewStore } from '../../store/viewStore.js';
-import { useMediaQuery } from '../../hooks/useMediaQuery.js';
+import { COMPACT_QUERY, useMediaQuery } from '../../hooks/useMediaQuery.js';
+import PlateChooser from '../ui/PlateChooser.js';
 import type { ObsData } from '../../lib/plate/contract.js';
 
 /**
@@ -22,9 +23,12 @@ import type { ObsData } from '../../lib/plate/contract.js';
  *   resize, exactly as the harness did, because the numbers a plate prints
  *   about itself are laid out against the size it was told.
  *
- * There is nothing else in here. No key, no legend, no denominator strip: each
- * plate states its own denominators inside its own box (contract rule 8), and
- * the app's scene key was retired rather than left to disagree with them.
+ * Above the box sits one caption strip, the same for every plate: the plate's
+ * plain-language `caption` (what it shows, how to read it), and a "?" that
+ * opens its `method` — how it is built — over the top of the box. On a compact
+ * viewport the plate chooser lives here too, which keeps the header one row.
+ * No key, no legend, no denominator strip: each plate states its own
+ * denominators inside its own box (contract rule 8).
  */
 
 interface Props {
@@ -57,38 +61,65 @@ export default function PlateSurface({ data, error, onRetry }: Props) {
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
   const highlightedIds = useMemoryStore((s) => s.highlightedIds);
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
+  const isCompact = useMediaQuery(COMPACT_QUERY);
   const [boxRef, size] = useBoxSize();
+  const [methodOpen, setMethodOpen] = useState(false);
+  const methodId = useId();
+
+  // A new plate starts with its method closed: the open one described the last.
+  useEffect(() => setMethodOpen(false), [activeView.id]);
 
   const Plate = activeView.Plate;
 
   return (
-    <div className="ec-plate" ref={boxRef}>
-      {error ? (
-        <PlateMessage onRetry={onRetry}>
-          The store did not answer: {error}. Every figure on a plate is derived from what the
-          server actually returned, so nothing is drawn rather than something invented.
-        </PlateMessage>
-      ) : !data ? (
-        <div className="ec-plate-state">
-          {/* The same spinner the rest of the app loads with (@keyframes
-              ec-spin, styles/global.css), in plate ink because it is inside
-              the plate's box. It covers the whole load, not just part of it:
-              an empty box while the projection is in flight looked identical
-              to an empty store. */}
-          <span className="ec-plate-spinner" aria-hidden="true" />
-          <p className="ec-plate-state-text">Reading the store.</p>
-        </div>
-      ) : size.width > 0 && size.height > 0 ? (
-        <Plate
-          data={data}
-          width={size.width}
-          height={size.height}
-          reducedMotion={reducedMotion}
-          selectedId={selectedId}
-          onSelect={selectNeuron}
-          highlightedIds={highlightedIds}
-        />
-      ) : null}
+    <div className="ec-plate-frame">
+      <div className="ec-plate-caption">
+        {isCompact ? <PlateChooser /> : null}
+        <p className="ec-plate-caption-text">{activeView.caption}</p>
+        <button
+          type="button"
+          className="ec-plate-help"
+          aria-expanded={methodOpen}
+          aria-controls={methodId}
+          aria-label={`How ${activeView.name} is built`}
+          onClick={() => setMethodOpen((open) => !open)}
+        >
+          ?
+        </button>
+        {methodOpen ? (
+          <div className="ec-plate-method" id={methodId} role="note">
+            <p>{activeView.method}</p>
+          </div>
+        ) : null}
+      </div>
+      <div className="ec-plate" ref={boxRef}>
+        {error ? (
+          <PlateMessage onRetry={onRetry}>
+            The store did not answer: {error}. Every figure on a plate is derived from what the
+            server actually returned, so nothing is drawn rather than something invented.
+          </PlateMessage>
+        ) : !data ? (
+          <div className="ec-plate-state">
+            {/* The same spinner the rest of the app loads with (@keyframes
+                ec-spin, styles/global.css), in plate ink because it is inside
+                the plate's box. It covers the whole load, not just part of it:
+                an empty box while the projection is in flight looked identical
+                to an empty store. */}
+            <span className="ec-plate-spinner" aria-hidden="true" />
+            <p className="ec-plate-state-text">Reading the store.</p>
+          </div>
+        ) : size.width > 0 && size.height > 0 ? (
+          <Plate
+            data={data}
+            width={size.width}
+            height={size.height}
+            reducedMotion={reducedMotion}
+            selectedId={selectedId}
+            onSelect={selectNeuron}
+            highlightedIds={highlightedIds}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

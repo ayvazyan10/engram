@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import AppLayout from '../AppLayout.js';
@@ -332,6 +333,26 @@ describe('AppLayout plate sourcing', () => {
     expect(useNeuralStore.getState().neurons).toHaveLength(0);
   });
 
+  /**
+   * The dev server renders under StrictMode, which runs every effect, cleans
+   * it up, and runs it again. The first run's fetch is discarded by its
+   * cleanup; the "already fetched" guard used to be set before the fetch, so
+   * the second run skipped and the plates sat on "Reading the store" forever.
+   */
+  it('loads the plates under StrictMode, where the first effect run is thrown away', async () => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
+    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b']));
+
+    render(
+      <StrictMode>
+        <AppLayout />
+      </StrictMode>
+    );
+
+    await waitFor(() => expect(plateProps().memories).toBe(2));
+    expect(useNeuralStore.getState().neurons).toHaveLength(2);
+  });
+
   it('retries the load when the plate asks it to', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     getGraphLayout.mockRejectedValue(new Error('offline'));
@@ -558,5 +579,26 @@ describe('AppLayout compact (mobile) layout', () => {
   it('gives the compact pane the same plate the desktop layout shows', async () => {
     render(<AppLayout />);
     await waitFor(() => expect(screen.getByTestId('plate')).toBeInTheDocument());
+  });
+});
+
+describe('AppLayout Home', () => {
+  beforeEach(resetAll);
+
+  it('opens on Home: search and the recent memories, not a plate', async () => {
+    useDashboardStore.setState(useDashboardStore.getInitialState());
+    vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
+
+    render(<AppLayout />);
+    expect(await screen.findByRole('heading', { name: 'Recent memories' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plate')).not.toBeInTheDocument();
+  });
+
+  it('opens on the first-run onboarding when the store is empty', async () => {
+    useDashboardStore.setState(useDashboardStore.getInitialState());
+    vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 0, memories: [] });
+
+    render(<AppLayout />);
+    expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
   });
 });
