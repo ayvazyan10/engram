@@ -137,7 +137,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // GET /api/memory — list memories
-  app.get<{ Querystring: { type?: string; source?: string; limit?: number; offset?: number } }>(
+  app.get<{
+    Querystring: { type?: string; source?: string; namespace?: string; global?: 'true'; limit?: number; offset?: number };
+  }>(
     '/memory',
     {
       schema: {
@@ -149,6 +151,8 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           properties: {
             type: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
             source: { type: 'string' },
+            namespace: { type: 'string' },
+            global: { type: 'string', enum: ['true'] },
             // A `maximum` alone is only half a bound. SQLite reads LIMIT -1 as
             // "no limit", so ?limit=-1 returned the whole table — every row
             // carrying its FP16 embedding as a JSON byte array — and a
@@ -162,14 +166,16 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       // above documents the contract without enforcing it — an unknown key is
       // stripped in silence and the caller is answered 200 for a request that was
       // plainly a typo. This is what enforces it; see lib/strictBody.ts.
-      preValidation: strictQueryString(['type', 'source', 'limit', 'offset']),
+      preValidation: strictQueryString(['type', 'source', 'namespace', 'global', 'limit', 'offset']),
       handler: async (req) => {
         const db = getDb();
-        const { type, source, limit = 50, offset = 0 } = req.query;
+        const { type, source, namespace, global, limit = 50, offset = 0 } = req.query;
 
         const conditions = [isNull(schema.memories.archivedAt)];
         if (type) conditions.push(eq(schema.memories.type, type as 'episodic' | 'semantic' | 'procedural'));
         if (source) conditions.push(eq(schema.memories.source, source));
+        if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
+        if (global === 'true') conditions.push(isNull(schema.memories.namespace));
         // Scope to brain's namespace if configured
         const ns = brain.getNamespace();
         if (ns) conditions.push(eq(schema.memories.namespace, ns));

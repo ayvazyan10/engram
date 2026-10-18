@@ -77,7 +77,7 @@ describe('GET /api/graph/edges', () => {
  * and the guard is the same one line.
  */
 describe.each([
-  ['/api/memory', '/api/memory?limit=5', 'type, source, limit, offset'],
+  ['/api/memory', '/api/memory?limit=5', 'type, source, namespace, global, limit, offset'],
   ['/api/tags/:tag', '/api/tags/anything?limit=5', 'limit, offset'],
   ['/api/contradictions', '/api/contradictions?limit=5', 'limit'],
   ['/api/reflections', '/api/reflections?limit=5', 'limit, type'],

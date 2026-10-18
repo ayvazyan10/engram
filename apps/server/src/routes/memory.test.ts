@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { StoreResult } from '../../../../packages/core/src/NeuralBrain.ts';
 import { getDb, schema } from '../../../../packages/core/src/db/index.ts';
@@ -22,6 +23,7 @@ beforeAll(async () => {
   vi.stubEnv('ENGRAM_SYNC_URL', '');
   vi.stubEnv('ENGRAM_DECAY_INTERVAL', '0');
   vi.stubEnv('ENGRAM_DEDUP_THRESHOLD', '0.97');
+  vi.stubEnv('ENGRAM_NAMESPACE_MODE', 'none');
   const mod = await import('../index.ts');
   brain = mod.brain;
   await brain.initialize();
@@ -84,6 +86,52 @@ it('POST /api/memory/batch accepts empty batches and retains validation and the 
     const response = await app.inject({ method: 'POST', url: '/api/memory/batch', payload: { memories } });
     expect(response.statusCode).toBe(400);
   }
+});
+
+it('GET /api/memory ANDs exact namespace and global filters with existing filters', async () => {
+  expect(brain.getNamespaceMode()).toBe('none');
+  const source = 'namespace-list';
+  // none-mode writes discard the namespace by design, so set the column directly.
+  const a = await brain.episodic.store({ content: 'Project A memory', source });
+  const b = await brain.episodic.store({ content: 'Project B memory', source });
+  const global = await brain.episodic.store({ content: 'Global memory', source });
+  await getDb().update(schema.memories).set({ namespace: 'A' }).where(eq(schema.memories.id, a.id));
+  await getDb().update(schema.memories).set({ namespace: 'B' }).where(eq(schema.memories.id, b.id));
+  for (const [query, expected] of [
+    ['', [{ id: a.id, namespace: 'A' }, { id: b.id, namespace: 'B' }, { id: global.id, namespace: null }]],
+    ['&namespace=A', [{ id: a.id, namespace: 'A' }]],
+    ['&global=true', [{ id: global.id, namespace: null }]],
+    ['&namespace=A&global=true', []],
+    ['&namespace=a', []],
+    ['&namespace=A&type=semantic', []],
+  ] as const) {
+    const response = await app.inject({ method: 'GET', url: `/api/memory?source=${source}${query}` });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      count: expected.length,
+      memories: expect.arrayContaining(expected.map((memory) => expect.objectContaining({
+        id: memory.id, namespace: memory.namespace,
+      }))),
+    });
+  }
+});
+
+it('GET /api/memory validates namespace filters with the existing query schema', async () => {
+  for (const query of ['global=false', 'global=1', 'global=', 'global=TRUE', 'namespce=A']) {
+    const response = await app.inject({ method: 'GET', url: `/api/memory?${query}` });
+    expect(response.statusCode).toBe(400);
+  }
+});
+
+it('GET /api/stats passes through namespace counts and the database path', async () => {
+  const stats = await brain.stats();
+  const response = await app.inject({ method: 'GET', url: '/api/stats' });
+  expect(response.statusCode).toBe(200);
+  expect(stats.byNamespace.length).toBeGreaterThan(0);
+  expect(response.json()).toMatchObject({
+    byNamespace: stats.byNamespace,
+    dbPath: join(directory, 'test.db'),
+  });
 });
 
 it('PATCH delegates to core and returns the updated memory for a prefix', async () => {
