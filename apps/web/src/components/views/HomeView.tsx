@@ -54,7 +54,14 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
     );
   }
 
-  const list = searchQuery ? searchResults : records;
+  // Search follows the picked project too. /api/search takes no project
+  // filter, so its answer is narrowed here, the way addRecord narrows
+  // arrivals; a pick made while results are up applies to them at once.
+  const list = searchQuery
+    ? projectFilter === undefined
+      ? searchResults
+      : searchResults.filter((r) => (r.namespace ?? null) === projectFilter)
+    : records;
   // A filtered list counts against its own bucket, not the whole store.
   const buckets = stats?.byNamespace ?? [];
   const known = buckets.map((b) => b.namespace);
@@ -63,10 +70,9 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
       ? (stats?.total ?? records.length)
       : (buckets.find((b) => b.namespace === projectFilter)?.count ?? records.length);
   // Cards name their project once the store has any (a store of global
-  // memories alone gets no extra label), except in a list filtered to one
-  // project, where every card would repeat the picker. Search spans every
-  // project, so its results keep the label.
-  const showProject = known.some((ns) => ns !== null) && (projectFilter === undefined || Boolean(searchQuery));
+  // memories alone gets no extra label), except in a list or search filtered
+  // to one project, where every card would repeat the picker.
+  const showProject = known.some((ns) => ns !== null) && projectFilter === undefined;
   const more = !searchQuery && total > records.length;
   const inspecting = Boolean(selectedNeuronId);
 
@@ -102,9 +108,9 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
               </button>
             ))}
           </div>
-          {/* The picker scopes the recent list only: search spans every
-              project, so it steps aside while a search is up. */}
-          {lens === 'memories' && !searchQuery && <ProjectPicker />}
+          {/* The picker scopes the recent list and the search results alike,
+              so it stays up while a search is. */}
+          {lens === 'memories' && <ProjectPicker />}
           </div>
 
           {lens === 'ai' ? (
@@ -147,7 +153,9 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
 
             {searchQuery && list.length === 0 && !isSearching && (
               <p style={{ ...s.state, color: t.textMuted }}>
-                Nothing matched. Try other words, or clear the search to see your recent memories.
+                {projectFilter === undefined
+                  ? 'Nothing matched. Try other words, or clear the search to see your recent memories.'
+                  : `Nothing matched in ${projectLabel(projectFilter, known)}. Try other words, or pick All projects.`}
               </p>
             )}
 

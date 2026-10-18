@@ -6,10 +6,11 @@ import {
   GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, TYPE_LABELS, WEIGHT, withAlpha,
   type MemoryType,
 } from '../../lib/tokens.js';
-import { DataDot } from './DataMark.js';
+import { DataDot, ProjectTag } from './DataMark.js';
 import { memoryRowText } from '../../lib/plainText.js';
 import { formatShortDate } from '../../lib/dates.js';
 import { useServerStats } from '../../lib/serverStats.js';
+import { projectLabel } from '../../lib/projects.js';
 
 const TYPES = ['episodic', 'semantic', 'procedural'] as const;
 
@@ -36,6 +37,11 @@ export default function MemoryPanel({ loading, error, onRetry, onStore, onLoadMo
   const { selectNeuron, selectedNeuronId } = useNeuralStore();
   const t = useTemplateStore((s) => s.activeTemplate);
   const stats = useServerStats();
+  // Rows name their project once the store has any, as Home's cards do; a
+  // store of global memories alone gets no extra label.
+  const known = stats?.byNamespace.map((b) => b.namespace) ?? [];
+  const showProject = known.some((ns) => ns !== null);
+  const projectOf = (r: MemoryRecord) => (showProject ? projectLabel(r.namespace, known) : undefined);
   // L1: these three pills were bordered, coloured and inert — they looked
   // exactly like filter chips and did nothing. At 653 stored records the
   // panel genuinely needs filtering, and the grouping below already had the
@@ -180,7 +186,7 @@ export default function MemoryPanel({ loading, error, onRetry, onStore, onLoadMo
       <div style={styles.list}>
         {searchQuery
           ? displayList.map((r) => (
-              <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
+              <MemoryItem key={r.id} record={r} project={projectOf(r)} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
             ))
           : TYPES.map((type) =>
               (activeTypes.size === 0 || activeTypes.has(type)) && grouped[type] && grouped[type]!.length > 0 ? (
@@ -193,7 +199,7 @@ export default function MemoryPanel({ loading, error, onRetry, onStore, onLoadMo
                     <span className="ec-tabular" style={{ ...styles.groupCount, color: t.textMuted }}>{grouped[type]!.length}</span>
                   </div>
                   {grouped[type]!.map((r) => (
-                    <MemoryItem key={r.id} record={r} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
+                    <MemoryItem key={r.id} record={r} project={projectOf(r)} selected={selectedNeuronId === r.id} onClick={() => selectNeuron(r.id)} t={t} />
                   ))}
                 </div>
               ) : null
@@ -230,7 +236,7 @@ export default function MemoryPanel({ loading, error, onRetry, onStore, onLoadMo
   );
 }
 
-function MemoryItem({ record, selected, onClick, t }: { record: MemoryRecord; selected: boolean; onClick: () => void; t: UITemplate }) {
+function MemoryItem({ record, project, selected, onClick, t }: { record: MemoryRecord; project?: string; selected: boolean; onClick: () => void; t: UITemplate }) {
   const color = TYPE_COLORS[record.type] ?? t.textSecondary;
   const { primary, secondary } = memoryRowText(record);
   const importancePct = Math.round(record.importance * 100);
@@ -260,6 +266,7 @@ function MemoryItem({ record, selected, onClick, t }: { record: MemoryRecord; se
         {secondary && <div style={{ ...styles.itemExcerpt, color: t.textMuted }}>{secondary}</div>}
         <div style={styles.itemFooter}>
           <span className="ec-tabular" style={{ color: t.textMuted }}>{formatShortDate(record.createdAt)}</span>
+          {project && <ProjectTag namespace={record.namespace} label={project} style={styles.itemProject} />}
           <div style={{ ...styles.importanceBar, background: t.inputBg }} title={`Importance ${importancePct}%`}>
             <div style={{ ...styles.importanceFill, width: `${importancePct}%`, background: color }} />
           </div>
@@ -426,6 +433,9 @@ const styles = {
     fontSize: TYPE.xs,
     lineHeight: 1,
   },
+  // Line height of its own: the footer's 1 would clip the name's descenders
+  // under the ellipsis' overflow.
+  itemProject: { maxWidth: '50%', flexShrink: 1, lineHeight: 1.3 },
   importanceBar: {
     flex: 1,
     height: '2px',

@@ -81,3 +81,30 @@ const tagStyle: CSSProperties = {
   borderRadius: RADIUS.tight,
   letterSpacing: '0.01em',
 };
+
+/**
+ * The label that names a memory's project: a folder and the project's name
+ * in secondary ink, or a globe and "Global" for a memory with no project.
+ * The full path is the tooltip. Home's cards and the sidebar's rows both wear
+ * it, so a project reads the same on either. The icon is 1em, so it follows
+ * whichever text size it sits in.
+ */
+export function ProjectTag({ namespace, label, style }: { namespace: string | null | undefined; label: string; style?: CSSProperties }) {
+  const t = useTemplateStore((s) => s.activeTemplate);
+  return (
+    <span style={{ ...projectStyle, color: t.textSecondary, ...style }} title={namespace ?? 'Global: shared by every project'}>
+      <svg viewBox="0 0 16 16" fill="none" style={projectIconStyle} aria-hidden="true">
+        {namespace == null ? (
+          <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 0c-1.7 1.6-2.5 3.6-2.5 6s.8 4.4 2.5 6m0-12c1.7 1.6 2.5 3.6 2.5 6s-.8 4.4-2.5 6M2.3 6h11.4M2.3 10h11.4" stroke="currentColor" strokeWidth="1.2" />
+        ) : (
+          <path d="M2 4.5A1.5 1.5 0 013.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+        )}
+      </svg>
+      <span style={projectNameStyle}>{label}</span>
+    </span>
+  );
+}
+
+const projectStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: SPACE['2xs'], minWidth: 0 };
+const projectIconStyle: CSSProperties = { width: '1em', height: '1em', flexShrink: 0, opacity: 0.8 };
+const projectNameStyle: CSSProperties = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };

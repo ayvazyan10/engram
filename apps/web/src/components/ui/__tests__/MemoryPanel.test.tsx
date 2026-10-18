@@ -1,12 +1,20 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import MemoryPanel from '../MemoryPanel.js';
 import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js';
 
 // The panel reads the server census for its "N of M" count (H6). Mocked so
 // the count is a fact of the test rather than of the network.
+// `byNamespace` is the census's project buckets; a test sets it to give the
+// store projects, and every other test keeps the global-only store.
+const census = vi.hoisted(() => ({ byNamespace: [] as { namespace: string | null; count: number }[] }));
 vi.mock('../../../lib/serverStats.js', () => ({
-  useServerStats: () => ({ total: 653, byType: { episodic: 33, semantic: 513, procedural: 107 }, bySource: {} }),
+  useServerStats: () => ({
+    total: 653,
+    byType: { episodic: 33, semantic: 513, procedural: 107 },
+    bySource: {},
+    byNamespace: census.byNamespace,
+  }),
 }));
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -200,5 +208,43 @@ describe('MemoryPanel loading indicator (L2)', () => {
     const spinner = container.querySelector('svg');
     expect(spinner).not.toBeNull();
     expect(spinner!.style.animation).toContain('ec-spin');
+  });
+});
+
+describe('MemoryPanel project label', () => {
+  const API = '/home/me/code/api';
+
+  beforeEach(() => {
+    useMemoryStore.setState({
+      records: [
+        record({ id: 'a', concept: 'Project row', namespace: API }),
+        record({ id: 'b', concept: 'Global row', namespace: null }),
+      ],
+      searchResults: [],
+      searchQuery: '',
+      isSearching: false,
+      loadedCount: 2,
+    });
+  });
+
+  afterEach(() => {
+    census.byNamespace = [];
+  });
+
+  it('names each row\'s project as Home\'s cards do: the folder, the full path on hover, Global for the rest', () => {
+    census.byNamespace = [{ namespace: API, count: 400 }, { namespace: null, count: 253 }];
+    render(<MemoryPanel loading={false} />);
+    const projectRow = screen.getByText('Project row').closest('button')!;
+    expect(within(projectRow).getByText('api')).toBeInTheDocument();
+    expect(within(projectRow).getByTitle(API)).toBeInTheDocument();
+    const globalRow = screen.getByText('Global row').closest('button')!;
+    expect(within(globalRow).getByText('Global')).toBeInTheDocument();
+  });
+
+  it('adds nothing when the store holds global memories only', () => {
+    census.byNamespace = [{ namespace: null, count: 653 }];
+    render(<MemoryPanel loading={false} />);
+    expect(screen.queryByText('api')).not.toBeInTheDocument();
+    expect(screen.queryByText('Global')).not.toBeInTheDocument();
   });
 });

@@ -267,6 +267,43 @@ describe('HomeView: projects', () => {
     expect(within(card).queryByText('api')).not.toBeInTheDocument();
   });
 
+  it('scopes search results to the picked project, and keeps the picker up while they show', async () => {
+    vi.mocked(api.stats).mockResolvedValue(MIXED);
+    useMemoryStore.setState({
+      searchQuery: 'deploy',
+      searchResults: [
+        record({ id: 'r-api', content: 'Deploy api with pnpm.', namespace: API }),
+        record({ id: 'r-web', content: 'Deploy web from main.', namespace: WEB }),
+        record({ id: 'r-global', content: 'Deploy only on weekdays.', namespace: null }),
+      ],
+    });
+    renderHome();
+    expect(screen.getByText('3 found')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Project: All projects' }));
+    fireEvent.click(screen.getByRole('button', { name: /^api\b/ }));
+    expect(screen.getByText('1 found')).toBeInTheDocument();
+    expect(screen.getByText('Deploy api with pnpm.')).toBeInTheDocument();
+    expect(screen.queryByText('Deploy web from main.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Project: api' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project: api' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Global/ }));
+    expect(screen.getByText('Deploy only on weekdays.')).toBeInTheDocument();
+    expect(screen.queryByText('Deploy api with pnpm.')).not.toBeInTheDocument();
+  });
+
+  it('says which project a search found nothing in', async () => {
+    vi.mocked(api.stats).mockResolvedValue(MIXED);
+    useMemoryStore.setState({
+      projectFilter: WEB,
+      searchQuery: 'deploy',
+      searchResults: [record({ id: 'r-api', content: 'Deploy api with pnpm.', namespace: API })],
+    });
+    renderHome();
+    expect(await screen.findByText(/Nothing matched in web\. Try other words, or pick All projects\./)).toBeInTheDocument();
+  });
+
   it('adds nothing when the store holds global memories only', async () => {
     vi.mocked(api.stats).mockResolvedValue({ ...MIXED, total: 2, byNamespace: [{ namespace: null, count: 2 }] });
     useMemoryStore.setState({ records: [record()] });
