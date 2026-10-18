@@ -102,7 +102,7 @@ Build orchestration: **Turborepo** — `dependsOn: ["^build"]` ensures `@engram-
 The single entry point for all integrations.
 
 ```typescript
-const brain = new NeuralBrain({ dbPath: './engram.db' });
+const brain = new NeuralBrain();  // dbPath defaults to ENGRAM_DB_PATH, then ~/.engram/engram.db
 await brain.initialize();  // loads HNSW index + knowledge graph into memory
 
 await brain.store({ content, type, concept, tags, importance });
