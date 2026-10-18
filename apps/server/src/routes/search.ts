@@ -1,8 +1,28 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { OutgoingHttpHeaders } from 'node:http';
 import { brain, realtime } from '../index.js';
 import type { MemoryType } from '@engram-ai-memory/core';
 import { strictQueryString } from '../lib/strictBody.js';
+
+const filterProperties = {
+  since: { type: 'string', format: 'date-time' },
+  until: { type: 'string', format: 'date-time' },
+  tags: { type: 'array', items: { type: 'string' } },
+};
+
+// Body filters must have the advertised types before AJV can coerce them.
+async function validateFilterBody(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const body = req.body as { since?: unknown; until?: unknown; tags?: unknown } | null;
+  if (!body || typeof body !== 'object') return;
+  const invalidDateType = [body.since, body.until].some((value) => value !== undefined && typeof value !== 'string');
+  const invalidTags = body.tags !== undefined
+    && (!Array.isArray(body.tags) || !body.tags.every((tag: unknown) => typeof tag === 'string'));
+  if (invalidDateType || invalidTags) {
+    return reply.code(400).send({
+      error: 'Bad Request', message: 'since/until must be date-time strings and tags must be an array of strings.',
+    });
+  }
+}
 
 export const searchRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/search — semantic search
@@ -13,6 +33,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       threshold?: number;
       types?: MemoryType[];
       sources?: string[];
+      since?: string;
+      until?: string;
+      tags?: string[];
       crossNamespace?: boolean;
     };
   }>('/search', {
@@ -34,10 +57,12 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
             items: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
           },
           sources: { type: 'array', items: { type: 'string' } },
+          ...filterProperties,
           crossNamespace: { type: 'boolean', default: false },
         },
       },
     },
+    preValidation: validateFilterBody,
     handler: async (req, reply) => {
       if (brain.getNamespaceMode() === 'isolated' && req.body.crossNamespace) {
         return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
@@ -48,6 +73,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         threshold: req.body.threshold ?? 0.3,
         types: req.body.types,
         sources: req.body.sources,
+        since: req.body.since,
+        until: req.body.until,
+        tags: req.body.tags,
         crossNamespace: req.body.crossNamespace,
       });
       return {
@@ -66,6 +94,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       types?: MemoryType[];
       sources?: string[];
       sessionId?: string;
+      since?: string;
+      until?: string;
+      tags?: string[];
       crossNamespace?: boolean;
     };
   }>('/recall', {
@@ -87,10 +118,12 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
           },
           sources: { type: 'array', items: { type: 'string' } },
           sessionId: { type: 'string' },
+          ...filterProperties,
           crossNamespace: { type: 'boolean', default: false },
         },
       },
     },
+    preValidation: validateFilterBody,
     handler: async (req, reply) => {
       if (brain.getNamespaceMode() === 'isolated' && req.body.crossNamespace) {
         return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
@@ -99,6 +132,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         maxTokens: req.body.maxTokens ?? 2000,
         types: req.body.types,
         sources: req.body.sources,
+        since: req.body.since,
+        until: req.body.until,
+        tags: req.body.tags,
         sessionId: req.body.sessionId,
         source: 'rest-api',
         crossNamespace: req.body.crossNamespace,
@@ -114,6 +150,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       maxTokens?: number;
       types?: string;
       sources?: string;
+      since?: string;
+      until?: string;
+      tags?: string[];
       crossNamespace?: boolean;
     };
   }>('/recall/stream', {
@@ -129,6 +168,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
           maxTokens: { type: 'integer', minimum: 1, maximum: 32000, default: 2000 },
           types: { type: 'string', description: 'Comma-separated memory types' },
           sources: { type: 'string', description: 'Comma-separated sources' },
+          ...filterProperties,
           crossNamespace: { type: 'boolean', default: false },
         },
       },
@@ -137,9 +177,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
     // above documents the contract without enforcing it — an unknown key is
     // stripped in silence and the caller is answered 200 for a request that was
     // plainly a typo. This is what enforces it; see lib/strictBody.ts.
-    preValidation: strictQueryString(['query', 'maxTokens', 'types', 'sources', 'crossNamespace']),
+    preValidation: strictQueryString(['query', 'maxTokens', 'types', 'sources', 'since', 'until', 'tags', 'crossNamespace']),
     handler: async (req, reply) => {
-      const { query, maxTokens, types, sources, crossNamespace } = req.query;
+      const { query, maxTokens, types, sources, since, until, tags, crossNamespace } = req.query;
 
       if (brain.getNamespaceMode() === 'isolated' && crossNamespace) {
         return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
@@ -166,6 +206,9 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         maxTokens: maxTokens ?? 2000,
         types: parsedTypes,
         sources: parsedSources,
+        since,
+        until,
+        tags,
         source: 'rest-api-stream',
         crossNamespace,
       });

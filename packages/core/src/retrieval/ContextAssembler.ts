@@ -53,6 +53,12 @@ export interface RecallOptions {
   sources?: string[];
   /** Filter by memory type */
   types?: MemoryType[];
+  /** Inclusive lower bound on eventAt, falling back to createdAt. */
+  since?: string;
+  /** Inclusive upper bound on eventAt, falling back to createdAt. */
+  until?: string;
+  /** Every supplied tag must be present. */
+  tags?: string[];
   /** Minimum similarity threshold for vector search */
   threshold?: number;
   /** Number of initial vector search candidates */
@@ -86,6 +92,25 @@ export interface RecallResult {
   latencyMs: number;
 }
 
+export const FILTER_CANDIDATE_MULTIPLIER = 4;
+
+export function hasRecallFilters(options: RecallOptions): boolean {
+  return options.since !== undefined || options.until !== undefined || options.tags !== undefined
+    || options.sources !== undefined || options.types !== undefined;
+}
+
+/** Shared by search, recall, and both streaming phases. */
+export function matchesMemoryFilters(memory: Memory, options: RecallOptions): boolean {
+  const effectiveDate = new Date(memory.eventAt ?? memory.createdAt).getTime();
+  if (options.since !== undefined && effectiveDate < new Date(options.since).getTime()) return false;
+  if (options.until !== undefined && effectiveDate > new Date(options.until).getTime()) return false;
+  if (options.tags?.length) {
+    const tags: string[] = JSON.parse(memory.tags);
+    if (!options.tags.every((tag) => tags.includes(tag))) return false;
+  }
+  return true;
+}
+
 export class ContextAssembler {
   constructor(
     private readonly vectorSearch: VectorSearch,
@@ -113,7 +138,9 @@ export class ContextAssembler {
     const queryVec = await embed(query);
 
     // Step 2: Vector search (namespace-scoped when configured)
-    const vectorResults = this.vectorSearch.search(queryVec, topK, threshold, types, this.namespace, crossNamespace);
+    const filtered = hasRecallFilters(options);
+    const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const vectorResults = this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace);
     const candidateIds = new Set(vectorResults.map((r) => r.id));
 
     // Step 3: Graph expansion
@@ -147,6 +174,7 @@ export class ContextAssembler {
 
       for (const record of rows) {
         if (record.archivedAt) continue;
+        if (!matchesMemoryFilters(record, options)) continue;
         // Apply source filter
         if (sources && record.source && !sources.includes(record.source)) continue;
         // Apply type filter. The vector search already honours `types`, but
@@ -185,6 +213,7 @@ export class ContextAssembler {
     const selected: typeof scored = [];
 
     for (const item of scored) {
+      if (filtered && selected.length >= topK) break;
       // formatContext emits `summary ?? content`, so budget against what is
       // actually rendered. Skip (not break) oversized entries so smaller,
       // lower-ranked memories can still fill the budget, and always admit the
@@ -302,10 +331,12 @@ export class ContextAssembler {
     const queryVec = await embed(query);
 
     // Step 2: Vector search — yield results immediately as Phase 1
-    const vectorResults = this.vectorSearch.search(queryVec, topK, threshold, types, this.namespace, crossNamespace);
+    const filtered = hasRecallFilters(options);
+    const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const vectorResults = this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace);
 
     for (const vr of vectorResults) {
-      if (totalChars >= maxChars) break;
+      if (totalChars >= maxChars || (filtered && allYielded.length >= topK)) break;
 
       const [record] = await db
         .select()
@@ -314,6 +345,7 @@ export class ContextAssembler {
         .limit(1);
 
       if (!record || record.archivedAt) continue;
+      if (!matchesMemoryFilters(record, options)) continue;
       if (sources && record.source && !sources.includes(record.source)) continue;
       if (types && !types.includes(record.type as MemoryType)) continue;
       if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
@@ -357,7 +389,7 @@ export class ContextAssembler {
 
     for (const neighbor of graphNeighbors) {
       if (yieldedIds.has(neighbor.id)) continue;
-      if (totalChars >= maxChars) break;
+      if (totalChars >= maxChars || (filtered && allYielded.length >= topK)) break;
 
       const [record] = await db
         .select()
@@ -366,6 +398,7 @@ export class ContextAssembler {
         .limit(1);
 
       if (!record || record.archivedAt) continue;
+      if (!matchesMemoryFilters(record, options)) continue;
       if (sources && record.source && !sources.includes(record.source)) continue;
       // See recall(): expansion reaches memories the vector search never
       // filtered, so the type filter has to be re-applied here.

@@ -122,13 +122,16 @@ server.tool(
       .array(z.enum(['episodic', 'semantic', 'procedural']))
       .optional()
       .describe('Filter by memory type'),
+    since: z.string().datetime({ offset: true }).optional().describe('Inclusive event date lower bound (falls back to creation date)'),
+    until: z.string().datetime({ offset: true }).optional().describe('Inclusive event date upper bound (falls back to creation date)'),
+    tags: z.array(z.string()).optional().describe('Require all of these tags'),
     crossNamespace: z.boolean().optional().default(false).describe('Search all namespaces in filter mode; rejected in isolated mode'),
   },
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  async ({ query, topK, threshold, types, crossNamespace }) => {
+  async ({ query, topK, threshold, types, since, until, tags, crossNamespace }) => {
     await ensureInitialized();
 
-    const memories = await brain.search(query, { topK, threshold, types, crossNamespace });
+    const memories = await brain.search(query, { topK, threshold, types, since, until, tags, crossNamespace });
 
     return {
       content: [
@@ -174,11 +177,14 @@ server.tool(
       .array(z.string())
       .optional()
       .describe('Filter by source systems (e.g. ["claude-code", "ollama"])'),
+    since: z.string().datetime({ offset: true }).optional().describe('Inclusive event date lower bound (falls back to creation date)'),
+    until: z.string().datetime({ offset: true }).optional().describe('Inclusive event date upper bound (falls back to creation date)'),
+    tags: z.array(z.string()).optional().describe('Require all of these tags'),
     crossNamespace: z.boolean().optional().default(false).describe('Recall all namespaces in filter mode; rejected in isolated mode'),
     progressive: z.boolean().optional().default(false).describe('If true, return memories grouped by recall phase (vector, graph) with scores'),
   },
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  async ({ query, maxTokens, types, sources, crossNamespace, progressive }) => {
+  async ({ query, maxTokens, types, sources, since, until, tags, crossNamespace, progressive }) => {
     await ensureInitialized();
 
     if (progressive) {
@@ -194,6 +200,9 @@ server.tool(
         maxTokens,
         types,
         sources,
+        since,
+        until,
+        tags,
         source: clientSource(),
         crossNamespace,
       })) {
@@ -233,6 +242,9 @@ server.tool(
       maxTokens,
       types,
       sources,
+      since,
+      until,
+      tags,
       source: clientSource(),
       crossNamespace,
     });

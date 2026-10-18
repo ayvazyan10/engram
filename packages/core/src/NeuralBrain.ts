@@ -46,7 +46,7 @@ import { WebhookManager } from './webhooks/WebhookManager.js';
 import { PluginRegistry } from './plugins/PluginRegistry.js';
 import type { EngramPlugin, PluginInfo } from './plugins/PluginRegistry.js';
 import { assertValidImportance, clampImportance } from './retrieval/ImportanceScorer.js';
-import { ContextAssembler } from './retrieval/ContextAssembler.js';
+import { ContextAssembler, FILTER_CANDIDATE_MULTIPLIER, hasRecallFilters, matchesMemoryFilters } from './retrieval/ContextAssembler.js';
 import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
@@ -254,7 +254,7 @@ export interface Collection {
 /** A search result: the stored memory plus its cosine similarity to the query. */
 export type SearchHit = Memory & { score: number };
 
-export interface SearchOptions {
+export interface SearchOptions extends Pick<RecallOptions, 'since' | 'until' | 'tags'> {
   topK?: number;
   threshold?: number;
   types?: MemoryType[];
@@ -1218,9 +1218,10 @@ export class NeuralBrain {
 
     const queryVec = await embed(query);
     const crossNamespace = this.resolveCrossNamespace(options.crossNamespace);
+    const topK = options.topK ?? 10;
     const results = this.vectorSearch.search(
       queryVec,
-      options.topK ?? 10,
+      hasRecallFilters(options) ? topK * FILTER_CANDIDATE_MULTIPLIER : topK,
       options.threshold ?? 0.3,
       options.types,
       this.activeNamespace,
@@ -1243,7 +1244,7 @@ export class NeuralBrain {
     const hits: SearchHit[] = [];
     for (const result of results) {
       const m = byId.get(result.id);
-      if (!m) continue;
+      if (!m || !matchesMemoryFilters(m, options)) continue;
       if (options.sources && m.source && !options.sources.includes(m.source)) continue;
       // Namespace filtering (defense in depth — vector search already filters)
       if (this.activeNamespace && !crossNamespace && m.namespace !== this.activeNamespace) continue;
@@ -1252,7 +1253,7 @@ export class NeuralBrain {
       hits.push({ ...m, score: result.similarity });
     }
 
-    return hits;
+    return hits.slice(0, topK);
   }
 
   /**

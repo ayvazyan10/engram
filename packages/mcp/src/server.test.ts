@@ -90,3 +90,38 @@ it('reports ambiguous prefixes as missing in update_memory and forget', async ()
   const report = forgotten.content as Array<{ type: string; text: string }>;
   expect(JSON.parse(report[0]!.text)).toMatchObject({ archived: 0, notFound: ['12345678'] });
 });
+
+it('advertises date-time filters and forwards them through both recall modes and search', async () => {
+  const filters = { since: '2026-01-01T00:00:00Z', until: '2026-02-01T00:00:00+02:00', tags: ['project', 'release'] };
+  const { tools } = await client.listTools();
+  for (const name of ['search_memory', 'recall_context']) {
+    const properties = tools.find((tool) => tool.name === name)?.inputSchema.properties;
+    expect(properties).toMatchObject({
+      since: { type: 'string', format: 'date-time' },
+      until: { type: 'string', format: 'date-time' },
+      tags: { type: 'array', items: { type: 'string' } },
+    });
+  }
+  const search = vi.spyOn(brain, 'search').mockResolvedValue([]);
+  const recall = vi.spyOn(brain, 'recall').mockResolvedValue({ context: '', memories: [], latencyMs: 0 });
+  const stream = vi.spyOn(brain, 'recallStream').mockImplementation(async function* () {
+    yield { phase: 'complete', context: '', memories: [], latencyMs: 0 };
+  });
+  try {
+    for (const [name, extra, spy] of [
+      ['search_memory', {}, search],
+      ['recall_context', {}, recall],
+      ['recall_context', { progressive: true }, stream],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: { query: 'query', ...filters, ...extra } });
+      expect(result.isError).not.toBe(true);
+      expect(spy).toHaveBeenCalledWith('query', expect.objectContaining(filters));
+    }
+    const invalid = await client.callTool({ name: 'search_memory', arguments: { query: 'query', since: 'yesterday' } });
+    expect(invalid.isError).toBe(true);
+  } finally {
+    search.mockRestore();
+    recall.mockRestore();
+    stream.mockRestore();
+  }
+});
