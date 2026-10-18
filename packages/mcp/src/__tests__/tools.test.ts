@@ -12,11 +12,12 @@
  * and a cached rejected init promise bricking the server.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import path from 'path';
 import os from 'os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { getDb, schema } from '@engram-ai-memory/core';
 import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
 
 const dbPath = path.join(os.tmpdir(), `engram-mcp-test-${Date.now()}.db`);
@@ -51,6 +52,8 @@ async function expectToolError(name: string, args: Record<string, unknown>): Pro
 
 beforeAll(async () => {
   process.env['ENGRAM_DB_PATH'] = dbPath;
+  vi.stubEnv('ENGRAM_NAMESPACE_MODE', 'project');
+  vi.stubEnv('ENGRAM_NAMESPACE', 'mcp-tool-project');
 
   const mod = await import('../server.js');
   brain = mod.brain;
@@ -68,6 +71,7 @@ afterAll(async () => {
   await client?.close().catch(() => {});
   try { brain?.shutdown(); } catch { /* best effort */ }
   cleanupTestDb(dbPath);
+  vi.unstubAllEnvs();
 });
 
 describe('tool registration', () => {
@@ -102,6 +106,23 @@ describe('tool registration', () => {
 });
 
 describe('store_memory & search_memory', () => {
+  it('stores global: true as NULL even with an explicit namespace', async () => {
+    const stored = JSON.parse(await call('store_memory', {
+      content: 'The user prefers concise answers in all projects',
+      global: true, namespace: 'mcp-tool-project',
+    })) as { id: string };
+    const rows = await getDb().select().from(schema.memories);
+    expect(rows.find((row) => row.id === stored.id)?.namespace).toBeNull();
+  });
+
+  it.each([undefined, false])('keeps project storage when global is %s', async (global) => {
+    const stored = JSON.parse(await call('store_memory', {
+      content: `Project memory with global set to ${String(global)}`, global,
+    })) as { id: string };
+    const rows = await getDb().select().from(schema.memories);
+    expect(rows.find((row) => row.id === stored.id)?.namespace).toBe('mcp-tool-project');
+  });
+
   it('stores a memory and finds it again', async () => {
     const stored = await call('store_memory', {
       content: 'Engram stores embeddings as FP16 blobs',

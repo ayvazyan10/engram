@@ -8,13 +8,14 @@
  * brain and visible to every other namespace — the opposite of isolation.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { NeuralBrain } from '@engram-ai-memory/core';
+import { NeuralBrain, getDb, closeDb, schema } from '@engram-ai-memory/core';
 import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
-import { resolveDbPath, readContent, storeSession } from '../store-session.js';
+import { resolveDbPath, readContent, storeSession } from '../store-session.ts';
 
 const dbs: string[] = [];
 
@@ -83,6 +84,25 @@ async function* stdinOf(text: string): AsyncIterable<Buffer> {
 }
 
 describe('storeSession in isolated mode', () => {
+  it('stores a default session summary in the current project namespace', async () => {
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engram-session-project-')));
+    const dbPath = path.join(directory, 'memory.db');
+    try {
+      execFileSync('git', ['init', '--quiet', directory], { stdio: 'ignore' });
+      vi.spyOn(process, 'cwd').mockReturnValue(directory);
+      await storeSession('Implemented project scoped session memory', { ENGRAM_DB_PATH: dbPath });
+      const rows = await getDb(dbPath).select().from(schema.memories);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        namespace: directory, content: 'Implemented project scoped session memory',
+      });
+    } finally {
+      vi.restoreAllMocks();
+      closeDb();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('writes into the configured namespace, where the isolated brain can see it', async () => {
     const dbPath = tempDb('isolated');
     await storeSession('Refactored the sync engine and fixed the pull cursor', {
@@ -109,7 +129,9 @@ describe('storeSession in isolated mode', () => {
 
   it('still works with no namespace configured at all', async () => {
     const dbPath = tempDb('plain');
-    await storeSession('A plain session summary with no namespace', { ENGRAM_DB_PATH: dbPath });
+    await storeSession('A plain session summary with no namespace', {
+      ENGRAM_DB_PATH: dbPath, ENGRAM_NAMESPACE_MODE: 'none',
+    });
 
     const visible = await searchAs(dbPath, 'none', undefined, 'plain session summary');
     expect(visible.join('\n')).toContain('A plain session summary');

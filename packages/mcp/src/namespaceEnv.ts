@@ -10,9 +10,10 @@
  * keeps the two entrypoints from drifting apart again.
  */
 
+import { execFileSync } from 'node:child_process';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 
-export const NAMESPACE_MODES: readonly NamespaceMode[] = ['none', 'filter', 'isolated'];
+export const NAMESPACE_MODES: readonly (NamespaceMode | 'project')[] = ['none', 'filter', 'isolated', 'project'];
 
 export interface NamespaceSettings {
   readonly namespaceMode: NamespaceMode;
@@ -34,12 +35,25 @@ export type NamespaceEnv = Readonly<Record<string, string | undefined>>;
  * An unrecognised mode throws instead of falling back: silently downgrading
  * `isolated` to `none` would publish memories the user asked to keep separate.
  */
-export function resolveNamespaceSettings(env: NamespaceEnv): NamespaceSettings {
+export function resolveNamespaceSettings(env: NamespaceEnv, cwd = process.cwd()): NamespaceSettings {
   const namespace = env['ENGRAM_NAMESPACE'] || undefined;
-  const raw = env['ENGRAM_NAMESPACE_MODE'] || (namespace ? 'filter' : 'none');
+  const raw = env['ENGRAM_NAMESPACE_MODE'] || 'project';
 
-  if (!NAMESPACE_MODES.includes(raw as NamespaceMode)) {
-    throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated');
+  if (!NAMESPACE_MODES.includes(raw as NamespaceMode | 'project')) {
+    throw new Error('ENGRAM_NAMESPACE_MODE must be one of: none, filter, isolated, project');
+  }
+
+  if (raw === 'project') {
+    if (namespace) return { namespaceMode: 'filter', namespace };
+    try {
+      const root = execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
+        encoding: 'utf8', timeout: 500, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (root) return { namespaceMode: 'filter', namespace: root };
+    } catch {
+      // Outside a repository (or without git), use the shared memory pool.
+    }
+    return { namespaceMode: 'none', namespace: undefined };
   }
 
   return { namespaceMode: raw as NamespaceMode, namespace };

@@ -10,13 +10,46 @@
  * immediately, forever, against the user's sync server.
  */
 
-import { describe, it, expect } from 'vitest';
-import { resolveNamespaceSettings } from '../namespaceEnv.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { resolveNamespaceSettings } from '../namespaceEnv.ts';
 import { readSyncSettings, syncEngineConfig } from '../syncSettings.js';
 
 describe('resolveNamespaceSettings', () => {
-  it('defaults to none when nothing is configured', () => {
-    expect(resolveNamespaceSettings({})).toEqual({ namespaceMode: 'none', namespace: undefined });
+  let directory: string;
+
+  beforeEach(() => {
+    directory = realpathSync(mkdtempSync(path.join(tmpdir(), 'engram-namespace-')));
+  });
+
+  afterEach(() => rmSync(directory, { recursive: true, force: true }));
+
+  it.each([undefined, 'project', ''])('resolves mode %s to the absolute git root from a subdirectory', (mode) => {
+    execFileSync('git', ['init', '--quiet', directory], { stdio: 'ignore' });
+    const cwd = path.join(directory, 'nested');
+    mkdirSync(cwd);
+    expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: mode }, cwd))
+      .toEqual({ namespaceMode: 'filter', namespace: directory });
+  });
+
+  it.each([undefined, 'project'])('uses none outside a repository with mode %s', (mode) => {
+    expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: mode }, directory))
+      .toEqual({ namespaceMode: 'none', namespace: undefined });
+  });
+
+  it('lets an explicit namespace override the git root', () => {
+    execFileSync('git', ['init', '--quiet', directory], { stdio: 'ignore' });
+    expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: 'project', ENGRAM_NAMESPACE: 'work' }, directory))
+      .toEqual({ namespaceMode: 'filter', namespace: 'work' });
+  });
+
+  it('preserves explicit none inside a repository', () => {
+    execFileSync('git', ['init', '--quiet', directory], { stdio: 'ignore' });
+    expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: 'none' }, directory))
+      .toEqual({ namespaceMode: 'none', namespace: undefined });
   });
 
   it('derives filter mode from a bare namespace', () => {
@@ -30,7 +63,7 @@ describe('resolveNamespaceSettings', () => {
   });
 
   it('treats the empty strings a host templates as unset', () => {
-    expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: '', ENGRAM_NAMESPACE: '' }))
+    expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: '', ENGRAM_NAMESPACE: '' }, directory))
       .toEqual({ namespaceMode: 'none', namespace: undefined });
   });
 

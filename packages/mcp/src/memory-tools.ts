@@ -29,9 +29,10 @@ server.tool(
     concept: z.string().optional().describe('For semantic memories: the concept name'),
     sessionId: z.string().optional().describe('Session ID to group related episodic memories'),
     namespace: z.string().optional().describe('Override namespace in filter mode; ignored in none mode and restricted in isolated mode'),
+    global: z.boolean().optional().describe('Store globally across projects; rejected in isolated mode'),
   },
   { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  async ({ content, type, source, tags, importance, concept, sessionId, namespace }) => {
+  async ({ content, type, source, tags, importance, concept, sessionId, namespace, global }) => {
     await ensureInitialized();
 
     const result = await brain.store({
@@ -42,7 +43,7 @@ server.tool(
       importance,
       concept,
       sessionId,
-      namespace,
+      namespace: global ? null : namespace,
     });
     syncEngine?.notifyWrite();
 
@@ -125,7 +126,7 @@ server.tool(
     since: z.string().datetime({ offset: true }).optional().describe('Inclusive event date lower bound (falls back to creation date)'),
     until: z.string().datetime({ offset: true }).optional().describe('Inclusive event date upper bound (falls back to creation date)'),
     tags: z.array(z.string()).optional().describe('Require all of these tags'),
-    crossNamespace: z.boolean().optional().default(false).describe('Search all namespaces in filter mode; rejected in isolated mode'),
+    crossNamespace: z.boolean().optional().default(false).describe('Search every project in filter mode; rejected in isolated mode'),
   },
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ query, topK, threshold, types, since, until, tags, crossNamespace }) => {
@@ -180,7 +181,7 @@ server.tool(
     since: z.string().datetime({ offset: true }).optional().describe('Inclusive event date lower bound (falls back to creation date)'),
     until: z.string().datetime({ offset: true }).optional().describe('Inclusive event date upper bound (falls back to creation date)'),
     tags: z.array(z.string()).optional().describe('Require all of these tags'),
-    crossNamespace: z.boolean().optional().default(false).describe('Recall all namespaces in filter mode; rejected in isolated mode'),
+    crossNamespace: z.boolean().optional().default(false).describe('Search every project in filter mode; rejected in isolated mode'),
     progressive: z.boolean().optional().default(false).describe('If true, return memories grouped by recall phase (vector, graph) with scores'),
   },
   { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },

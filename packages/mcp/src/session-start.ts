@@ -30,7 +30,7 @@ function currentBranch(cwd: string): string {
 async function recallContext(cwd: string, env: NamespaceEnv): Promise<string> {
   const { resolveNamespaceSettings }: typeof NamespaceModule = await import(namespaceModulePath);
   const { NeuralBrain, resolveDbPath } = await import('@engram-ai-memory/core');
-  const { namespaceMode, namespace } = resolveNamespaceSettings(env);
+  const { namespaceMode, namespace } = resolveNamespaceSettings(env, cwd);
   const dbPath = resolveDbPath(env['ENGRAM_DB_PATH']);
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const source = env['ENGRAM_SOURCE'] || 'mcp-client';

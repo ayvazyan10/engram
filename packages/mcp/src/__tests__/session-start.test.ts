@@ -26,7 +26,8 @@ vi.mock('@engram-ai-memory/core', async (importOriginal) => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.git.mockReturnValue('feature/memory\n');
+  mocks.git.mockImplementation((_command: string, args: readonly string[]) =>
+    args.includes('--show-toplevel') ? '/work/neuralCore\n' : 'feature/memory\n');
   mocks.initialize.mockResolvedValue(undefined);
   mocks.recall.mockResolvedValue({ context: 'Past project decisions.' });
 });
@@ -46,6 +47,16 @@ describe('buildRecallQuery', () => {
 
 describe('runSessionStart', () => {
   const env = { ENGRAM_DB_PATH: '/tmp/engram-hook-test/memory.db' };
+
+  it('derives the project namespace from payload.cwd', async () => {
+    await runSessionStart('{"cwd":"/work/neuralCore/nested"}', env, vi.fn());
+    expect(mocks.git).toHaveBeenCalledWith('git', [
+      '-C', '/work/neuralCore/nested', 'rev-parse', '--show-toplevel',
+    ], expect.objectContaining({ timeout: 500 }));
+    expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({
+      namespaceMode: 'filter', namespace: '/work/neuralCore',
+    }));
+  });
 
   it('emits the SessionStart context envelope capped at 6000 characters', async () => {
     const write = vi.fn();
