@@ -290,6 +290,9 @@ importers:
       testcontainers:
         specifier: ^12.1.0
         version: 12.1.0
+      tsx:
+        specifier: ^4.19.4
+        version: 4.21.0
       typescript:
         specifier: 5.7.3
         version: 5.7.3

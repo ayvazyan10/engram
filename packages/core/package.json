@@ -50,6 +50,7 @@
     "drizzle-kit": "^0.30.0",
     "eslint": "^9.39.0",
     "testcontainers": "^12.1.0",
+    "tsx": "^4.19.4",
     "typescript": "5.7.3",
     "vitest": "^3.1.1"
   }
