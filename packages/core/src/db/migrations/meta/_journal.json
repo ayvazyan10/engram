@@ -15,6 +15,13 @@
       "when": 1788514222119,
       "tag": "0001_same_wither",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792359315423,
+      "tag": "0002_memory_fts",
+      "breakpoints": true
     }
   ]
 }

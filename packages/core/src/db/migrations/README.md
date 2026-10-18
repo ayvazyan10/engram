@@ -58,3 +58,13 @@ Regenerating after a `schema.ts` change:
 ```sh
 pnpm --filter @engram-ai-memory/core exec drizzle-kit generate
 ```
+
+## FTS5 custom migration
+
+`0002_memory_fts.sql` was created with `drizzle-kit generate --custom
+--name=memory_fts`, which registers the journal entry and an unchanged schema
+snapshot. Drizzle cannot represent FTS5 virtual tables or triggers. Its SQL is
+mirrored by `runMemoryFtsMigration()` in `adapter.ts`, called after the base
+runtime migrations on both fresh and existing databases. Creation, triggers,
+and the initial `rebuild` backfill run in one transaction. The external-content
+index includes archived rows; retrieval excludes them through `memories.archived_at`.

@@ -180,6 +180,7 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
 
   // Auto-migrations for SQLite
   runSqliteMigrations(sqlite);
+  runMemoryFtsMigration(sqlite);
 
   const db = drizzle(sqlite, { schema });
 
@@ -537,6 +538,38 @@ function runSqliteMigrations(sqlite: SqliteHandle): void {
       )
     `);
   }
+}
+
+/** FTS5 is custom SQL (Drizzle cannot model virtual tables); mirror 0002_memory_fts.sql. */
+function runMemoryFtsMigration(sqlite: SqliteHandle): void {
+  if (tableExists(sqlite, 'memories_fts')) return;
+  sqlite.transaction(() => {
+    // Recheck under the write lock when another process opens the same old DB.
+    if (tableExists(sqlite, 'memories_fts')) return;
+    sqlite.exec(`
+      CREATE VIRTUAL TABLE memories_fts USING fts5(
+        content, concept, tags, content='memories', content_rowid='rowid'
+      );
+      CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, content, concept, tags)
+        VALUES (new.rowid, new.content, new.concept, new.tags);
+      END;
+      CREATE TRIGGER memories_fts_delete AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content, concept, tags)
+        VALUES ('delete', old.rowid, old.content, old.concept, old.tags);
+      END;
+      CREATE TRIGGER memories_fts_update AFTER UPDATE ON memories
+      WHEN old.rowid IS NOT new.rowid OR old.content IS NOT new.content
+        OR old.concept IS NOT new.concept OR old.tags IS NOT new.tags
+      BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, content, concept, tags)
+        VALUES ('delete', old.rowid, old.content, old.concept, old.tags);
+        INSERT INTO memories_fts(rowid, content, concept, tags)
+        VALUES (new.rowid, new.content, new.concept, new.tags);
+      END;
+      INSERT INTO memories_fts(memories_fts) VALUES ('rebuild');
+    `);
+  }).immediate();
 }
 
 export { schema };

@@ -49,6 +49,7 @@ import { assertValidImportance, clampImportance } from './retrieval/ImportanceSc
 import { ContextAssembler, FILTER_CANDIDATE_MULTIPLIER, hasRecallFilters, matchesMemoryFilters } from './retrieval/ContextAssembler.js';
 import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
+import { hybridSearch } from './retrieval/HybridSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
 import { indexEntryIsCurrent, storedDimension, storedVector, upsertIfCompatible } from './retrieval/indexEntry.js';
 import { appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
@@ -251,7 +252,7 @@ export interface Collection {
   totalMemories: number;
 }
 
-/** A search result: the stored memory plus its cosine similarity to the query. */
+/** A search result: the stored memory plus cosine similarity, ordered by hybrid relevance. */
 export type SearchHit = Memory & { score: number };
 
 export interface SearchOptions extends Pick<RecallOptions, 'since' | 'until' | 'tags'> {
@@ -1233,7 +1234,7 @@ export class NeuralBrain {
   }
 
   /**
-   * Semantic search across memories.
+   * Hybrid vector + full-text search across memories.
    */
   async search(query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
     this.assertInitialized();
@@ -1242,8 +1243,8 @@ export class NeuralBrain {
     const queryVec = await embed(query);
     const crossNamespace = this.resolveCrossNamespace(options.crossNamespace);
     const topK = options.topK ?? 10;
-    const results = this.vectorSearch.search(
-      queryVec,
+    const results = hybridSearch(
+      this.vectorSearch, query, queryVec,
       hasRecallFilters(options) ? topK * FILTER_CANDIDATE_MULTIPLIER : topK,
       options.threshold ?? 0.3,
       options.types,
@@ -1264,7 +1265,7 @@ export class NeuralBrain {
       : [];
     const byId = new Map(rows.map((r) => [r.id, r]));
 
-    // Iterate `results` (not `rows`) so similarity ordering is preserved.
+    // Iterate the fused results to preserve retrieval ranking.
     const hits: SearchHit[] = [];
     for (const result of results) {
       const m = byId.get(result.id);
@@ -1272,8 +1273,7 @@ export class NeuralBrain {
       if (options.sources && m.source && !options.sources.includes(m.source)) continue;
       // Namespace filtering (defense in depth — vector search already filters)
       if (this.activeNamespace && !crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
-      // The similarity was computed and then thrown away, so every consumer that
-      // wanted to show a relevance score rendered 0.
+      // RRF orders candidates; cosine preserves the public query-similarity score.
       hits.push({ ...m, score: result.similarity });
     }
 
