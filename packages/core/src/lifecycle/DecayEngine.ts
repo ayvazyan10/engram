@@ -13,6 +13,8 @@ import { getDeviceId } from '../sync/deviceId.js';
 import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from './DecayPolicy.js';
 import type { DecayPolicyConfig } from './DecayPolicy.js';
 
+const CONTEXT_ASSEMBLY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 // ─── Result Types ────────────────────────────────────────────────────────────
 
 export interface DecaySweepResult {
@@ -98,6 +100,13 @@ export class DecayEngine {
     const window = this.policy.decayConflictWindowMs ?? DEFAULT_DECAY_CONFLICT_WINDOW_MS;
     const decayStamp = new Date(now.getTime() - window);
     const db = getDb();
+
+    if (!dryRun) {
+      const expired = [lt(schema.contextAssemblies.createdAt,
+        new Date(now.getTime() - CONTEXT_ASSEMBLY_RETENTION_MS).toISOString())];
+      if (namespace) expired.push(eq(schema.contextAssemblies.namespace, namespace));
+      await db.delete(schema.contextAssemblies).where(and(...expired));
+    }
 
     const result: DecaySweepResult = {
       scannedCount: 0,
