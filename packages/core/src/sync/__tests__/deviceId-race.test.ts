@@ -125,7 +125,8 @@ function raceGetDeviceId(dbPath: string, count: number): Promise<WorkerOutcome[]
         }
       });
 
-      child.on('exit', (code) => {
+      // Wait for stdout to drain before inspecting the worker's result line.
+      child.on('close', (code) => {
         outcomes[index]!.exitCode = code;
         pendingExits--;
         if (pendingExits === 0 && !settled) {

@@ -17,7 +17,7 @@
  *      graph, while the row itself still exists.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -80,6 +80,7 @@ describe('Phase 0 — updated_at, timestamps, device_id on write paths', () => {
     await closeDb();
     _resetMemoizedDeviceIdForTests();
     cleanupTestDb(dbPath);
+    vi.unstubAllEnvs();
   });
 
   it("forget() strictly increases the memory's updated_at", async () => {
@@ -98,15 +99,18 @@ describe('Phase 0 — updated_at, timestamps, device_id on write paths', () => {
   });
 
   it('consolidate() strictly increases updated_at for every archived episode', async () => {
+    // Distinct daily episodes must survive store() to exercise consolidation.
+    vi.stubEnv('ENGRAM_DEDUP_THRESHOLD', '1');
     const before = new Map<string, string>();
-    for (let i = 0; i < 4; i++) {
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday']) {
       const { memory } = await brain.store({
-        content: 'The nightly backup job completed successfully',
+        content: `The nightly backup job completed successfully on ${day}`,
         type: 'episodic',
         source: 'unit-test',
       });
       before.set(memory.id, memory.updatedAt);
     }
+    expect(before.size).toBe(4);
 
     await tick();
     const created = await brain.consolidate(3, 0.8);

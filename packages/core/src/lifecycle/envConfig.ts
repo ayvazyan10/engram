@@ -163,6 +163,13 @@ export function readEnvNumber(
   return raw === undefined ? undefined : parseEnvNumber(name, raw, spec);
 }
 
+/** Similarity required before store() can merge into an existing memory. */
+export function readDedupThreshold(env: EnvSource): number {
+  return readEnvNumber(env, 'ENGRAM_DEDUP_THRESHOLD', {
+    min: Number.MIN_VALUE, max: 1, integer: false,
+  }) ?? 0.97;
+}
+
 /**
  * Lenient numeric read for a tuning knob: an invalid value warns on stderr and
  * yields `fallback`, which is also what an unset variable yields.
