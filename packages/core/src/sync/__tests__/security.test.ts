@@ -30,14 +30,16 @@ const PG_URL =
 const SKIP_REQUESTED = Boolean(process.env['SKIP_PG_TESTS']);
 
 let pgAvailable = false;
-try {
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 3000 });
-  await pool.query('SELECT 1');
-  await pool.end();
-  pgAvailable = true;
-} catch {
-  // unavailable — describeWithPg below skips the whole suite
+if (!SKIP_REQUESTED) {
+  try {
+    const { Pool } = await import('pg');
+    const pool = new Pool({ connectionString: PG_URL, connectionTimeoutMillis: 3000 });
+    await pool.query('SELECT 1');
+    await pool.end();
+    pgAvailable = true;
+  } catch {
+    // unavailable — describeWithPg below skips the whole suite
+  }
 }
 
 const shouldRun = !SKIP_REQUESTED && pgAvailable;

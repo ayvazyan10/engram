@@ -36,6 +36,8 @@ export interface MemoryIndexWrite {
 }
 
 export interface MemoryIndexSink {
+  /** Drop a stale claim before the synchronous durable write. */
+  beforeMemoryWrite?(): void;
   /**
    * Publish a row that has just been committed.
    *

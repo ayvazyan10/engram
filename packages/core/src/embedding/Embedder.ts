@@ -237,3 +237,15 @@ function float16ToFloat32(val: number): number {
 
   return sign ? -f32 : f32;
 }
+
+/** Text used by typed stores and by re-embedding persisted rows. */
+export function memoryEmbeddingText(memory: {
+  content: string; type?: string; concept?: string | null;
+  triggerPattern?: string | null; actionPattern?: string | null;
+}): string {
+  if (memory.type === 'procedural') {
+    return `${memory.triggerPattern ?? ''} → ${memory.actionPattern ?? ''}. ${memory.content}`;
+  }
+  return memory.type === 'semantic' && memory.concept
+    ? `${memory.concept}: ${memory.content}` : memory.content;
+}

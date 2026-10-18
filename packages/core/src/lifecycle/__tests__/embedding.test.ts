@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
+import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
@@ -52,7 +53,7 @@ function addNamespaceIfMissing(sqlite: InstanceType<typeof Database>): void {
 }
 
 function createTestDb(): string {
-  const dbPath = path.join(__dirname, `test-embed-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const dbPath = path.join(os.tmpdir(), `test-embed-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   const sqlite = new Database(dbPath);
   const statements = MIGRATION_SQL.split('--> statement-breakpoint');
   for (const stmt of statements) {
@@ -233,6 +234,42 @@ describe('Embedding — re-embed pipeline', () => {
     brain.shutdown();
     closeDb();
     cleanupTestDb(dbPath);
+  });
+
+  it('does not re-embed rows archived or edited after the snapshot', async () => {
+    await brain.store({ content: 'First snapshot row' });
+    const { memory: archived } = await brain.store({ content: 'Volcanoes erupt' });
+    const { memory: edited } = await brain.store({ content: 'Glaciers melt' });
+    const db = getDb();
+    db.update(schema.memories).set({ embeddingModel: 'old' }).run();
+    const replacement = Buffer.from(edited.embedding!);
+    let batches = 0;
+    let forgetting: Promise<void> | undefined;
+    const result = await brain.reEmbed(true, 1, () => {
+      if (++batches !== 1) return;
+      forgetting = brain.forget(archived.id);
+      db.update(schema.memories).set({ content: 'Concurrent edit', embedding: replacement })
+        .where(eq(schema.memories.id, edited.id)).run();
+    });
+    await forgetting;
+    expect(result.processed).toBe(1);
+    expect(brain.getVectorSearch().getIds().has(archived.id)).toBe(false);
+    const row = db.select().from(schema.memories).where(eq(schema.memories.id, edited.id)).get()!;
+    expect(Buffer.from(row.embedding!)).toEqual(replacement);
+    expect(row.embeddingModel).toBe('old');
+  });
+
+  it('preserves procedural and semantic embedding templates during re-embed', async () => {
+    const procedure = await brain.procedural.store({ triggerPattern: 'CI build fails',
+      actionPattern: 'Read GitHub Actions logs', content: 'Standard procedure four' });
+    const fact = await brain.semantic.store({ concept: 'Quantum mechanics', content: 'Particle spins correlate' });
+    const { memory: generic } = await brain.store({ type: 'semantic', concept: 'Astronomy', content: 'Stars emit light' });
+    const before = [procedure, fact, generic].map((row) => Buffer.from(row.embedding!));
+    await brain.reEmbed(false);
+    const rows = getDb().select().from(schema.memories).all();
+    for (const [i, original] of [procedure, fact, generic].entries()) {
+      expect(Buffer.from(rows.find((row) => row.id === original.id)!.embedding!)).toEqual(before[i]);
+    }
   });
 
   it('re-embeds stale memories with the current model', async () => {
@@ -436,7 +473,7 @@ describe('Embedding — re-embed persists the index', () => {
 describe('Embedding — auto-migration', () => {
   it('adds embedding_model column to existing DB without it', async () => {
     // Create DB WITHOUT embedding_model column
-    const dbPath = path.join(__dirname, `test-embed-migrate-${Date.now()}.db`);
+    const dbPath = path.join(os.tmpdir(), `test-embed-migrate-${Date.now()}.db`);
     const sqlite = new Database(dbPath);
     const statements = MIGRATION_SQL.split('--> statement-breakpoint');
     for (const stmt of statements) {

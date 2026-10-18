@@ -16,11 +16,14 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
+import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { eq } from 'drizzle-orm';
 
+import { selectMemoriesBatch, countPendingPush } from '../../sync/syncLocalReads.ts';
+import { getDeviceId } from '../../sync/deviceId.ts';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
 import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
@@ -65,7 +68,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function createTestDb(): string {
   const dbPath = path.join(
-    __dirname,
+    os.tmpdir(),
     `test-decay-window-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
   );
   const sqlite = new Database(dbPath);
@@ -88,6 +91,17 @@ describe('decay sweep — conflict window', () => {
     brain.shutdown();
     await closeDb();
     cleanupTestDb(dbPath);
+  });
+
+  it('selects backdated decay writes below a recent push cursor', async () => {
+    const { memory } = await brain.store({ content: 'Old tide table', importance: 0.7 });
+    const old = new Date(Date.now() - THIRTY_DAYS_MS).toISOString();
+    getDb().update(schema.memories).set({ updatedAt: old }).where(eq(schema.memories.id, memory.id)).run();
+    const cursor = new Date().toISOString();
+    await brain.runDecaySweep(false);
+    const rows = selectMemoriesBatch(getDb(), { ts: cursor, id: null }, 500, getDeviceId());
+    expect(rows.map((row) => row.id)).toContain(memory.id);
+    expect(countPendingPush(getDb(), cursor, 500, getDeviceId())).toBeGreaterThan(0);
   });
 
   it('defaults the conflict window when a policy omits it', () => {

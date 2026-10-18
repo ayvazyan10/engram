@@ -19,7 +19,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
-  embed, embedBatch, packFP16, unpackFP16,
+  embed, embedBatch, memoryEmbeddingText, packFP16, unpackFP16,
   getEmbeddingModelId, getModelDimension, getEmbeddingDimension,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
@@ -51,7 +51,7 @@ import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } f
 import { VectorSearch } from './retrieval/VectorSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
 import { indexEntryIsCurrent, storedDimension, storedVector, upsertIfCompatible } from './retrieval/indexEntry.js';
-import { baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
+import { appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
 import type { ChangeCounters, StoreBaseline } from './retrieval/indexBaseline.js';
 import { ReflectionEngine } from './reflection/ReflectionEngine.js';
 import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflection/ReflectionEngine.js';
@@ -356,6 +356,7 @@ export class NeuralBrain {
     // searched or walked in the graph. Everything they commit now lands in the
     // same in-memory state store() maintains.
     const indexSink: MemoryIndexSink = {
+      beforeMemoryWrite: () => this.checkIndexClaimBeforeWrite(),
       onMemoryWritten: (write) => this.applyMemoryWrite(write),
     };
     this.episodic = new EpisodicMemory(this.activeNamespace, this.namespaceMode, indexSink);
@@ -446,14 +447,23 @@ export class NeuralBrain {
   }
 
   /**
-   * Record that the index now matches the database, so syncIndexFromStore
-   * early-outs until something actually changes. Called by every path that
-   * writes and updates the index in the same breath — without it the next read
-   * pays for a reconcile that would find nothing to do.
+   * Drop the claim if it was already stale before this write. A local write
+   * can advance a valid claim, but cannot vouch for unseen earlier commits.
    */
-  private async refreshIndexBaseline(): Promise<void> {
+  private checkIndexClaimBeforeWrite(): void {
+    if (!this.claimHolds(readChangeCounters(getDb()))) this.indexClaim = null;
+  }
+
+  private async refreshIndexBaseline(rebuilt = false): Promise<void> {
     const db = getDb();
     const before = readChangeCounters(db);
+    const claim = this.indexClaim;
+    if (!rebuilt && (!claim?.counters || claim.connection !== getDatabaseConnection()
+      || claim.counters.dataVersion !== before.dataVersion
+      || appliedMemoryIdsSince(db, claim.counters.localChanges).length > 0)) {
+      this.indexClaim = null;
+      return;
+    }
     const baseline = await readStoreBaseline(db, this.liveConditions());
     this.claimIndexState(before, baseline);
   }
@@ -502,6 +512,7 @@ export class NeuralBrain {
     // the cost of every traversal grew with each cycle, and nodes archived
     // while the brain was down stayed behind forever.
     this.graph.clear();
+    this.vectorSearch.clear();
 
     // Try loading persisted vector index from disk
     let cachedIds: Set<string> | null = null;
@@ -616,7 +627,7 @@ export class NeuralBrain {
     // database held at this moment, so only commits after it need catching up.
     // The claim covers both connections — the pragma sees the others, and
     // total_changes() sees this one, which is the one a sync pull writes through.
-    await this.refreshIndexBaseline();
+    await this.refreshIndexBaseline(true);
 
     this.initialized = true;
 
@@ -703,18 +714,19 @@ export class NeuralBrain {
     // report one — "unknown", so the fingerprint decides alone.
     const claimed = this.indexClaim;
     const externalCommit = counters.dataVersion !== null && counters.dataVersion !== claimed?.counters?.dataVersion;
-    if (!externalCommit && baselineMatches(claimed?.baseline ?? null, baseline)) {
+    const appliedIds = appliedMemoryIdsSince(getDb(), claimed?.counters?.localChanges ?? null);
+    if (appliedIds.length === 0 && !externalCommit && baselineMatches(claimed?.baseline ?? null, baseline)) {
       // Only other tables moved, or rows the index already agrees with. Re-claim
       // so the next read is back on the O(1) path.
       this.claimIndexState(counters, baseline);
       return 0;
     }
 
-    return this.reconcileIndex(counters, baseline);
+    return this.reconcileIndex(counters, baseline, appliedIds);
   }
 
   /** The reconcile itself — see syncIndexFromStore for why and when. */
-  private async reconcileIndex(counters: ChangeCounters, baseline: StoreBaseline): Promise<number> {
+  private async reconcileIndex(counters: ChangeCounters, baseline: StoreBaseline, appliedIds: string[]): Promise<number> {
     const db = getDb();
 
     // Claim before reading. Both markers were read before the queries below, so
@@ -779,7 +791,7 @@ export class NeuralBrain {
       }
     }
 
-    const refreshed = await this.refreshChangedVectors(previous, baseline, indexed);
+    const refreshed = await this.refreshChangedVectors(previous, baseline, indexed, appliedIds);
 
     // Edges touching the newly arrived nodes, so graph expansion during recall
     // sees them rather than treating them as isolated. Only edges with a new
@@ -839,22 +851,27 @@ export class NeuralBrain {
    * and leaves the superseded vector in place, which then outranks fresher
    * memories for the old content.
    *
-   * Bounded by what actually moved: only rows newer than the fingerprint the
-   * last pass claimed are read, over an indexed column. A first pass (no claimed
-   * fingerprint) skips this — initialize() has just checked every row.
+   * Refresh newer rows plus the exact ids applied by sync, whose remote clocks
+   * can be older than the local maximum. Without a valid prior claim, compare
+   * all live vectors because no timestamp boundary is known to be safe.
    */
   private async refreshChangedVectors(
     previous: StoreBaseline | null,
     baseline: StoreBaseline,
     indexed: Map<string, VectorEntry>,
+    appliedIds: string[],
   ): Promise<number> {
     const since = previous?.maxUpdatedAt ?? null;
-    if (since === null || baseline.maxUpdatedAt === null || baseline.maxUpdatedAt <= since) return 0;
+    const advanced = since === null || (baseline.maxUpdatedAt !== null && baseline.maxUpdatedAt > since);
+    if (!advanced && appliedIds.length === 0) return 0;
 
     const rows = await getDb()
       .select()
       .from(schema.memories)
-      .where(and(...this.liveConditions(), gt(schema.memories.updatedAt, since)));
+      .where(and(...this.liveConditions(), since === null ? undefined : or(
+        advanced ? gt(schema.memories.updatedAt, since) : undefined,
+        appliedIds.length > 0 ? inArray(schema.memories.id, appliedIds) : undefined,
+      )));
 
     let refreshed = 0;
     for (const memory of rows) {
@@ -908,14 +925,15 @@ export class NeuralBrain {
     // per write.
     const deviceId = getDeviceId();
 
-    const embedding = await embed(input.content);
+    const concept = input.concept ?? extractConcept(input.content);
+    const embedding = await embed(memoryEmbeddingText({ ...input, type, concept }));
     const embeddingBuf = packFP16(embedding);
 
     const record: NewMemory = {
       id: uuidv4(),
       type,
       content: input.content,
-      concept: input.concept ?? null,
+      concept,
       triggerPattern: input.triggerPattern ?? null,
       actionPattern: input.actionPattern ?? null,
       embedding: embeddingBuf,
@@ -932,16 +950,6 @@ export class NeuralBrain {
       updatedAt: now,
       deviceId,
     };
-
-    // ── Auto-concept: derive the topic label BEFORE the insert, so the row is
-    // written once instead of insert-then-update.
-    if (!record.concept) {
-      try {
-        record.concept = extractConcept(input.content);
-      } catch {
-        // Concept extraction is best-effort
-      }
-    }
 
     // ── Auto-link: pick the most similar neighbours to connect to.
     // This builds the neural network organically — every new memory connects to
@@ -979,6 +987,7 @@ export class NeuralBrain {
     //
     // The callback MUST stay synchronous — better-sqlite3 transactions do not
     // await, so every async step (embedding) happens above.
+    this.checkIndexClaimBeforeWrite();
     db.transaction((tx) => {
       tx.insert(schema.memories).values(record).run();
       if (edges.length > 0) {
@@ -1222,20 +1231,21 @@ export class NeuralBrain {
    * In-memory state and events are the caller's responsibility, so they only
    * run after this returns.
    */
-  private archiveAtomic(ids: string[]): void {
-    if (ids.length === 0) return;
+  private archiveAtomic(ids: string[], requireLive = false): boolean {
+    if (ids.length === 0) return true;
     const db = getDb();
     const archivedAt = new Date().toISOString();
     const deviceId = getDeviceId();
 
-    db.transaction((tx) => {
+    this.checkIndexClaimBeforeWrite();
+    return db.transaction((tx) => {
+      if (requireLive) {
+        const live = tx.select({ id: schema.memories.id }).from(schema.memories)
+          .where(and(inArray(schema.memories.id, ids), isNull(schema.memories.archivedAt))).all();
+        if (live.length !== ids.length) return false;
+      }
       tx.update(schema.memories)
-        // updatedAt MUST move with archivedAt. Every forget() and every
-        // consolidate() goes through this method, so leaving updated_at
-        // untouched would make an archival invisible to a
-        // `WHERE updated_at > cursor` sync push — the memory would vanish
-        // locally and silently resurrect on the next pull from another
-        // device.
+        // Archival must advance the sync timestamp as well as the tombstone.
         .set({ archivedAt, updatedAt: archivedAt, deviceId })
         .where(inArray(schema.memories.id, ids))
         .run();
@@ -1257,6 +1267,7 @@ export class NeuralBrain {
           )
         )
         .run();
+      return true;
     });
   }
 
@@ -1470,7 +1481,10 @@ export class NeuralBrain {
       // nothing lost. Full atomicity would mean bypassing store() and losing
       // its auto-link and contradiction handling.
       const clusterIds = cluster.map((m) => m.id);
-      this.archiveAtomic(clusterIds);
+      if (!this.archiveAtomic(clusterIds, true)) {
+        await this.forget(semantic.id);
+        continue;
+      }
 
       for (const ep of cluster) {
         this.vectorSearch.remove(ep.id);
@@ -1720,9 +1734,13 @@ export class NeuralBrain {
   }
 
   /** Update the decay policy at runtime. */
-  updateDecayPolicy(partial: Partial<DecayPolicyConfig>): void {
+  updateDecayPolicy(partial: Omit<Partial<DecayPolicyConfig>, 'consolidation'> & {
+    consolidation?: Partial<DecayPolicyConfig['consolidation']>;
+  }): void {
     const current = this.decayEngine.getPolicy();
-    this.decayEngine.updatePolicy(mergePolicy({ ...current, ...partial }));
+    this.decayEngine.updatePolicy(mergePolicy({ ...current, ...partial,
+      consolidation: { ...current.consolidation, ...partial.consolidation },
+    }));
   }
 
   // ─── Tagging & Collections ───────────────────────────────────────────────
@@ -1971,7 +1989,7 @@ export class NeuralBrain {
     // Process in batches
     for (let i = 0; i < toReEmbed.length; i += batchSize) {
       const batch = toReEmbed.slice(i, i + batchSize);
-      const contents = batch.map((m) => m.content);
+      const contents = batch.map(memoryEmbeddingText);
 
       try {
         const embeddings = await embedBatch(contents);
@@ -1982,7 +2000,8 @@ export class NeuralBrain {
           const embeddingBuf = packFP16(newEmbedding);
 
           try {
-            await db
+            this.checkIndexClaimBeforeWrite();
+            const updated = db
               .update(schema.memories)
               .set({
                 embedding: embeddingBuf,
@@ -1991,7 +2010,10 @@ export class NeuralBrain {
                 updatedAt: new Date().toISOString(),
                 deviceId,
               })
-              .where(eq(schema.memories.id, memory.id));
+              .where(and(eq(schema.memories.id, memory.id),
+                eq(schema.memories.content, memory.content), isNull(schema.memories.archivedAt)))
+              .run();
+            if (updated.changes !== 1) continue;
 
             // Update in-memory vector index
             this.vectorSearch.upsert({
@@ -2404,7 +2426,7 @@ export class NeuralBrain {
 
     // The index now matches what the database holds, so a reconcile on the next
     // read would find nothing to do.
-    await this.refreshIndexBaseline();
+    await this.refreshIndexBaseline(true);
 
     // Auto-save if path configured
     const indexPath = this.resolveIndexPath();

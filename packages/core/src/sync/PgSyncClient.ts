@@ -410,8 +410,20 @@ export class PgSyncClient {
       valueRows
     );
 
-    const result: QueryResult = await this.pool.query(text, values);
-    return result.rowCount ?? 0;
+    try {
+      const result: QueryResult = await this.pool.query(text, values);
+      return result.rowCount ?? 0;
+    } catch (error) {
+      if (typeof error !== 'object' || error === null
+        || !('code' in error) || error.code !== '23505'
+        || !('constraint' in error) || error.constraint !== 'idx_pg_connections_unique_pair') throw error;
+      // The failed statement is atomic. Retry its rows separately so only the
+      // duplicate pair is skipped and id-based updates retain LWW semantics.
+      if (rows.length === 1) return 0;
+      let applied = 0;
+      for (const row of rows) applied += await this.pushConnections([row]);
+      return applied;
+    }
   }
 
   /** Push local `sessions` rows with an LWW upsert. Returns the count actually applied. */

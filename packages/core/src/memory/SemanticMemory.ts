@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory, NewMemoryConnection, RelationshipType } from '../db/schema.js';
-import { embed, getEmbeddingModelId, packFP16 } from '../embedding/Embedder.js';
+import { memoryEmbeddingText, embed, getEmbeddingModelId, packFP16 } from '../embedding/Embedder.js';
 import { assertValidImportance } from '../retrieval/ImportanceScorer.js';
 import { getDeviceId } from '../sync/deviceId.js';
 import { upsertConnections } from '../graph/connectionStore.js';
@@ -64,7 +64,7 @@ export class SemanticMemory {
     const now = new Date().toISOString();
     const deviceId = getDeviceId();
 
-    const fullText = `${input.concept}: ${input.content}`;
+    const fullText = memoryEmbeddingText({ ...input, type: 'semantic' });
     const embedding = await embed(fullText);
     const embeddingBuf = packFP16(embedding);
 
@@ -114,6 +114,7 @@ export class SemanticMemory {
     // throw AFTER the memory row was already committed: store() rejected while
     // leaving an orphaned, edge-less memory behind, and a retry then created a
     // duplicate. Embedding happens above because the callback must stay sync.
+    this.indexSink?.beforeMemoryWrite?.();
     db.transaction((tx) => {
       tx.insert(schema.memories).values(record).run();
       if (connections.length > 0) {
@@ -202,9 +203,7 @@ export class SemanticMemory {
         throw new Error(`Memory ${id} not found`);
       }
 
-      const embeddable = existing.concept
-        ? `${existing.concept}: ${updates.content}`
-        : updates.content;
+      const embeddable = memoryEmbeddingText({ type: 'semantic', concept: existing.concept, content: updates.content });
 
       const embedding = await embed(embeddable);
       updateData.embedding = packFP16(embedding);
@@ -225,7 +224,8 @@ export class SemanticMemory {
       if (!existing || existing.namespace !== this.namespace) throw new Error(`Memory ${id} not found`);
     }
 
-    await db.update(schema.memories).set(updateData).where(eq(schema.memories.id, id));
+    this.indexSink?.beforeMemoryWrite?.();
+    db.update(schema.memories).set(updateData).where(eq(schema.memories.id, id)).run();
 
     if (reindex) {
       await this.indexSink?.onMemoryWritten({

@@ -16,11 +16,14 @@
  * nothing but latency to the reproduction.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { PgSyncClient } from '../PgSyncClient.ts';
+import type { PgSyncClientOptions } from '../PgSyncClient.ts';
+import type { MemoryConnection } from '../../db/schema.ts';
 import { eq } from 'drizzle-orm';
 
 import { getDb, closeDatabase } from '../../db/index.js';
@@ -145,6 +148,17 @@ describe('push selection — device scoping (D1)', () => {
 });
 
 describe('push pagination — page-boundary timestamps (D2)', () => {
+  it('drains backdated rows across pages without rewinding the saved cursor', async () => {
+    const saved = '2026-01-01T12:00:00.000Z';
+    for (let i = 0; i < BATCH_SIZE + 1; i++) {
+      insertMemory(`backdated-${String(i).padStart(4, '0')}`, OUR_DEVICE, '2026-01-01T11:30:00.000Z');
+    }
+    const { pushedIds, maxUpdatedAt } = await drainPush(saved);
+    expect(pushedIds).toHaveLength(BATCH_SIZE + 1);
+    expect(new Set(pushedIds).size).toBe(BATCH_SIZE + 1);
+    expect(maxUpdatedAt).toBe(saved);
+  });
+
   it('pushes every row of a same-timestamp group larger than one page', async () => {
     // `DecayEngine.sweep` computes `new Date()` once and stamps every
     // decayed row with it, so a 1200-row sweep produces exactly one
@@ -174,5 +188,28 @@ describe('push pagination — page-boundary timestamps (D2)', () => {
 
     expect(new Set(pushedIds).size).toBe(1300);
     expect(maxUpdatedAt).toBe('2026-01-01T12:00:00.000Z');
+  });
+});
+
+describe('connection push conflicts', () => {
+  it('skips a duplicate pair and still pushes the rest of the batch', async () => {
+    const duplicate = { code: '23505', constraint: 'idx_pg_connections_unique_pair' };
+    const query = vi.fn().mockRejectedValueOnce(duplicate)
+      .mockRejectedValueOnce(duplicate).mockResolvedValue({ rowCount: 1, rows: [] });
+    const client = new PgSyncClient({ pool: { query }, db: {} } as unknown as PgSyncClientOptions);
+    const row: MemoryConnection = { id: 'duplicate', sourceId: 'a', targetId: 'b',
+      relationship: 'relates_to', strength: 1, bidirectional: false, metadata: '{}',
+      createdAt: '2026-01-01', updatedAt: '2026-01-02', deletedAt: null, deviceId: OUR_DEVICE };
+    expect(await client.pushConnections([row, { ...row, id: 'fresh', targetId: 'c' }])).toBe(1);
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls[2]![0]).toContain('ON CONFLICT (id) DO UPDATE');
+    expect(await client.pushConnections([{ ...row, id: 'next-cycle' }])).toBe(1);
+  });
+
+  it('propagates connection push errors other than duplicate pairs', async () => {
+    const error = new Error('connection failed');
+    const query = vi.fn().mockRejectedValue(error);
+    const client = new PgSyncClient({ pool: { query }, db: {} } as unknown as PgSyncClientOptions);
+    await expect(client.pushConnections([{} as MemoryConnection])).rejects.toBe(error);
   });
 });

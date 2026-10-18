@@ -5,6 +5,7 @@
  * pending-push backlog.
  */
 
+import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from '../lifecycle/DecayPolicy.js';
 import { and, eq, gt, isNull, or } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
@@ -70,6 +71,11 @@ export function selectMemoriesBatch(
   batchSize: number,
   deviceId: string
 ): Memory[] {
+  // Overlap only the first page; subsequent pages use their exact (time, id)
+  // boundary so a backdated group larger than one page still drains once.
+  const start = cursor?.id === null
+    ? { ...cursor, ts: new Date(Date.parse(cursor.ts) - DEFAULT_DECAY_CONFLICT_WINDOW_MS - 1).toISOString() }
+    : cursor;
   const columns: PushColumns = {
     id: schema.memories.id,
     updatedAt: schema.memories.updatedAt,
@@ -78,7 +84,7 @@ export function selectMemoriesBatch(
   return db
     .select()
     .from(schema.memories)
-    .where(pushPageFilter(columns, cursor, deviceId))
+    .where(pushPageFilter(columns, start, deviceId))
     .orderBy(schema.memories.updatedAt, schema.memories.id)
     .limit(batchSize)
     .all();

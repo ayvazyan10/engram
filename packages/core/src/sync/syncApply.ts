@@ -6,6 +6,7 @@
  * existed), so `SyncEngine` can aggregate `SyncResult.pulled` / `.conflicts`.
  */
 
+import { recordAppliedMemory } from '../retrieval/indexBaseline.js';
 import { eq } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type {
@@ -72,6 +73,7 @@ export function applyPulledMemory(db: SyncDb, remote: PgMemory): ApplyOutcome {
 
   if (!local) {
     db.insert(schema.memories).values(pgMemoryToNewMemory(remote)).onConflictDoNothing().run();
+    recordAppliedMemory(db, remote.id);
     return { applied: true, conflict: false };
   }
 
@@ -84,6 +86,7 @@ export function applyPulledMemory(db: SyncDb, remote: PgMemory): ApplyOutcome {
   }
 
   db.update(schema.memories).set(result.merged).where(eq(schema.memories.id, remote.id)).run();
+  recordAppliedMemory(db, remote.id);
   return { applied: true, conflict: true };
 }
 

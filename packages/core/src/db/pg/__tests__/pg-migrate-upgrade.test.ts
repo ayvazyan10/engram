@@ -58,14 +58,16 @@ const BASE_PG_URL =
 const SKIP_REQUESTED = Boolean(process.env['SKIP_PG_TESTS']);
 
 let pgAvailable = false;
-try {
-  const { Pool } = await import('pg');
-  const admin = new Pool({ connectionString: BASE_PG_URL, connectionTimeoutMillis: 3000 });
-  await admin.query('SELECT 1');
-  await admin.end();
-  pgAvailable = true;
-} catch {
-  // unavailable — the suite skips below
+if (!SKIP_REQUESTED) {
+  try {
+    const { Pool } = await import('pg');
+    const admin = new Pool({ connectionString: BASE_PG_URL, connectionTimeoutMillis: 3000 });
+    await admin.query('SELECT 1');
+    await admin.end();
+    pgAvailable = true;
+  } catch {
+    // unavailable — the suite skips below
+  }
 }
 
 const shouldRun = !SKIP_REQUESTED && pgAvailable;

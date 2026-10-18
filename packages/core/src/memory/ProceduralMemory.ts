@@ -2,7 +2,7 @@ import { and, desc, eq, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
-import { embed, getEmbeddingModelId, packFP16, unpackFP16 } from '../embedding/Embedder.js';
+import { memoryEmbeddingText, embed, getEmbeddingModelId, packFP16, unpackFP16 } from '../embedding/Embedder.js';
 import { getDeviceId } from '../sync/deviceId.js';
 import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
@@ -86,7 +86,7 @@ export class ProceduralMemory {
     const now = new Date().toISOString();
 
     // Embed both trigger and action for better retrieval
-    const embeddableText = `${input.triggerPattern} → ${input.actionPattern}. ${input.content}`;
+    const embeddableText = memoryEmbeddingText({ ...input, type: 'procedural' });
     const embedding = await embed(embeddableText);
     const embeddingBuf = packFP16(embedding);
 
@@ -109,7 +109,8 @@ export class ProceduralMemory {
       deviceId: getDeviceId(),
     };
 
-    await db.insert(schema.memories).values(record);
+    this.indexSink?.beforeMemoryWrite?.();
+    db.insert(schema.memories).values(record).run();
 
     // Index and graph only after the durable write succeeded, so in-memory
     // state can never run ahead of the database.

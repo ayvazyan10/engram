@@ -31,6 +31,24 @@ import { getDataVersion, getDb, schema } from '../db/index.js';
 
 type Db = ReturnType<typeof getDb>;
 
+// Keep each applied id's latest local change counter. Each brain can reconcile
+// independently, including callers that invoke applyPulledMemory directly.
+const appliedMemories = new WeakMap<Db, Map<string, number>>();
+
+export function recordAppliedMemory(db: Db, id: string): void {
+  const changes = readChangeCounters(db).localChanges;
+  if (changes === null) throw new Error('Cannot track an applied memory without SQLite change counters');
+  const ids = appliedMemories.get(db) ?? new Map<string, number>();
+  ids.set(id, changes);
+  appliedMemories.set(db, ids);
+}
+
+export function appliedMemoryIdsSince(db: Db, changes: number | null): string[] {
+  return [...(appliedMemories.get(db) ?? [])]
+    .filter(([, counter]) => changes === null || counter > changes)
+    .map(([id]) => id);
+}
+
 /** The two O(1) change counters, each blind to what the other sees. */
 export interface ChangeCounters {
   /**

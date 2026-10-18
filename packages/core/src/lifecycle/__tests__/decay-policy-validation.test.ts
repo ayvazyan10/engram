@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { NeuralBrain } from '../../NeuralBrain.ts';
 import { mergePolicy, DEFAULT_DECAY_POLICY } from '../DecayPolicy.js';
 
 describe('mergePolicy — protection rule validation', () => {
@@ -117,4 +118,12 @@ describe('mergePolicy — numeric validation', () => {
     expect(merged.consolidation.minClusterSize).toBe(2);
     expect(merged.consolidation.enabled).toBe(true); // untouched default
   });
+});
+
+it('nested policy updates preserve configured consolidation siblings', () => {
+  const consolidation = { enabled: true, minClusterSize: 8, similarityThreshold: 0.9, minEpisodicAgeMs: 1 };
+  const brain = new NeuralBrain({ dbPath: ':memory:', decayPolicy: { consolidation } });
+  brain.updateDecayPolicy({ consolidation: { enabled: false } });
+  expect(brain.getDecayPolicy().consolidation).toEqual({ ...consolidation, enabled: false });
+  expect(consolidation.enabled).toBe(true);
 });

@@ -7,6 +7,7 @@
  */
 
 import path from 'path';
+import os from 'node:os';
 import type { Database as SqliteHandle } from 'better-sqlite3';
 import * as schema from './schema.js';
 
@@ -16,7 +17,7 @@ export type DatabaseDialect = 'sqlite';
 export interface AdapterConfig {
   /** Database dialect. Only 'sqlite' is supported. Default: 'sqlite' */
   dialect?: DatabaseDialect;
-  /** SQLite: path to .db file. Default: ./engram.db */
+  /** SQLite: path to .db file. Default: ~/.engram/engram.db */
   sqlitePath?: string;
 }
 
@@ -84,9 +85,10 @@ function resolveConfig(config?: AdapterConfig): { sqlitePath: string } {
   const sqlitePath =
     configuredPath(config?.sqlitePath) ??
     configuredPath(process.env['ENGRAM_DB_PATH']) ??
-    path.join(process.cwd(), 'engram.db');
+    path.join(os.homedir(), '.engram', 'engram.db');
 
-  return { sqlitePath };
+  return { sqlitePath: sqlitePath.startsWith('~/')
+    ? path.join(os.homedir(), sqlitePath.slice(2)) : sqlitePath };
 }
 
 /**

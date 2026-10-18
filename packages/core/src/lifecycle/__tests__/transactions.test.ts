@@ -14,6 +14,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
+import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
@@ -40,7 +41,7 @@ const MIGRATION_SQL = fs.readFileSync(
 );
 
 function createTestDb(): string {
-  const dbPath = path.join(__dirname, `test-tx-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const dbPath = path.join(os.tmpdir(), `test-tx-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   const sqlite = new Database(dbPath);
   for (const stmt of MIGRATION_SQL.split('--> statement-breakpoint')) {
     const sql = stmt.trim();
@@ -181,6 +182,21 @@ describe('forget() and consolidate() atomicity', () => {
   afterEach(async () => {
     await closeDb();
     cleanupTestDb(dbPath);
+  });
+
+  it('overlapping consolidation creates only one live summary', async () => {
+    const brain = new NeuralBrain({ dbPath });
+    try {
+      await brain.initialize();
+      for (let i = 0; i < 3; i++) await brain.store({ content: 'I drank green tea at the office', type: 'episodic' });
+      const results = await Promise.all([brain.consolidate(3, 0.6), brain.consolidate(3, 0.6)]);
+      expect(results.flat()).toHaveLength(1);
+      const live = getDb().select().from(schema.memories)
+        .where(and(eq(schema.memories.type, 'semantic'), isNull(schema.memories.archivedAt))).all();
+      expect(live).toHaveLength(1);
+    } finally {
+      brain.shutdown();
+    }
   });
 
   it('forget() archives the row and tombstones its edges in one step', async () => {

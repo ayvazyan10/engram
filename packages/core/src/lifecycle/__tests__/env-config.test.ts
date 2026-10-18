@@ -6,6 +6,10 @@
  * against it, and a string cast into an enum it is not a member of.
  */
 
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { getDatabase, closeDatabase } from '../../db/adapter.ts';
 import { describe, it, expect, vi } from 'vitest';
 import {
   EnvConfigError,
@@ -151,5 +155,39 @@ describe('readEnvEnum', () => {
       /M must be one of: auto, manual, off — got "Auto"/
     );
     expect(() => readEnvEnum({ M: 'offf' }, 'M', modes)).toThrow(EnvConfigError);
+  });
+});
+
+describe('core database path resolution', () => {
+  it('defaults to the home brain and expands only leading tilde slash', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-path-'));
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(path.join(home, '.engram'), { recursive: true });
+    const homeSpy = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    const saved = process.env['ENGRAM_DB_PATH'];
+    delete process.env['ENGRAM_DB_PATH'];
+    try {
+      expect(getDatabase().path).toBe(path.join(home, '.engram', 'engram.db'));
+      closeDatabase();
+      expect(getDatabase('~/custom.db').path).toBe(path.join(home, 'custom.db'));
+      closeDatabase();
+      process.env['ENGRAM_DB_PATH'] = '~/env.db';
+      expect(getDatabase().path).toBe(path.join(home, 'env.db'));
+      closeDatabase();
+      const absolute = path.join(dir, 'absolute.db');
+      expect(getDatabase(absolute).path).toBe(absolute);
+      closeDatabase();
+      cwdSpy.mockRestore();
+      const relativeScratch = path.relative(process.cwd(), absolute);
+      expect(getDatabase(relativeScratch).path).toBe(relativeScratch);
+    } finally {
+      closeDatabase();
+      homeSpy.mockRestore();
+      cwdSpy.mockRestore();
+      if (saved === undefined) delete process.env['ENGRAM_DB_PATH'];
+      else process.env['ENGRAM_DB_PATH'] = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

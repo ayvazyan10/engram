@@ -16,11 +16,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { eq } from 'drizzle-orm';
 
+import { applyPulledMemory } from '../../sync/syncApply.ts';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
 import { embed, packFP16 } from '../../embedding/Embedder.js';
@@ -55,7 +57,7 @@ function addNamespaceIfMissing(sqlite: InstanceType<typeof Database>): void {
 }
 
 function createTestDb(): string {
-  const dbPath = path.join(__dirname, `test-samecon-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const dbPath = path.join(os.tmpdir(), `test-samecon-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   const sqlite = new Database(dbPath);
   for (const stmt of MIGRATION_SQL.split('--> statement-breakpoint')) {
     const sql = stmt.trim();
@@ -103,6 +105,23 @@ describe('NeuralBrain — reconciling writes made on the brain\'s own connection
     brain.shutdown();
     closeDb();
     cleanupTestDb(dbPath);
+  });
+
+  it('refreshes a pulled vector older than the newest local row', async () => {
+    const { memory } = await brain.store({ content: 'Cafeteria pizza on Fridays' });
+    const db = getDb();
+    db.update(schema.memories).set({ updatedAt: '2020-01-01T00:00:00.000Z' })
+      .where(eq(schema.memories.id, memory.id)).run();
+    await brain.syncIndexFromStore();
+    const replacement = await embed('Quantum entanglement links particle spins');
+    const local = db.select().from(schema.memories).where(eq(schema.memories.id, memory.id)).get()!;
+    expect(applyPulledMemory(db, { ...local, content: 'Quantum entanglement links particle spins',
+      embedding: packFP16(replacement), updatedAt: '2021-01-01T00:00:00.000Z',
+      deviceId: 'remote', serverUpdatedAt: new Date() }).applied).toBe(true);
+    expect(await brain.syncIndexFromStore()).toBe(1);
+    const entry = brain.getVectorSearch().entriesById().get(memory.id)!;
+    expect(entry.vector[0]).toBeCloseTo(replacement[0]!, 3);
+    expect(await brain.syncIndexFromStore()).toBe(0);
   });
 
   it('syncIndexFromStore() indexes a row committed on the shared connection', async () => {

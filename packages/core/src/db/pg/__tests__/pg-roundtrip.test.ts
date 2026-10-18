@@ -65,7 +65,7 @@ async function pgReachable(url: string): Promise<boolean> {
 }
 
 const CONFIGURED_PG_URL = process.env['TEST_PG_URL'];
-const CONFIGURED_PG_REACHABLE = CONFIGURED_PG_URL ? await pgReachable(CONFIGURED_PG_URL) : false;
+const CONFIGURED_PG_REACHABLE = !SKIP_REQUESTED && CONFIGURED_PG_URL ? await pgReachable(CONFIGURED_PG_URL) : false;
 const TEST_PG_URL = CONFIGURED_PG_REACHABLE ? CONFIGURED_PG_URL : undefined;
 
 // A configured-but-unreachable URL does NOT fall through to Docker. Quietly

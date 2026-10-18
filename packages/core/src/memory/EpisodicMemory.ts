@@ -82,7 +82,8 @@ export class EpisodicMemory {
       deviceId: getDeviceId(),
     };
 
-    await db.insert(schema.memories).values(record);
+    this.indexSink?.beforeMemoryWrite?.();
+    db.insert(schema.memories).values(record).run();
 
     // Index and graph only after the durable write succeeded, so in-memory
     // state can never run ahead of the database.

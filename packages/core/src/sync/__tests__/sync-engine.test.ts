@@ -81,25 +81,27 @@ let pgAvailable = false;
 let isolatedDbName: string | null = null;
 let resolvedPgUrl = BASE_PG_URL;
 
-try {
-  const { Pool } = await import('pg');
-  const admin = new Pool({ connectionString: BASE_PG_URL, connectionTimeoutMillis: 3000 });
-  await admin.query('SELECT 1');
-  pgAvailable = true;
-
-  // Identifier is built here, never from input — only [a-z0-9_].
-  const candidate = `engram_sync_test_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
+if (!SKIP_REQUESTED) {
   try {
-    await admin.query(`CREATE DATABASE "${candidate}"`);
-    isolatedDbName = candidate;
-    resolvedPgUrl = withDatabase(BASE_PG_URL, candidate);
+    const { Pool } = await import('pg');
+    const admin = new Pool({ connectionString: BASE_PG_URL, connectionTimeoutMillis: 3000 });
+    await admin.query('SELECT 1');
+    pgAvailable = true;
+
+    // Identifier is built here, never from input — only [a-z0-9_].
+    const candidate = `engram_sync_test_${process.pid}_${Math.random().toString(36).slice(2, 10)}`;
+    try {
+      await admin.query(`CREATE DATABASE "${candidate}"`);
+      isolatedDbName = candidate;
+      resolvedPgUrl = withDatabase(BASE_PG_URL, candidate);
+    } catch {
+      // No CREATEDB privilege (or the server disallows it) — share the base
+      // database. Still correct, just not immune to a parallel suite.
+    }
+    await admin.end();
   } catch {
-    // No CREATEDB privilege (or the server disallows it) — share the base
-    // database. Still correct, just not immune to a parallel suite.
+    // unavailable — describeWithPg below skips the whole suite
   }
-  await admin.end();
-} catch {
-  // unavailable — describeWithPg below skips the whole suite
 }
 
 const PG_URL = resolvedPgUrl;

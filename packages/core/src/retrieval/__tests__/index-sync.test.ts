@@ -13,6 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
+import os from 'node:os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
@@ -51,7 +52,7 @@ function addNamespaceIfMissing(sqlite: InstanceType<typeof Database>): void {
 }
 
 function createTestDb(): string {
-  const dbPath = path.join(__dirname, `test-sync-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const dbPath = path.join(os.tmpdir(), `test-sync-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   const sqlite = new Database(dbPath);
   for (const stmt of MIGRATION_SQL.split('--> statement-breakpoint')) {
     const sql = stmt.trim();
@@ -106,6 +107,26 @@ describe('NeuralBrain — cross-process index sync', () => {
     brain.shutdown();
     closeDb();
     cleanupTestDb(dbPath);
+  });
+
+  it.each(['store', 'sink', 'forget'] as const)('keeps an external commit visible after a local %s', async (write) => {
+    const { memory } = await brain.store({ content: 'Local seed' });
+    await brain.syncIndexFromStore();
+    await writeExternally(dbPath, 'external-before-write', 'The VPN password rotates every ninety days');
+    if (write === 'store') await brain.store({ content: 'Local meeting note' });
+    if (write === 'sink') await brain.semantic.store({ concept: 'Meetings', content: 'Local meeting note' });
+    if (write === 'forget') await brain.forget(memory.id);
+    await brain.syncIndexFromStore();
+    expect(brain.getVectorSearch().getIds().has('external-before-write')).toBe(true);
+  });
+
+  it('clears phantom vectors on reinitialize without a disk cache', async () => {
+    const { memory } = await brain.store({ content: 'Temporary parking note' });
+    brain.shutdown();
+    fs.rmSync(indexPath, { force: true });
+    archiveExternally(dbPath, memory.id);
+    await brain.initialize();
+    expect(brain.getVectorSearch().getIds().has(memory.id)).toBe(false);
   });
 
   it('search() finds a memory committed by another connection', async () => {
