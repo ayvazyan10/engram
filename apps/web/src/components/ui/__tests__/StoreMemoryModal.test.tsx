@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import StoreMemoryModal from '../StoreMemoryModal.js';
+import { api } from '../../../lib/api.js';
+
+vi.mock('../../../lib/api.js', () => ({ api: { storeMemory: vi.fn() } }));
 
 describe('StoreMemoryModal drag-select close bug (W7)', () => {
   it('does not close when a text selection drag starts inside the modal and the mouseup lands on the overlay', () => {
@@ -115,5 +118,28 @@ describe('StoreMemoryModal fields (M5, M9)', () => {
     // surface colour has to come through the longhand.
     expect(select.getAttribute('style')).toContain('background-color');
     expect(select.style.backgroundImage).toBe('');
+  });
+});
+
+describe('StoreMemoryModal keyboard submit', () => {
+  it('stores on Cmd/Ctrl+Enter from the text field; a plain Enter does not', async () => {
+    const memory = {
+      id: 'new', type: 'semantic', content: 'remember this', importance: 0.7, source: 'dashboard',
+      concept: null, tags: '[]', createdAt: '2026-01-01T00:00:00.000Z', summary: null,
+    };
+    vi.mocked(api.storeMemory).mockResolvedValue({ memory });
+    const onStored = vi.fn();
+    render(<StoreMemoryModal onClose={vi.fn()} onStored={onStored} />);
+
+    const textarea = screen.getByPlaceholderText(/what do you want to remember/i);
+    fireEvent.change(textarea, { target: { value: 'remember this' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(api.storeMemory).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
+    await waitFor(() => expect(onStored).toHaveBeenCalledWith(expect.objectContaining({ id: 'new' })));
+
+    fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true });
+    await waitFor(() => expect(api.storeMemory).toHaveBeenCalledTimes(2));
   });
 });

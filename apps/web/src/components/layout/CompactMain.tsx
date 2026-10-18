@@ -20,6 +20,8 @@ interface CompactMainProps {
   loading: boolean;
   loadError: string | null;
   loadMemories: () => void;
+  onLoadMore: () => void;
+  loadingMore: boolean;
   onStore: () => void;
   plateData: ObsData | null;
   plateError: string | null;
@@ -29,7 +31,7 @@ interface CompactMainProps {
 /** The plate-mode layout below ~900px (V3): one full-width pane at a time
  *  (list / plate / inspector), switched via MobileTabBar instead of the
  *  desktop's fixed 3-column row. */
-export default function CompactMain({ pane, onPaneChange, loading, loadError, loadMemories, onStore, plateData, plateError, onPlateRetry }: CompactMainProps) {
+export default function CompactMain({ pane, onPaneChange, loading, loadError, loadMemories, onLoadMore, loadingMore, onStore, plateData, plateError, onPlateRetry }: CompactMainProps) {
   const t = useTemplateStore((s) => s.activeTemplate);
 
   return (
@@ -38,7 +40,7 @@ export default function CompactMain({ pane, onPaneChange, loading, loadError, lo
         {pane === 'list' && (
           <div className="ec-mobile-pane" style={{ background: t.panelBg, display: 'flex', flexDirection: 'column' }}>
             <SearchBar />
-            <MemoryPanel loading={loading} error={loadError} onRetry={loadMemories} onStore={onStore} />
+            <MemoryPanel loading={loading} error={loadError} onRetry={loadMemories} onStore={onStore} onLoadMore={onLoadMore} loadingMore={loadingMore} />
           </div>
         )}
         {pane === 'canvas' && (

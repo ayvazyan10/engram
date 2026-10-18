@@ -39,7 +39,10 @@ function sum(counts: Record<string, number>): number {
   return Object.values(counts).reduce((a, b) => a + b, 0);
 }
 
-async function refresh(): Promise<void> {
+/** Asks for the census now, outside the poll. The dashboard calls it when a
+ *  memory joins or leaves the store, so the status bar does not wait up to
+ *  one poll interval to agree with the list. */
+export async function refreshServerStats(): Promise<void> {
   try {
     const res = await api.stats();
     if (!res || typeof res !== 'object') return;
@@ -61,8 +64,8 @@ async function refresh(): Promise<void> {
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   if (listeners.size === 1) {
-    void refresh();
-    timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
+    void refreshServerStats();
+    timer = setInterval(() => void refreshServerStats(), POLL_INTERVAL_MS);
   }
   return () => {
     listeners.delete(listener);

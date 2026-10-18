@@ -18,12 +18,12 @@ import { useDashboardStore } from '../../store/dashboardStore.js';
 import { useAuthStore } from '../../store/authStore.js';
 import { api, ApiError } from '../../lib/api.js';
 import { loadPlateData } from '../../lib/plate/data.js';
+import { refreshServerStats } from '../../lib/serverStats.js';
 import type { ObsData } from '../../lib/plate/contract.js';
 import { useWebSocket, asMemoryRecord } from '../../hooks/useWebSocket.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { useThemeVars } from '../../hooks/useThemeVars.js';
 import { SPACE, STATUS, TYPE, WEIGHT } from '../../lib/tokens.js';
-import { APP_VERSION } from '../../lib/version.js';
 
 // W16: recharts (the bulk of these three views' weight) shipped to every
 // visitor even if they never leave the default plate surface — these were the
@@ -35,7 +35,7 @@ const ReflectionView = lazy(() => import('../views/ReflectionView.js'));
 
 export default function AppLayout() {
   const { neurons, setNeurons, reconcileNeurons, setConnections, setContradictionPairs } = useNeuralStore();
-  const { records, setRecords } = useMemoryStore();
+  const { setRecords, appendRecords, storeChanges } = useMemoryStore();
   const viewMode = useDashboardStore((s) => s.viewMode);
   const t = useTemplateStore((s) => s.activeTemplate);
   const [loading, setLoading] = useState(true);
@@ -55,6 +55,10 @@ export default function AppLayout() {
   const [plateAttempt, setPlateAttempt] = useState(0);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [firstLoad, setFirstLoad] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /** The running server's own version (GET /health). Not the web package's:
+   *  that one is a workspace number the release never bumps. */
+  const [serverVersion, setServerVersion] = useState<string | null>(null);
   const locked = useAuthStore((s) => s.locked);
 
   // Below ~900px the fixed 260px sidebar + 252px inspector alone exceed a
@@ -72,18 +76,8 @@ export default function AppLayout() {
   const loadMemories = useCallback(() => {
     setLoading(true);
     setLoadError(null);
-    api.listMemories({ limit: 200 })
-      .then((res) => {
-        // W10: the server response was cast unvalidated. A single row
-        // missing a field asMemoryRecord requires (id/content/type) doesn't
-        // get to reach date-fns / string-slicing calls downstream and throw
-        // — reused here from useWebSocket.ts, the exact same shape check
-        // already applied to the socket's 'memory:stored' payload.
-        const parsed = (res.memories as unknown[])
-          .map(asMemoryRecord)
-          .filter((r): r is MemoryRecord => r !== null);
-        setRecords(parsed);
-      })
+    api.listMemories({ limit: PAGE_SIZE })
+      .then((res) => setRecords(parseMemories(res.memories)))
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 401) return;
         setLoadError(err instanceof Error ? err.message : 'Could not reach Engram API');
@@ -95,6 +89,36 @@ export default function AppLayout() {
     loadMemories();
   }, [loadMemories]);
 
+  /** The next page of the list, from the server's own limit/offset. The
+   *  offset is what is loaded: socket arrivals are the newest rows, so they
+   *  already account for the shift they caused at the top. */
+  const loadMore = useCallback(() => {
+    setLoadingMore(true);
+    api.listMemories({ limit: PAGE_SIZE, offset: useMemoryStore.getState().records.length })
+      .then((res) => appendRecords(parseMemories(res.memories)))
+      .catch((err: unknown) => {
+        if (err instanceof ApiError && err.status === 401) return;
+        setLoadError(err instanceof Error ? err.message : 'Could not reach Engram API');
+      })
+      .finally(() => setLoadingMore(false));
+  }, [appendRecords]);
+
+  // A memory stored (over the socket or from the modal) or archived changes
+  // the census; ask for it then instead of waiting out the 15s poll. Skipped
+  // at 0: the first subscriber already asks once on mount.
+  useEffect(() => {
+    if (storeChanges > 0) void refreshServerStats();
+  }, [storeChanges]);
+
+  useEffect(() => {
+    api.health()
+      .then((res) => {
+        if (typeof res.version === 'string') setServerVersion(res.version);
+      })
+      // No version is better than a wrong one: the badge stays hidden.
+      .catch(() => {});
+  }, []);
+
   /** Re-run the plate load after a failure. The failure already reset the
    *  ref-counted guard, so bumping the attempt counter is what actually
    *  re-fires the effect. */
@@ -103,19 +127,17 @@ export default function AppLayout() {
     setPlateAttempt((n) => n + 1);
   }, []);
 
-  // W12: fetches below key on `records` itself (not a synthetic
-  // `records.length > 0` boolean, which only ever ran once) so a socket
-  // 'memory:stored' arrival — which changes `records`' length — refreshes
-  // contradictions and connections instead of leaving them permanently
-  // stale after the initial load. The count guard (same shape as the
-  // connections effect below) means an unrelated edit that leaves the
-  // record count unchanged — a tag added, a concept edited — doesn't
-  // refetch; only an actual arrival or removal does.
-  const contradictionsFetchedForCountRef = useRef(-1);
+  // W12: the whole-store fetches below key on `storeChanges`, which a socket
+  // 'memory:stored' arrival or an archive bumps, so they refresh instead of
+  // staying stale after the initial load. They used to key on the loaded
+  // record count, which also moved when the first page landed (0 -> 200) —
+  // every cold load fetched the plate data twice — and would move again on
+  // every "Load more". An edit that leaves the store's membership alone — a
+  // tag added, a concept edited — doesn't refetch.
+  const contradictionsFetchedForRef = useRef(-1);
   useEffect(() => {
-    if (records.length === 0) return;
-    if (contradictionsFetchedForCountRef.current === records.length) return;
-    contradictionsFetchedForCountRef.current = records.length;
+    if (contradictionsFetchedForRef.current === storeChanges) return;
+    contradictionsFetchedForRef.current = storeChanges;
     api.getContradictions()
       .then((res) => {
         setContradictionPairs(
@@ -127,11 +149,11 @@ export default function AppLayout() {
         );
       })
       .catch(() => {});
-  }, [records, setContradictionPairs]);
+  }, [storeChanges, setContradictionPairs]);
 
-  // W12: a ref-counted "already fetched for this many records" guard, not a
+  // W12: a ref-held "already fetched for this store state" guard, not a
   // dependency-array trick. Toggling `viewMode` away from and back to '3d' with
-  // the same record count is a no-op; a new or removed record refetches once,
+  // the store unchanged is a no-op; a new or removed record refetches once,
   // including one that arrived over the socket while another view was showing.
   //
   // What changed here: this used to sort records by importance, take the top
@@ -148,11 +170,11 @@ export default function AppLayout() {
   // this store's real shape, and an id-derived sphere is invented data — the
   // one surface that used to confess it (the scene key) has been retired
   // because each plate now states its own denominators.
-  const sceneFetchedForCountRef = useRef(-1);
+  const sceneFetchedForRef = useRef(-1);
   useEffect(() => {
     if (viewMode !== '3d') return;
-    if (sceneFetchedForCountRef.current === records.length) return;
-    sceneFetchedForCountRef.current = records.length;
+    if (sceneFetchedForRef.current === storeChanges) return;
+    sceneFetchedForRef.current = storeChanges;
 
     let cancelled = false;
     loadPlateData()
@@ -180,14 +202,14 @@ export default function AppLayout() {
         if (err instanceof ApiError && err.status === 401) return;
         // Anything else is stated on the plate box. It must not be allowed to
         // look like an empty store — see PlateSurface for the two treatments.
-        sceneFetchedForCountRef.current = -1;
+        sceneFetchedForRef.current = -1;
         setPlateError(err instanceof Error ? err.message : 'Could not reach Engram API');
       });
 
     return () => {
       cancelled = true;
     };
-  }, [records.length, viewMode, plateAttempt, setConnections]);
+  }, [storeChanges, viewMode, plateAttempt, setConnections]);
 
   useEffect(() => {
     if (!sceneNodes || sceneNodes.length === 0 || viewMode !== '3d') return;
@@ -224,8 +246,9 @@ export default function AppLayout() {
    * behind it. Three listeners for one key cannot agree, so the host takes it
    * and declines in the three cases where the key belongs to something else:
    * a text field, an open modal or the unlock gate, and anything a component
-   * nearer the event has already handled (the plate chooser marks its own
-   * Escape that way).
+   * nearer the event has already handled (the plate chooser and ModalShell
+   * mark their own Escape that way — the latter is what covers the archive
+   * confirmation, which this component does not know is open).
    */
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -254,9 +277,11 @@ export default function AppLayout() {
         <div style={s.logo}>
           <BrandMark color={t.accent} />
           <span style={{ ...s.logoText, color: t.textPrimary }}>Engram</span>
-          {/* Read from package.json (lib/version.ts) — this badge said
-              'v0.2' for two minor versions. */}
-          <span className="ec-logo-badge ec-tabular" style={{ ...s.logoBadge, color: t.textMuted }}>v{APP_VERSION}</span>
+          {/* The server's version, from /health. It was the web package's
+              (0.4.1) while the release was 0.7.0; hidden until known. */}
+          {serverVersion && (
+            <span className="ec-logo-badge ec-tabular" style={{ ...s.logoBadge, color: t.textMuted }}>v{serverVersion}</span>
+          )}
         </div>
 
         <ViewSwitcher />
@@ -276,6 +301,8 @@ export default function AppLayout() {
             loading={loading}
             loadError={loadError}
             loadMemories={loadMemories}
+            onLoadMore={loadMore}
+            loadingMore={loadingMore}
             onStore={() => setShowStoreModal(true)}
             plateData={plateData}
             plateError={plateError}
@@ -285,7 +312,14 @@ export default function AppLayout() {
           <div style={s.main}>
             <div style={{ ...s.sidebar, background: t.panelBg, borderRightColor: t.panelBorder }}>
               <SearchBar />
-              <MemoryPanel loading={loading} error={loadError} onRetry={loadMemories} onStore={() => setShowStoreModal(true)} />
+              <MemoryPanel
+                loading={loading}
+                error={loadError}
+                onRetry={loadMemories}
+                onStore={() => setShowStoreModal(true)}
+                onLoadMore={loadMore}
+                loadingMore={loadingMore}
+              />
             </div>
 
             {/* The plate slot. PlateSurface is the positioned, measured box —
@@ -334,6 +368,19 @@ export default function AppLayout() {
       {locked && <UnlockGate />}
     </div>
   );
+}
+
+/** The server's page cap for GET /memory (`limit` maximum 200). */
+const PAGE_SIZE = 200;
+
+/**
+ * W10: the server response was cast unvalidated. A single row missing a field
+ * asMemoryRecord requires (id/content/type) doesn't get to reach date-fns /
+ * string-slicing calls downstream and throw — the exact same shape check
+ * already applied to the socket's 'memory:stored' payload.
+ */
+function parseMemories(rows: unknown[]): MemoryRecord[] {
+  return rows.map(asMemoryRecord).filter((r): r is MemoryRecord => r !== null);
 }
 
 /**

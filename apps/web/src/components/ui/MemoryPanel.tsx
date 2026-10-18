@@ -26,9 +26,12 @@ interface Props {
   error?: string | null;
   onRetry?: () => void;
   onStore?: () => void;
+  /** Fetches the next page; offered while the store holds more than is listed. */
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
 }
 
-export default function MemoryPanel({ loading, error, onRetry, onStore }: Props) {
+export default function MemoryPanel({ loading, error, onRetry, onStore, onLoadMore, loadingMore }: Props) {
   const { records, searchResults, searchQuery, isSearching } = useMemoryStore();
   const { selectNeuron, selectedNeuronId } = useNeuralStore();
   const t = useTemplateStore((s) => s.activeTemplate);
@@ -57,6 +60,12 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
       }, {}),
     [sourceList]
   );
+
+  // The pills count the whole store (the same /stats census the status bar
+  // shows) — they used to count only the loaded page. Search results are
+  // counted as listed, since there the list IS the whole answer.
+  const typeCount = (type: MemoryType): number =>
+    !searchQuery && stats ? (stats.byType[type] ?? 0) : (grouped[type]?.length ?? 0);
 
   function toggleType(type: MemoryType) {
     setActiveTypes((prev) => {
@@ -123,7 +132,7 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
               key={type}
               className="ec-hover-tint"
               aria-pressed={active}
-              aria-label={`${TYPE_LABELS[type]} memories: ${grouped[type]?.length ?? 0}`}
+              aria-label={`${TYPE_LABELS[type]} memories: ${typeCount(type)}`}
               title={`${active ? 'Clear the' : 'Filter to'} ${TYPE_LABELS[type].toLowerCase()} memories`}
               onClick={() => toggleType(type)}
               style={{
@@ -135,7 +144,7 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
             >
               <DataDot color={TYPE_COLORS[type]} size={7} />
               <span aria-hidden="true" className="ec-tabular" style={{ color: active ? t.textPrimary : t.textSecondary, fontSize: TYPE.sm, fontWeight: WEIGHT.medium }}>
-                {grouped[type]?.length ?? 0}
+                {typeCount(type)}
               </span>
             </button>
           );
@@ -189,6 +198,17 @@ export default function MemoryPanel({ loading, error, onRetry, onStore }: Props)
                 </div>
               ) : null
             )}
+
+        {capped && onLoadMore && !loading && (
+          <button
+            className="ec-hover-tint"
+            style={{ ...styles.loadMoreBtn, color: t.textSecondary, borderColor: t.panelBorder }}
+            onClick={onLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading…' : `Load more · ${total - loaded} not shown`}
+          </button>
+        )}
 
         {displayList.length === 0 && !isSearching && !loading && !error && (
           <div style={{ ...styles.empty, color: t.textMuted }}>
@@ -320,6 +340,19 @@ const styles = {
   errorText: {
     fontSize: TYPE.sm,
     lineHeight: 1.4,
+  },
+  loadMoreBtn: {
+    display: 'block',
+    margin: `${SPACE.sm} ${SPACE.lg} ${SPACE.lg}`,
+    width: `calc(100% - 2 * ${SPACE.lg})`,
+    padding: `${SPACE.xs} ${SPACE.sm}`,
+    fontSize: TYPE.xs,
+    fontWeight: WEIGHT.medium,
+    fontFamily: 'inherit',
+    background: 'transparent',
+    border: '1px solid',
+    borderRadius: RADIUS.sm,
+    minHeight: 28,
   },
   retryBtn: {
     fontSize: TYPE.xs,

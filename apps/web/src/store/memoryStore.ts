@@ -34,13 +34,24 @@ interface MemoryState {
   currentContext: string;
   recallLatencyMs: number | null;
   highlightedIds: Set<string>;
+  /**
+   * Bumped when a memory joins or leaves the STORE (a socket arrival, an
+   * archive) — not when the dashboard merely loads another page of it. The
+   * whole-store fetches (plate data, contradictions) key on this, so paging
+   * through the list does not refetch them and the cold load fetches once.
+   */
+  storeChanges: number;
 
   setRecords: (records: MemoryRecord[]) => void;
   setSearchResults: (results: MemoryRecord[]) => void;
   setSearchQuery: (query: string) => void;
   setSearching: (searching: boolean) => void;
-  setContext: (context: string, latencyMs: number) => void;
+  /** `latencyMs: null` clears the status bar's recall read-out. */
+  setContext: (context: string, latencyMs: number | null) => void;
   setHighlightedIds: (ids: Set<string>) => void;
+  /** The next page of the list, appended. Rows already present (a socket
+   *  arrival shifts the server's offsets) are skipped. */
+  appendRecords: (records: MemoryRecord[]) => void;
   addRecord: (record: MemoryRecord) => void;
   removeRecord: (id: string) => void;
   /** Persist a tag edit into the record so re-selecting it doesn't show stale tags. */
@@ -56,6 +67,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   currentContext: '',
   recallLatencyMs: null,
   highlightedIds: new Set(),
+  storeChanges: 0,
 
   setRecords: (records) => set({ records, loadedCount: records.length }),
   setSearchResults: (results) => set({ searchResults: results }),
@@ -63,6 +75,12 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   setSearching: (searching) => set({ isSearching: searching }),
   setContext: (context, latencyMs) => set({ currentContext: context, recallLatencyMs: latencyMs }),
   setHighlightedIds: (ids) => set({ highlightedIds: ids }),
+  appendRecords: (page) =>
+    set((state) => {
+      const known = new Set(state.records.map((r) => r.id));
+      const records = [...state.records, ...page.filter((r) => !known.has(r.id))];
+      return { records, loadedCount: records.length };
+    }),
   // Idempotent by id: the modal's onStored callback and the server's
   // 'memory:stored' broadcast both call this for the same POST, and either
   // can arrive first. A duplicate arrival replaces the existing entry
@@ -79,12 +97,14 @@ export const useMemoryStore = create<MemoryState>((set) => ({
       return {
         records: [record, ...state.records],
         loadedCount: state.loadedCount + 1,
+        storeChanges: state.storeChanges + 1,
       };
     }),
   removeRecord: (id) =>
     set((state) => ({
       records: state.records.filter((r) => r.id !== id),
       loadedCount: Math.max(0, state.loadedCount - 1),
+      storeChanges: state.storeChanges + 1,
     })),
   updateRecordTags: (id, tags) =>
     set((state) => ({

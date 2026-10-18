@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import PlateSurface from '../PlateSurface.js';
 import { useNeuralStore } from '../../../store/neuralStore.js';
+import { useMemoryStore } from '../../../store/memoryStore.js';
 import { useViewStore, DEFAULT_VIEW_ID } from '../../../store/viewStore.js';
-import type { DemoModule, DemoProps, ObsData } from '../../../lib/plate/contract.js';
+import { highlightIndices, type DemoModule, type DemoProps, type ObsData } from '../../../lib/plate/contract.js';
 
 /**
  * The box, not the drawings.
@@ -72,6 +73,24 @@ describe('PlateSurface', () => {
     expect(handed?.selectedId).toBe('mem-7');
     expect(typeof handed?.reducedMotion).toBe('boolean');
     restore();
+  });
+
+  /** SearchBar wrote these and nothing read them: search hits never reached a plate. */
+  it("hands the plate the search's hits", () => {
+    const restore = withBox(900, 640);
+    const hits = new Set(['mem-2', 'mem-9']);
+    useMemoryStore.setState({ highlightedIds: hits });
+    render(<PlateSurface data={emptyData} error={null} onRetry={() => {}} />);
+
+    expect(handed?.highlightedIds).toBe(hits);
+    useMemoryStore.setState({ highlightedIds: new Set() });
+    restore();
+  });
+
+  it('turns the hits into node indices, the form each plate colours by', () => {
+    const nodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+    expect([...highlightIndices(nodes, new Set(['c', 'a', 'gone']))].sort()).toEqual([0, 2]);
+    expect(highlightIndices(nodes, new Set()).size).toBe(0);
   });
 
   it('wires onSelect to the store the inspector reads, so a click on a plate fills it', () => {

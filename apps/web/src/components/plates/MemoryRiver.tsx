@@ -128,6 +128,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   PLATE_COLORS,
   RETENTION_LABEL,
+  highlightIndices,
   linkColorInt,
   type DemoModule,
   type DemoProps,
@@ -1004,11 +1005,13 @@ interface BeadFieldProps {
   live: number | null;
   neighbours: ReadonlySet<number>;
   litSource: number | null;
+  /** Search hits, lit while nothing is hovered, selected or pinned. */
+  matches: ReadonlySet<number>;
   onHover: (index: number | null) => void;
   onPick: (index: number) => void;
 }
 
-function BeadField({ reading, visible, live, neighbours, litSource, onHover, onPick }: BeadFieldProps) {
+function BeadField({ reading, visible, live, neighbours, litSource, matches, onHover, onPick }: BeadFieldProps) {
   const invalidate = useThree((s) => s.invalidate);
   const count = reading.beads.radius.length;
 
@@ -1085,11 +1088,12 @@ function BeadField({ reading, visible, live, neighbours, litSource, onHover, onP
     const { mesh } = built;
     for (let i = 0; i < count; i++) {
       const inSource = litSource !== null && beads.lane[i] === litSource;
-      mesh.setColorAt(i, i === live || inSource ? bright : neighbours.has(i) ? near : rest);
+      const hit = live === null && litSource === null && matches.has(i);
+      mesh.setColorAt(i, i === live || inSource || hit ? bright : neighbours.has(i) ? near : rest);
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     invalidate();
-  }, [built, reading, live, neighbours, litSource, count, invalidate]);
+  }, [built, reading, live, neighbours, litSource, matches, count, invalidate]);
 
   return (
     <>
@@ -1581,7 +1585,9 @@ function viewNote(view: ViewId, visible: Visible, data: ObsData, type: TypeFilte
 const NO_LINKS: readonly number[] = [];
 const NO_NEIGHBOURS: ReadonlySet<number> = new Set<number>();
 
-function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: DemoProps) {
+function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highlightedIds }: DemoProps) {
+  // The active search's hits, lit while nothing is hovered or selected.
+  const matches = useMemo(() => highlightIndices(data.nodes, highlightedIds), [data.nodes, highlightedIds]);
   const [now] = useState(() => Date.now());
   const [view, setView] = useState<ViewId>('all');
   const [type, setType] = useState<TypeFilter>('all');
@@ -1778,6 +1784,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: Dem
                   live={live}
                   neighbours={neighbours}
                   litSource={litSource}
+                  matches={matches}
                   onHover={setHover}
                   onPick={pick}
                 />

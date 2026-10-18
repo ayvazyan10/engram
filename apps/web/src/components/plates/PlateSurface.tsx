@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useNeuralStore } from '../../store/neuralStore.js';
+import { useMemoryStore } from '../../store/memoryStore.js';
 import { useViewStore } from '../../store/viewStore.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import type { ObsData } from '../../lib/plate/contract.js';
@@ -54,6 +55,7 @@ export default function PlateSurface({ data, error, onRetry }: Props) {
   const activeView = useViewStore((s) => s.activeView);
   const selectedId = useNeuralStore((s) => s.selectedNeuronId);
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
+  const highlightedIds = useMemoryStore((s) => s.highlightedIds);
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
   const [boxRef, size] = useBoxSize();
 
@@ -84,6 +86,7 @@ export default function PlateSurface({ data, error, onRetry }: Props) {
           reducedMotion={reducedMotion}
           selectedId={selectedId}
           onSelect={selectNeuron}
+          highlightedIds={highlightedIds}
         />
       ) : null}
     </div>

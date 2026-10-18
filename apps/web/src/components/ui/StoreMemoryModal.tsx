@@ -98,6 +98,14 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
         style={{ ...styles.textarea, ...fieldStyle }}
         value={content}
         onChange={(e) => setContent(e.target.value)}
+        // Cmd/Ctrl+Enter stores, as in most compose boxes; a plain Enter
+        // still writes a newline.
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !saving) {
+            e.preventDefault();
+            void handleSave();
+          }
+        }}
         placeholder="What do you want to remember?"
         rows={4}
         autoFocus

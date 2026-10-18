@@ -100,6 +100,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   PLATE_COLORS,
   RETENTION_LABEL,
+  highlightIndices,
   linkColorInt,
   type DemoModule,
   type DemoProps,
@@ -905,12 +906,14 @@ function Beads({
   count,
   focusIndex,
   neighbours,
+  matches,
 }: {
   coil: Coil;
   layout: Layout;
   count: number;
   focusIndex: number;
   neighbours: ReadonlySet<number>;
+  matches: ReadonlySet<number>;
 }) {
   const invalidate = useThree((s) => s.invalidate);
   const mesh = useDisposable(
@@ -956,12 +959,13 @@ function Beads({
     for (let i = 0; i < count; i++) {
       let colour = rest;
       if (focusIndex >= 0) colour = neighbours.has(i) ? rest : back;
+      else if (matches.size > 0) colour = matches.has(i) ? live : back;
       if (i === focusIndex) colour = live;
       mesh.setColorAt(i, colour);
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     invalidate();
-  }, [mesh, count, focusIndex, neighbours, invalidate]);
+  }, [mesh, count, focusIndex, neighbours, matches, invalidate]);
 
   return <primitive object={mesh} />;
 }
@@ -1294,7 +1298,9 @@ function passes(lens: Lens, arc: Arc): boolean {
 const NO_ARCS: readonly number[] = [];
 const NO_NEIGHBOURS: ReadonlySet<number> = new Set<number>();
 
-function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: DemoProps) {
+function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highlightedIds }: DemoProps) {
+  // The active search's hits, lit while nothing is hovered or selected.
+  const matches = useMemo(() => highlightIndices(data.nodes, highlightedIds), [data.nodes, highlightedIds]);
   const layout = useMemo(() => buildLayout(data), [data]);
   const coil = useMemo(() => buildCoil(layout), [layout]);
   const field = useMemo(() => buildField(layout, coil), [layout, coil]);
@@ -1527,6 +1533,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: Dem
             count={data.nodes.length}
             focusIndex={focusIndex}
             neighbours={neighbours}
+            matches={matches}
           />
           <PickTargets
             coil={coil}

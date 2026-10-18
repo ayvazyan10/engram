@@ -41,6 +41,11 @@ export default function ModalShell({ title, onClose, children, footer, width = '
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
+        // Marked handled so the host's Escape (AppLayout, which clears the
+        // plate selection) stands down: one keystroke closes the dialog and
+        // nothing behind it. The archive confirmation used to close AND wipe
+        // the selected memory it was confirming.
+        e.preventDefault();
         onClose();
         return;
       }

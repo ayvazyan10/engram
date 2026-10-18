@@ -519,3 +519,36 @@ describe('NeuronInspector content bounds (H10 — 6201 chars in a 210px column)'
     expect(screen.getByText('Deploy checklist')).toBeInTheDocument();
   });
 });
+
+describe('NeuronInspector connections name the memory at the other end', () => {
+  beforeEach(() => {
+    resetStores();
+    vi.mocked(api.getGraph).mockReset();
+  });
+
+  it('labels each connection with the other memory and selects it on click', async () => {
+    useMemoryStore.setState({ records: [makeRecord({ id: 'sel', content: 'Selected memory' })] });
+    vi.mocked(api.getGraph).mockResolvedValue({
+      node: null,
+      connections: [{ id: 'e1', sourceId: 'other', targetId: 'sel', relationship: 'relates_to', strength: 0.8 }],
+      neighbors: [makeRecord({ id: 'other', concept: 'Deploy checklist', content: 'Run the migrations first.' })],
+    });
+    act(() => useNeuralStore.getState().selectNeuron('sel'));
+
+    render(<NeuronInspector />);
+    const link = await screen.findByRole('button', { name: /deploy checklist/i });
+    expect(link).toHaveTextContent('relates_to');
+
+    fireEvent.click(link);
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('other');
+  });
+
+  it('says the connections could not be loaded instead of dropping the section', async () => {
+    useMemoryStore.setState({ records: [makeRecord({ id: 'sel', content: 'Selected memory' })] });
+    vi.mocked(api.getGraph).mockRejectedValue(new Error('Failed to fetch: /graph/sel'));
+    act(() => useNeuralStore.getState().selectNeuron('sel'));
+
+    render(<NeuronInspector />);
+    expect(await screen.findByText(/could not load this memory’s connections/i)).toBeInTheDocument();
+  });
+});

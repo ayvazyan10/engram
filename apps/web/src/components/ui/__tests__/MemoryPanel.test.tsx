@@ -6,7 +6,7 @@ import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js
 // The panel reads the server census for its "N of M" count (H6). Mocked so
 // the count is a fact of the test rather than of the network.
 vi.mock('../../../lib/serverStats.js', () => ({
-  useServerStats: () => ({ total: 653, byType: {}, bySource: {} }),
+  useServerStats: () => ({ total: 653, byType: { episodic: 33, semantic: 513, procedural: 107 }, bySource: {} }),
 }));
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -130,7 +130,7 @@ describe('MemoryPanel type pills (L1 — they looked like filters and did nothin
 
   it('renders them as pressable controls, not decoration', () => {
     render(<MemoryPanel loading={false} />);
-    const pill = screen.getByRole('button', { name: /semantic memories: 1/i });
+    const pill = screen.getByRole('button', { name: /semantic memories: 513/i });
     expect(pill).toHaveAttribute('aria-pressed', 'false');
   });
 
@@ -138,7 +138,7 @@ describe('MemoryPanel type pills (L1 — they looked like filters and did nothin
     render(<MemoryPanel loading={false} />);
     expect(screen.getByText('Procedural one')).toBeInTheDocument();
 
-    const pill = screen.getByRole('button', { name: /semantic memories: 1/i });
+    const pill = screen.getByRole('button', { name: /semantic memories: 513/i });
     fireEvent.click(pill);
     expect(pill).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Semantic one')).toBeInTheDocument();
@@ -150,8 +150,46 @@ describe('MemoryPanel type pills (L1 — they looked like filters and did nothin
 
   it('keeps showing every type count while filtered, so the filter can be undone', () => {
     render(<MemoryPanel loading={false} />);
-    fireEvent.click(screen.getByRole('button', { name: /semantic memories: 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /semantic memories: 513/i }));
+    expect(screen.getByRole('button', { name: /procedural memories: 107/i })).toBeInTheDocument();
+  });
+});
+
+describe('MemoryPanel whole-store counts and paging', () => {
+  beforeEach(() => {
+    useMemoryStore.setState({
+      records: [record({ id: 'a', type: 'semantic' })],
+      searchResults: [],
+      searchQuery: '',
+      isSearching: false,
+      loadedCount: 1,
+    });
+  });
+
+  it('counts each type across the whole store, not the loaded page', () => {
+    render(<MemoryPanel loading={false} />);
+    expect(screen.getByRole('button', { name: /episodic memories: 33/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /semantic memories: 513/i })).toBeInTheDocument();
+  });
+
+  it('counts search results as listed — there the list is the whole answer', () => {
+    useMemoryStore.setState({ searchQuery: 'auth', searchResults: [record({ id: 'r', type: 'procedural' })] });
+    render(<MemoryPanel loading={false} />);
     expect(screen.getByRole('button', { name: /procedural memories: 1/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /semantic memories: 0/i })).toBeInTheDocument();
+  });
+
+  it('offers the next page while the store holds more than is listed', () => {
+    const onLoadMore = vi.fn();
+    render(<MemoryPanel loading={false} onLoadMore={onLoadMore} />);
+    fireEvent.click(screen.getByRole('button', { name: /load more · 652 not shown/i }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not offer paging over search results', () => {
+    useMemoryStore.setState({ searchQuery: 'auth', searchResults: [record({ id: 'r' })] });
+    render(<MemoryPanel loading={false} onLoadMore={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
 });
 

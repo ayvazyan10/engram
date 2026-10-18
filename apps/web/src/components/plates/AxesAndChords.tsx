@@ -75,6 +75,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   PLATE_COLORS,
   RETENTION_LABEL,
+  highlightIndices,
   linkColorInt,
   type DemoModule,
   type DemoProps,
@@ -866,6 +867,7 @@ function Beads({
   reading,
   focus,
   live,
+  matches,
   onHover,
   onPick,
 }: {
@@ -873,6 +875,7 @@ function Beads({
   reading: Reading;
   focus: Focus;
   live: number | null;
+  matches: ReadonlySet<number>;
   onHover: (index: number | null) => void;
   onPick: (index: number) => void;
 }) {
@@ -938,13 +941,15 @@ function Beads({
       if (focus) {
         const inFocus = slot >= 0 ? reading.columnOf[i] === slot : neighbours.has(i);
         colour = inFocus ? rest : back;
+      } else if (matches.size > 0) {
+        colour = matches.has(i) ? lit : back;
       }
       if (i === live) colour = lit;
       mesh.setColorAt(i, colour);
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     invalidate();
-  }, [mesh, data, reading, focus, live, invalidate]);
+  }, [mesh, data, reading, focus, live, matches, invalidate]);
 
   return (
     <primitive
@@ -1292,7 +1297,9 @@ function Readout({
 
 const NO_LINKS: readonly number[] = [];
 
-function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: DemoProps) {
+function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highlightedIds }: DemoProps) {
+  // The active search's hits, lit while nothing is hovered or selected.
+  const matches = useMemo(() => highlightIndices(data.nodes, highlightedIds), [data.nodes, highlightedIds]);
   const reading = useMemo(() => buildReading(data), [data]);
   const chords = useMemo(() => buildChords(data, reading), [data, reading]);
 
@@ -1440,6 +1447,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: Dem
                 reading={reading}
                 focus={focus}
                 live={hoveredNode ?? selectedIndex}
+                matches={matches}
                 onHover={setHoveredNode}
                 onPick={pick}
               />

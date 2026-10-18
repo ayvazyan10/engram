@@ -2,12 +2,19 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import SearchBar from '../SearchBar.js';
 import { useMemoryStore } from '../../../store/memoryStore.js';
-import { api } from '../../../lib/api.js';
+import { api, ApiError } from '../../../lib/api.js';
 
 vi.mock('../../../lib/api.js', () => ({
   api: {
     search: vi.fn(),
     recall: vi.fn(),
+  },
+  ApiError: class ApiError extends Error {
+    status: number;
+    constructor(status: number, message: string) {
+      super(message);
+      this.status = status;
+    }
   },
 }));
 
@@ -130,6 +137,39 @@ describe('SearchBar race conditions and error handling (W4)', () => {
     // The query never committed — no stale "semantic recall active" label
     // pointing at a query whose results never arrived.
     expect(useMemoryStore.getState().searchQuery).toBe('');
+  });
+});
+
+describe('SearchBar human error copy and clearing', () => {
+  it('says the server may be down instead of printing "Failed to fetch: /search"', async () => {
+    resetStore();
+    vi.mocked(api.search).mockRejectedValueOnce(new ApiError(0, 'Failed to fetch: /search'));
+    vi.mocked(api.recall).mockRejectedValueOnce(new ApiError(0, 'Failed to fetch: /recall'));
+
+    render(<SearchBar />);
+    const input = screen.getByPlaceholderText(/ask your memory/i);
+    fireEvent.change(input, { target: { value: 'auth' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Search failed — is the Engram server running?')
+    );
+    expect(screen.queryByText(/failed to fetch/i)).not.toBeInTheDocument();
+  });
+
+  it('clears the recall latency with the search, so the status bar stops printing "recall Nms"', async () => {
+    resetStore();
+    vi.mocked(api.search).mockResolvedValueOnce({ count: 0, results: [] });
+    vi.mocked(api.recall).mockResolvedValueOnce({ context: 'ctx', memories: [], latencyMs: 42 });
+
+    render(<SearchBar />);
+    const input = screen.getByPlaceholderText(/ask your memory/i);
+    fireEvent.change(input, { target: { value: 'auth' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(useMemoryStore.getState().recallLatencyMs).toBe(42));
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(useMemoryStore.getState().recallLatencyMs).toBeNull();
   });
 });
 

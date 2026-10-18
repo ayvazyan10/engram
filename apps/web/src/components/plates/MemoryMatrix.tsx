@@ -102,6 +102,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   PLATE_COLORS,
   RETENTION_LABEL,
+  highlightIndices,
   linkColorInt,
   type DemoModule,
   type DemoProps,
@@ -920,12 +921,14 @@ interface CellsProps {
   active: number | null;
   focus: number | null;
   neighbours: ReadonlySet<number>;
+  /** Search hits, lit while nothing is hovered or selected. */
+  matches: ReadonlySet<number>;
   glow: boolean;
   onHover: (index: number | null) => void;
   onPick: (index: number) => void;
 }
 
-function Cells({ ground, data, active, focus, neighbours, glow, onHover, onPick }: CellsProps) {
+function Cells({ ground, data, active, focus, neighbours, matches, glow, onHover, onPick }: CellsProps) {
   const invalidate = useThree((s) => s.invalidate);
   const size = useThree((s) => s.size);
   const dpr = useThree((s) => s.viewport.dpr);
@@ -1007,7 +1010,9 @@ function Cells({ ground, data, active, focus, neighbours, glow, onHover, onPick 
     for (let i = 0; i < n; i++) {
       built.mesh.setColorAt(
         i,
-        i === active || i === focus ? live : neighbours.has(i) ? near : rest
+        i === active || i === focus || (active === null && focus === null && matches.has(i))
+          ? live
+          : neighbours.has(i) ? near : rest
       );
     }
     if (built.mesh.instanceColor) built.mesh.instanceColor.needsUpdate = true;
@@ -1018,7 +1023,7 @@ function Cells({ ground, data, active, focus, neighbours, glow, onHover, onPick 
       attr.needsUpdate = true;
     }
     invalidate();
-  }, [built, ground, n, active, focus, neighbours, invalidate]);
+  }, [built, ground, n, active, focus, neighbours, matches, invalidate]);
 
   // Sprite size is world units; the vertex shader needs pixels per unit at z = 1.
   useEffect(() => {
@@ -1333,6 +1338,7 @@ interface SceneProps {
   active: number | null;
   focus: number | null;
   neighbours: ReadonlySet<number>;
+  matches: ReadonlySet<number>;
   restBuffers: Buffers;
   focusBuffers: Buffers;
   insetStrips: readonly number[];
@@ -1351,6 +1357,7 @@ function Scene({
   active,
   focus,
   neighbours,
+  matches,
   restBuffers,
   focusBuffers,
   insetStrips,
@@ -1371,6 +1378,7 @@ function Scene({
           active={active}
           focus={focus}
           neighbours={neighbours}
+          matches={matches}
           glow={layers.glow}
           onHover={onHover}
           onPick={onPick}
@@ -1647,7 +1655,9 @@ interface Placement {
   top: number;
 }
 
-function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: DemoProps) {
+function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highlightedIds }: DemoProps) {
+  // The active search's hits, lit while nothing is hovered or selected.
+  const matches = useMemo(() => highlightIndices(data.nodes, highlightedIds), [data.nodes, highlightedIds]);
   const [view, setView] = useState<View>('district');
   const [layers, setLayers] = useState<Layers>({ cells: true, arcs: true, insets: true, glow: true });
   const [hover, setHover] = useState<number | null>(null);
@@ -1883,6 +1893,7 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: Dem
               active={hover}
               focus={focus}
               neighbours={neighbours}
+              matches={matches}
               restBuffers={restBuffers}
               focusBuffers={focusBuffers}
               insetStrips={showInsets ? insetStrips : []}

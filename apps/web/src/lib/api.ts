@@ -128,12 +128,9 @@ export interface EdgeSummary {
 }
 
 export const api = {
-  // W15: no UI calls this today (it's the request()-helper test suite's
-  // stand-in endpoint), but it mirrors a real server route and is exactly
-  // the kind of small, self-contained method a future "server status" /
-  // uptime indicator would want — kept rather than deleted only to be
-  // re-added.
-  health: () => request<{ status: string; uptime: number }>('/health'),
+  // The header's version badge reads `version` from here: it is the running
+  // server's, which is the number a release actually carries.
+  health: () => request<{ status: string; version: string; uptime: number }>('/health'),
 
   stats: () =>
     request<{

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { api } from '../../lib/api.js';
+import { api, ApiError } from '../../lib/api.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
@@ -49,7 +49,14 @@ export default function SearchBar() {
       setContext(recallRes.context, recallRes.latencyMs);
     } catch (err) {
       if (requestId !== latestRequestId.current) return; // superseded — drop it
-      setError(err instanceof Error ? err.message : 'Search failed');
+      // Status 0 is a request that never got an answer (lib/api.ts); its raw
+      // message is "Failed to fetch: /search", which says nothing a reader
+      // can act on.
+      setError(
+        err instanceof ApiError && err.status === 0
+          ? 'Search failed — is the Engram server running?'
+          : err instanceof Error ? err.message : 'Search failed'
+      );
     } finally {
       if (requestId === latestRequestId.current) {
         setLoading(false);
@@ -63,7 +70,9 @@ export default function SearchBar() {
     setError(null);
     setSearchQuery('');
     setSearchResults([]);
-    setContext('', 0);
+    // null, not 0: a cleared search has no recall latency, and 0 printed
+    // "recall 0ms" in the status bar.
+    setContext('', null);
     setHighlightedIds(new Set());
     inputRef.current?.focus();
   }, [setSearchQuery, setSearchResults, setContext, setHighlightedIds]);

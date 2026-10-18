@@ -6,12 +6,14 @@ import { api } from '../../lib/api.js';
 import { asMemoryRecord } from '../../hooks/useWebSocket.js';
 import { GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import { parseTagLabel } from '../../lib/tagLabel.js';
-import { toPlainText } from '../../lib/plainText.js';
+import { memoryRowText, toPlainText } from '../../lib/plainText.js';
 import { formatDateTime } from '../../lib/dates.js';
 import ConfirmDialog from './ConfirmDialog.js';
 import { TypeTag } from './DataMark.js';
 
-type GraphConn = { id: string; targetId: string; relationship: string; strength: number };
+/** One edge of the selected memory, with the memory at its other end named:
+ *  a relationship and a bar alone did not say what it connects to. */
+type GraphConn = { id: string; otherId: string; otherLabel: string; relationship: string; strength: number };
 
 /** H10: the longest record in the store is 6201 characters, which rendered a
  *  ~4000px-tall column at 12px in a 210px-wide panel — with every interactive
@@ -43,6 +45,9 @@ export default function NeuronInspector() {
   const { records, removeRecord, updateRecordTags } = useMemoryStore();
   const t = useTemplateStore((s) => s.activeTemplate);
   const [conns, setConns] = useState<GraphConn[]>([]);
+  // A failed neighbourhood fetch used to make the section vanish, which read
+  // as "no connections". It is said instead.
+  const [connsError, setConnsError] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [localTags, setLocalTags] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
@@ -66,6 +71,7 @@ export default function NeuronInspector() {
 
   useEffect(() => {
     setConns([]);
+    setConnsError(false);
     setFallbackMemory(null);
     // A failure belongs to the record it happened on — moving to another
     // record clears it, along with the per-record view state.
@@ -81,12 +87,28 @@ export default function NeuronInspector() {
     api.getGraph(selectedNeuronId)
       .then((g) => {
         if (cancelled) return;
-        setConns(g.connections ?? []);
+        const labels = new Map<string, string>();
+        for (const row of g.neighbors ?? []) {
+          const neighbour = asMemoryRecord(row);
+          if (neighbour) labels.set(neighbour.id, memoryRowText(neighbour).primary);
+        }
+        setConns(
+          (g.connections ?? []).map((c) => {
+            const otherId = c.sourceId === selectedNeuronId ? c.targetId : c.sourceId;
+            return {
+              id: c.id,
+              otherId,
+              otherLabel: labels.get(otherId) ?? otherId.slice(0, 8),
+              relationship: c.relationship,
+              strength: c.strength,
+            };
+          })
+        );
         const node = asMemoryRecord(g.node);
         if (node) setFallbackMemory(node);
       })
       .catch(() => {
-        if (!cancelled) setConns([]);
+        if (!cancelled) setConnsError(true);
       });
     return () => {
       cancelled = true;
@@ -326,7 +348,13 @@ export default function NeuronInspector() {
           />
         )}
 
-        {conns.length > 0 && <ConnectionsSection conns={conns} color={color} t={t} />}
+        {connsError ? (
+          <Section label="Connections" t={t}>
+            <div style={{ ...styles.meta, color: t.textMuted }}>Could not load this memory&rsquo;s connections.</div>
+          </Section>
+        ) : (
+          conns.length > 0 && <ConnectionsSection conns={conns} color={color} onSelect={selectNeuron} t={t} />
+        )}
       </div>
 
       {/* H8: was a native confirm(). There is no un-archive route on the
@@ -490,7 +518,12 @@ function ContradictionsSection({ contradictions, records, selectedNeuronId, reso
   );
 }
 
-function ConnectionsSection({ conns, color, t }: { conns: GraphConn[]; color: string; t: UITemplate }) {
+function ConnectionsSection({ conns, color, onSelect, t }: {
+  conns: GraphConn[];
+  color: string;
+  onSelect: (id: string) => void;
+  t: UITemplate;
+}) {
   return (
     <div style={styles.section}>
       <div style={{ ...styles.sectionLabel, color: t.textMuted }}>Connections · {conns.length}</div>
@@ -498,14 +531,23 @@ function ConnectionsSection({ conns, color, t }: { conns: GraphConn[]; color: st
         {conns.map((c) => {
           const isContradiction = c.relationship === 'contradicts';
           return (
-            <div key={c.id} style={styles.connRow}>
-              <span style={{ ...styles.relBadge, background: t.inputBg, color: isContradiction ? STATUS.contradiction : t.textMuted }}>
-                {c.relationship}
+            <button
+              key={c.id}
+              className="ec-hover-tint"
+              style={styles.connItem}
+              onClick={() => onSelect(c.otherId)}
+              title={`Inspect: ${c.otherLabel}`}
+            >
+              <span style={{ ...styles.connLabel, color: t.textPrimary }}>{c.otherLabel}</span>
+              <span style={styles.connRow}>
+                <span style={{ ...styles.relBadge, background: t.inputBg, color: isContradiction ? STATUS.contradiction : t.textMuted }}>
+                  {c.relationship}
+                </span>
+                <span style={{ ...styles.strengthTrack, background: t.inputBg }}>
+                  <span style={{ ...styles.strengthFill, width: `${Math.round(c.strength * 100)}%`, background: isContradiction ? STATUS.contradiction : color }} />
+                </span>
               </span>
-              <div style={{ ...styles.strengthTrack, background: t.inputBg }}>
-                <div style={{ ...styles.strengthFill, width: `${Math.round(c.strength * 100)}%`, background: isContradiction ? STATUS.contradiction : color }} />
-              </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -613,8 +655,14 @@ const styles = {
     borderRadius: RADIUS.tight, padding: `${SPACE['3xs']} ${SPACE.sm}`, textTransform: 'capitalize' as const, minHeight: 24,
   },
   connList: { display: 'flex', flexDirection: 'column' as const, gap: SPACE.xs },
-  connRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm },
+  connItem: {
+    display: 'flex', flexDirection: 'column' as const, gap: SPACE['3xs'],
+    width: '100%', padding: `${SPACE['3xs']} 0`, background: 'transparent', border: 'none',
+    borderRadius: RADIUS.tight, textAlign: 'left' as const, fontFamily: 'inherit', cursor: 'pointer',
+  },
+  connLabel: { fontSize: TYPE.sm, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, maxWidth: '100%' },
+  connRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm, width: '100%' },
   relBadge: { fontSize: TYPE.xs, padding: `${SPACE['3xs']} ${SPACE.xs}`, borderRadius: RADIUS.tight, whiteSpace: 'nowrap' as const, minWidth: '82px', lineHeight: 1.4 },
-  strengthTrack: { flex: 1, height: '3px', borderRadius: '2px', overflow: 'hidden' },
-  strengthFill: { height: '100%', borderRadius: '2px', opacity: 0.75 },
+  strengthTrack: { display: 'block', flex: 1, height: '3px', borderRadius: '2px', overflow: 'hidden' },
+  strengthFill: { display: 'block', height: '100%', borderRadius: '2px', opacity: 0.75 },
 } as const;

@@ -181,6 +181,10 @@ export interface DemoProps {
    *  a plate change with the selection intact. */
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  /** The memories the active search returned (`memoryStore.highlightedIds`),
+   *  empty when no search is active. While nothing is hovered or selected, a
+   *  plate lights these and recedes the rest. */
+  highlightedIds: ReadonlySet<string>;
 }
 
 /**
@@ -304,4 +308,18 @@ export function linkColor(link: Pick<ObsLink, 'kind' | 'step'>): string {
 /** Same, as a 0xrrggbb integer, for three.js materials. */
 export function linkColorInt(link: Pick<ObsLink, 'kind' | 'step'>): number {
   return parseInt(linkColor(link).slice(1), 16);
+}
+
+/** `highlightedIds` as indices into `nodes` — the form every plate's bead
+ *  colouring already works in. */
+export function highlightIndices(
+  nodes: readonly Pick<ObsNode, 'id'>[],
+  ids: ReadonlySet<string>
+): ReadonlySet<number> {
+  const out = new Set<number>();
+  if (ids.size === 0) return out;
+  nodes.forEach((node, i) => {
+    if (ids.has(node.id)) out.add(i);
+  });
+  return out;
 }

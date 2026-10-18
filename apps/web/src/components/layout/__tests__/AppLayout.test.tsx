@@ -47,6 +47,8 @@ vi.mock('../../../lib/api.js', () => ({
     listMemories: vi.fn(),
     getContradictions: vi.fn(),
     stats: vi.fn().mockResolvedValue({ total: 0, byType: {}, bySource: {} }),
+    health: vi.fn().mockResolvedValue({ status: 'ok', version: '0.5.0', uptime: 1 }),
+    deleteMemory: vi.fn(),
     // The plate data layer's three calls. They are `api` methods, so they are
     // stubbed alongside every other call the layout makes — there is no second
     // entry point that could carry a different key or a different timeout.
@@ -186,6 +188,53 @@ describe('AppLayout effect wiring (W12)', () => {
     await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalledTimes(layoutCalls + 1));
     await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalledTimes(edgeCalls + 1));
+  });
+
+  /** The effect used to key on the loaded record count, which went 0 -> N
+   *  when the first page landed: every cold load asked for all three twice. */
+  it('loads the plate data exactly once on a cold load', async () => {
+    vi.mocked(api.listMemories).mockResolvedValueOnce({
+      count: 3,
+      memories: [record({ id: 'a' }), record({ id: 'b' }), record({ id: 'c' })],
+    });
+
+    render(<AppLayout />);
+    await waitFor(() => expect(useMemoryStore.getState().records).toHaveLength(3));
+    await waitFor(() => expect(plateProps().memories).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(getGraphLayout).toHaveBeenCalledTimes(1);
+    expect(getGraphEdges).toHaveBeenCalledTimes(1);
+    expect(getDecayPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it('pages the list with the server offset, without refetching the plate data', async () => {
+    vi.mocked(api.stats).mockResolvedValue({ total: 3, byType: { semantic: 3 }, bySource: {} });
+    vi.mocked(api.listMemories)
+      .mockResolvedValueOnce({ count: 2, memories: [record({ id: 'a' }), record({ id: 'b' })] })
+      .mockResolvedValueOnce({ count: 1, memories: [record({ id: 'c' })] });
+
+    render(<AppLayout />);
+    fireEvent.click(await screen.findByRole('button', { name: /load more/i }));
+
+    await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['a', 'b', 'c']));
+    expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, offset: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getGraphLayout).toHaveBeenCalledTimes(1);
+    vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
+  });
+
+  it('asks the server for a fresh census when a memory arrives instead of waiting for the poll', async () => {
+    vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
+
+    render(<AppLayout />);
+    await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalled());
+    const before = vi.mocked(api.stats).mock.calls.length;
+
+    act(() => {
+      useMemoryStore.getState().addRecord(record({ id: 'b' }));
+    });
+    await waitFor(() => expect(vi.mocked(api.stats).mock.calls.length).toBe(before + 1));
   });
 
   it('asks for the whole edge set once, not one graph request per important memory', async () => {
@@ -364,6 +413,20 @@ describe('AppLayout owns Escape', () => {
     expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
   });
 
+  it('closes only the archive confirmation, keeping the memory it was confirming selected', async () => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
+    render(<AppLayout />);
+    await waitFor(() => expect(useMemoryStore.getState().records).toHaveLength(1));
+    act(() => useNeuralStore.getState().selectNeuron('a'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /archive memory/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    pressEscape(document);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
+  });
+
   it('stands down for anything a nearer component already handled', async () => {
     render(<AppLayout />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
@@ -429,6 +492,25 @@ describe('AppLayout store-memory modal integration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('AppLayout version badge', () => {
+  beforeEach(() => {
+    resetAll();
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
+  });
+
+  it("shows the running server's version, not the web package's", async () => {
+    render(<AppLayout />);
+    expect(await screen.findByText('v0.5.0')).toBeInTheDocument();
+  });
+
+  it('shows no version at all until the server has said which one it is', async () => {
+    vi.mocked(api.health).mockRejectedValueOnce(new Error('offline'));
+    const { container } = render(<AppLayout />);
+    await waitFor(() => expect(api.health).toHaveBeenCalled());
+    expect(container.querySelector('.ec-logo-badge')).toBeNull();
   });
 });
 

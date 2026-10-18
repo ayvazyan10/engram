@@ -108,6 +108,7 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import {
   PLATE_COLORS,
   RETENTION_LABEL,
+  highlightIndices,
   linkColorInt,
   type DemoModule,
   type DemoProps,
@@ -1290,7 +1291,9 @@ function CameraRig({ plan }: { plan: Plan }) {
 const STILL = 'oad-still';
 const NO_ARCS: readonly number[] = [];
 
-function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: DemoProps) {
+function Plate({ data, width, height, reducedMotion, selectedId, onSelect, highlightedIds }: DemoProps) {
+  // The active search's hits, lit while nothing is hovered or selected.
+  const matches = useMemo(() => highlightIndices(data.nodes, highlightedIds), [data.nodes, highlightedIds]);
   // The structure decides how many blocks the store actually comes to, and the
   // field is then fitted to that number. Fitting to the *target* instead would
   // put the last few blocks outside the outline they are supposed to sit in.
@@ -1437,14 +1440,21 @@ function Plate({ data, width, height, reducedMotion, selectedId, onSelect }: Dem
   const live = hoverRow ?? (view.anchor !== null ? 0 : null);
 
   const touching = useMemo(() => {
-    if (live === null) return null;
+    if (live === null) {
+      // Nothing focused: the search's hits among the rows on show, if any.
+      const hits = new Set<number>();
+      shown.forEach((index, i) => {
+        if (matches.has(index)) hits.add(i);
+      });
+      return hits.size > 0 ? hits : null;
+    }
     const set = new Set<number>([live]);
     for (const arc of lantern.ends) {
       if (arc.a === live) set.add(arc.b);
       else if (arc.b === live) set.add(arc.a);
     }
     return set;
-  }, [live, lantern]);
+  }, [live, lantern, shown, matches]);
 
   const focusArcs = useMemo<readonly number[]>(() => {
     if (live === null) return NO_ARCS;
