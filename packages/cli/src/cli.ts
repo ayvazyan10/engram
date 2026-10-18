@@ -1201,51 +1201,175 @@ program
 
 // ─── import ──────────────────────────────────────────────────────────────────
 
-program
-  .command('import')
-  .description('Import memories from JSON or NDJSON (stdin). Creates NEW records — ids and timestamps are not preserved, so re-running duplicates.')
-  .option('--dry-run', 'Preview only')
-  .action(async (opts) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-    const input = Buffer.concat(chunks).toString('utf8').trim();
-    if (!input) { console.error('No input. Pipe a JSON file: engram import < backup.json'); process.exit(1); }
+type ImportMemory = Record<string, unknown>;
+type ImportData = { memories: ImportMemory[]; parseFailures: number };
 
-    // Detect the format by trying to parse the whole document first. The old
-    // heuristic (starts with '{' AND contains '\n{') misread a single-line
-    // NDJSON file as JSON and imported nothing, and a pretty-printed JSON export
-    // as NDJSON.
-    let memories: Array<Record<string, unknown>> = [];
-    let parseFailures = 0;
+function parseStdinImport(input: string): ImportData {
+  // Detect the format by trying to parse the whole document first. The old
+  // heuristic (starts with '{' AND contains '\n{') misread a single-line
+  // NDJSON file as JSON and imported nothing, and a pretty-printed JSON export
+  // as NDJSON.
+  let memories: Array<Record<string, unknown>> = [];
+  let parseFailures = 0;
 
+  try {
+    const doc = JSON.parse(input) as {
+      type?: string;
+      data?: Record<string, unknown>;
+      memories?: Array<Record<string, unknown>>;
+    };
+    // A single-record NDJSON line parses as a whole JSON document too, but
+    // has no `memories` key — treat its `data` as the one memory.
+    memories = doc.type === 'memory' && doc.data ? [doc.data] : doc.memories ?? [];
+  } catch {
+    for (const line of input.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed) as { type?: string; data?: Record<string, unknown> };
+        if (entry.type === 'memory' && entry.data) memories.push(entry.data);
+      } catch {
+        // One malformed line must not abort the whole import.
+        parseFailures++;
+      }
+    }
+  }
+  return { memories, parseFailures };
+}
+
+function parseFactLines(input: string, tag: string): ImportMemory[] {
+  return input.split(/\r?\n/)
+    .map((line) => line.trim().replace(/^(?:[-*+•]|\d+[.)])[ \t]+/, '').trim())
+    .filter(Boolean)
+    .map((content) => ({ content, type: 'semantic', tags: [tag] }));
+}
+
+function parseChatgpt(input: string): ImportData {
+  if (!/^[\[{]/.test(input)) {
+    return { memories: parseFactLines(input, 'import:chatgpt'), parseFailures: 0 };
+  }
+  const entries: unknown = JSON.parse(input);
+  if (!Array.isArray(entries)) throw new Error('ChatGPT JSON must be an array of strings or memory objects.');
+  const memories = entries.flatMap((entry: unknown) => {
+    const value = typeof entry === 'object' && entry !== null
+      ? ['content', 'memory', 'text'].map((key) => (entry as ImportMemory)[key])
+        .find((field) => typeof field === 'string' && field.trim())
+      : entry;
+    return typeof value === 'string' && value.trim()
+      ? [{ content: value.trim(), type: 'semantic', tags: ['import:chatgpt'] }]
+      : [];
+  });
+  return { memories, parseFailures: entries.length - memories.length };
+}
+
+function markdownBullets(input: string): string[] {
+  return input.split(/(?=^(?:[-*+]|\d+[.)])[ \t]+)/m)
+    .map((part) => part.trim().replace(/^(?:[-*+]|\d+[.)])[ \t]+/, '').trim())
+    .filter(Boolean);
+}
+
+function parseMarkdown(input: string, basename: string): ImportMemory[] {
+  const record = (content: string, concept?: string): ImportMemory => ({
+    content, type: 'semantic', tags: ['import:markdown', basename], ...(concept ? { concept } : {}),
+  });
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/.exec(input);
+  if (frontmatter) {
+    const rawName = /^name:[ \t]*(.+)$/m.exec(frontmatter[1] ?? '')?.[1]?.trim();
+    const name = rawName?.startsWith('"') ? String(JSON.parse(rawName))
+      : rawName?.replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
+    const body = (frontmatter[2] ?? '').trim();
+    return body ? [record(body, name)] : [];
+  }
+  const indexLines = input.split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => line && !/^#{1,6}\s/.test(line));
+  if (basename.toUpperCase() === 'MEMORY.MD' && indexLines.length > 0
+    && indexLines.every((line) => /^- \[[^\]]+\]\([^)]*\.md\)(?:\s+[—–-].*)?$/.test(line))) return [];
+  // Capturing the heading leaves alternating heading/body entries after the preamble.
+  const sections = input.split(/^#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*\r?$/m);
+  const preamble = markdownBullets(sections[0] ?? '').map((content) => record(content));
+  return [...preamble, ...sections.flatMap((section, index) => {
+    if (index === 0 || index % 2 === 0) return [];
+    const content = sections[index + 1]?.trim();
+    return content ? [record(content, section.trim())] : [];
+  })];
+}
+
+function markdownFiles(file: string): string[] {
+  if (!fs.statSync(file).isDirectory()) return [file];
+  return fs.readdirSync(file, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap((entry) => {
+      const child = path.join(file, entry.name);
+      if (entry.isDirectory()) return markdownFiles(child);
+      return entry.isFile() && /\.md$/i.test(entry.name) ? [child] : [];
+    });
+}
+
+async function readImport(format: string | undefined, file: string | undefined): Promise<ImportData> {
+  if (format) {
+    if (!['markdown', 'chatgpt', 'claude'].includes(format)) throw new Error(`Unknown import format: ${format}`);
+    if (!file) throw new Error(`A path is required for --from ${format}.`);
+    if (format === 'markdown') {
+      return { memories: markdownFiles(file).flatMap((name) =>
+        parseMarkdown(fs.readFileSync(name, 'utf8').trim(), path.basename(name))), parseFailures: 0 };
+    }
+    const input = fs.readFileSync(file, 'utf8').trim();
+    return format === 'chatgpt' ? parseChatgpt(input)
+      : { memories: parseFactLines(input, 'import:claude'), parseFailures: 0 };
+  }
+  if (file) throw new Error('Use --from <format> with a path, or pipe JSON/NDJSON to stdin.');
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const input = Buffer.concat(chunks).toString('utf8').trim();
+  if (!input) throw new Error('No input. Pipe a JSON file: engram import < backup.json');
+  return parseStdinImport(input);
+}
+
+async function postImport(memories: ImportMemory[], batch: boolean) {
+  let imported = 0;
+  let skipped = 0;
+  let firstError: string | undefined;
+  const size = batch ? 1000 : 1; // The batch route accepts at most 1000 records.
+  for (let offset = 0; offset < memories.length; offset += size) {
+    const group = memories.slice(offset, offset + size);
     try {
-      const doc = JSON.parse(input) as {
-        type?: string;
-        data?: Record<string, unknown>;
-        memories?: Array<Record<string, unknown>>;
-      };
-      // A single-record NDJSON line parses as a whole JSON document too, but
-      // has no `memories` key — treat its `data` as the one memory.
-      memories = doc.type === 'memory' && doc.data ? [doc.data] : doc.memories ?? [];
-    } catch {
-      for (const line of input.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          const entry = JSON.parse(trimmed) as { type?: string; data?: Record<string, unknown> };
-          if (entry.type === 'memory' && entry.data) memories.push(entry.data);
-        } catch {
-          // One malformed line must not abort the whole import.
-          parseFailures++;
+      const records = group.map((m) => ({
+        content: m.content, type: m.type ?? 'episodic', source: m.source ?? 'import',
+        importance: m.importance, concept: m.concept,
+        tags: typeof m.tags === 'string' ? JSON.parse(m.tags) : m.tags,
+        metadata: typeof m.metadata === 'string' ? JSON.parse(m.metadata) : m.metadata,
+        sessionId: m.sessionId, namespace: m.namespace,
+      }));
+      // Stdin exports retain the single-record route: batch drops metadata/sessionId.
+      await api('POST', batch ? '/api/memory/batch' : '/api/memory',
+        batch ? { memories: records } : records[0]);
+      imported += group.length;
+    } catch (err) {
+      skipped += group.length;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!firstError) {
+        firstError = message;
+        if (imported === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
+          fail(`Cannot reach the Engram API at ${getApiBase()} — is the server running? (engram start)`);
+          process.exit(1);
         }
       }
     }
+  }
+  return { imported, skipped, firstError };
+}
 
-    if (parseFailures > 0) warn(`${parseFailures} malformed line(s) skipped`);
-
+program
+  .command('import [path]')
+  .description('Import stdin JSON/NDJSON or memory files. Creates NEW records — ids and timestamps are not preserved, so re-running duplicates.')
+  .option('--from <format>', 'File format: markdown, chatgpt, or claude')
+  .option('--dry-run', 'Preview only')
+  .action(async (file: string | undefined, opts: { from?: string; dryRun?: boolean }) => {
+    const { memories, parseFailures } = await readImport(opts.from, file);
+    if (parseFailures > 0) warn(`${parseFailures} malformed ${opts.from ? 'record(s)' : 'line(s)'} skipped`);
     console.log(`Found ${memories.length} memories to import`);
     if (memories.length === 0 && parseFailures === 0) {
-      console.error('Nothing to import — input is neither a JSON export nor NDJSON.');
+      console.error(opts.from ? 'Nothing to import — no memories found.'
+        : 'Nothing to import — input is neither a JSON export nor NDJSON.');
       process.exit(1);
     }
     if (opts.dryRun) {
@@ -1256,41 +1380,8 @@ program
       console.log('Dry run — no changes.');
       return;
     }
-
-    let imported = 0;
-    let skipped = 0;
-    let firstError: string | undefined;
-
-    for (const m of memories) {
-      try {
-        await api('POST', '/api/memory', {
-          content: m.content, type: m.type ?? 'episodic', source: m.source ?? 'import',
-          importance: m.importance, concept: m.concept,
-          tags: typeof m.tags === 'string' ? JSON.parse(m.tags as string) : m.tags,
-          metadata: typeof m.metadata === 'string' ? JSON.parse(m.metadata as string) : m.metadata,
-          sessionId: m.sessionId,
-          namespace: m.namespace,
-        });
-        imported++;
-      } catch (err) {
-        skipped++;
-        const message = err instanceof Error ? err.message : String(err);
-        // Capture the reason. Swallowing every error made a stopped server look
-        // like 500 bad records ("Imported: 0  Skipped: 500") with no clue why.
-        if (!firstError) {
-          firstError = message;
-          // A connection error on the very first record means the server is not
-          // reachable at all — fail fast instead of "skipping" the whole file.
-          if (imported === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
-            fail(`Cannot reach the Engram API at ${getApiBase()} — is the server running? (engram start)`);
-            process.exit(1);
-          }
-        }
-      }
-    }
-
-    skipped += parseFailures;
-    console.log(`Imported: ${imported}  Skipped: ${skipped}`);
+    const { imported, skipped, firstError } = await postImport(memories, Boolean(opts.from));
+    console.log(`Imported: ${imported}  Skipped: ${skipped + parseFailures}`);
     if (firstError) fail(`First failure: ${firstError}`);
     if (firstError || parseFailures > 0) process.exitCode = 1;
   });

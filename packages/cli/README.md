@@ -101,7 +101,32 @@ engram import < backup.json
 ```
 
 `import` creates **new** records — ids and timestamps are not preserved, so
-re-running it duplicates. Use `--dry-run` to preview.
+re-running it duplicates. Use `--dry-run` to preview the memory count without
+sending requests. Without `--from`, stdin JSON/NDJSON imports are unchanged.
+
+```bash
+engram import --from markdown ./CLAUDE.md
+engram import --from markdown ./memory/ --dry-run
+engram import --from chatgpt ./memories.json
+engram import --from claude ./memories.txt
+```
+
+- `markdown`: recursively reads `.md` files in a directory, or a single file.
+  Heading sections become memories with the heading as `concept`; text outside
+  sections splits at top-level bullets. Claude Code memory files with YAML
+  frontmatter keep the entire body as one memory, with `name` as `concept`.
+  `MEMORY.md` link-only indexes are skipped. Tags: `import:markdown` and the
+  filename (including `.md`).
+- `chatgpt`: one fact per nonempty text line (leading bullets removed), or a
+  JSON array of strings or objects containing `content`, `memory`, or `text`.
+  Tag: `import:chatgpt`.
+- `claude`: one fact per nonempty text/markdown line, with leading bullets
+  removed. Tag: `import:claude`.
+
+These file formats create semantic memories and send batches of up to 1,000
+records. Stdin imports keep per-record requests to preserve metadata and session
+IDs. Invalid records or failed requests produce a nonzero exit code and skipped
+counts; an input containing no memories also exits nonzero.
 
 ## Cloud Sync
 
