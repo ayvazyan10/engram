@@ -96,6 +96,7 @@ describe('storeSession in isolated mode', () => {
       expect(rows[0]).toMatchObject({
         namespace: directory, content: 'Implemented project scoped session memory',
       });
+      expect(JSON.parse(rows[0]!.tags)).toEqual(['session-summary', 'auto-stored', 'pending-distill']);
     } finally {
       vi.restoreAllMocks();
       closeDb();

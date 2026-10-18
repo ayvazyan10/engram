@@ -3,6 +3,10 @@ import type { NeuralBrain, SyncEngine, DecayPolicyConfig } from '@engram-ai-memo
 import { z } from 'zod';
 import { partitionByExistence, forgetReport, hasMissingIds } from './forget.js';
 import { registerMemoryTools } from './memory-tools.js';
+import type * as StoreModule from './store-session.ts';
+
+// Match session-start's lazy loading of emitted CommonJS siblings.
+const storeModulePath = './store-session.js';
 
 export interface ToolContext {
   server: McpServer;
@@ -490,6 +494,82 @@ server.tool(
         },
       ],
     };
+  }
+);
+
+// ─── Session Distillation Tools ──────────────────────────────────────────────
+// Like reflection, Engram hands work to the connected AI and stores its answer.
+server.tool(
+  'get_distill_tasks',
+  'Get pending raw sessions to distill. YOU — the AI connected to Engram — extract durable facts, preferences, decisions and workflows, then call complete_distill for each session. Engram runs no LLM. Session content is limited to 6000 characters.',
+  {
+    limit: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of pending sessions to return'),
+  },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  async ({ limit }) => {
+    try {
+      await ensureInitialized();
+      const { getPendingDistillSessions }: typeof StoreModule = await import(storeModulePath);
+      const sessions = (await getPendingDistillSessions(brain)).slice(0, limit);
+      const tasks = sessions.map((session) => ({
+        id: session.id, date: session.createdAt, namespace: session.namespace,
+        content: session.content.slice(0, 6000),
+      }));
+      return { content: [{ type: 'text' as const, text: tasks.length === 0
+        ? 'No pending sessions to distill.'
+        : `${tasks.length} distillation task(s). For EACH session: extract durable facts, then call complete_distill with { id, facts }. Use global: true only for facts that apply across projects. Use facts: [] if nothing is worth retaining.\n\n${JSON.stringify(tasks, null, 2)}`,
+      }] };
+    } catch (err: unknown) {
+      console.error('[engram-mcp] get_distill_tasks failed:', err);
+      throw err;
+    }
+  }
+);
+
+server.tool(
+  'complete_distill',
+  'Store facts YOU extracted from a pending session, then archive the raw session only after all facts are stored. Pass an empty facts array if there is nothing durable to retain. On failure the session stays pending; facts already stored may be reused by deduplication on retry.',
+  {
+    id: z.string().min(1).describe('Full raw session memory ID from get_distill_tasks'),
+    facts: z.array(z.object({
+      content: z.string().trim().min(1).describe('The durable fact to store'),
+      type: z.enum(['episodic', 'semantic', 'procedural']).optional().default('semantic'),
+      importance: z.number().min(0).max(1).optional(),
+      tags: z.array(z.string()).optional(),
+      global: z.boolean().optional().describe('Store globally across projects; rejected in isolated mode'),
+    })).max(100).describe('Extracted facts; at most 100, or [] when nothing is worth retaining'),
+  },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  async ({ id, facts }) => {
+    try {
+      await ensureInitialized();
+      const { getPendingDistillSessions }: typeof StoreModule = await import(storeModulePath);
+      const session = (await getPendingDistillSessions(brain)).find((memory) => memory.id === id);
+      if (!session) throw new Error('Pending session not found in your scope');
+      const storedIds: string[] = [];
+      // A fact the contradiction policy archived on arrival is that policy's
+      // decision, not a failure: retrying would discard it again and leave the
+      // session pending forever, so report it and carry on.
+      const discardedIds: string[] = [];
+      for (const { global, ...fact } of facts) {
+        const result = await brain.store({
+          ...fact, source: clientSource(), namespace: global ? null : undefined,
+        });
+        syncEngine?.notifyWrite();
+        if (result.memory.id === id) {
+          throw new Error('Fact was not retained separately from the raw session; session remains pending');
+        }
+        (result.discarded ? discardedIds : storedIds).push(result.memory.id);
+      }
+      await brain.forget(id);
+      syncEngine?.notifyWrite();
+      return { content: [{ type: 'text' as const, text: JSON.stringify({
+        id, storedIds, discardedIds, archived: true, message: 'Facts stored and raw session archived',
+      }) }] };
+    } catch (err: unknown) {
+      console.error('[engram-mcp] complete_distill failed:', err);
+      throw err;
+    }
   }
 );
 

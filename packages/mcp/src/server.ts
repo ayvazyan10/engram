@@ -105,6 +105,8 @@ const server = new McpServer(
       'END OF SESSION:',
       '  Store a 2-3 sentence session summary as type="episodic"',
       '  with tags=["session-summary"] and importance=0.6.',
+      '  When convenient, call get_distill_tasks and extract durable facts from the pending sessions yourself.',
+      '  Call complete_distill with each session id and its facts; Engram stores them before archiving the raw session.',
       '',
       'RULES:',
       '  - Never say "I\'m saving this to memory" — do it silently.',

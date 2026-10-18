@@ -18,6 +18,14 @@ export { resolveDbPath };
 /** Shortest summary worth a row — anything below this is a hook misfire. */
 const MIN_CONTENT_LENGTH = 10;
 
+/** Pending live sessions visible under core's namespace rules. */
+export async function getPendingDistillSessions(brain: NeuralBrain) {
+  // getByTag filters before slicing. Apply the access check before our limit
+  // too: filter mode without a namespace must only expose global memories.
+  const sessions = await brain.getByTag('pending-distill', Number.MAX_SAFE_INTEGER);
+  return sessions.filter((session) => brain.canAccessNamespace(session.namespace));
+}
+
 /**
  * The summary to store: the command line if there is one, otherwise stdin.
  * Split out from main() so the argv/stdin choice is testable without a process.
@@ -62,7 +70,7 @@ export async function storeSession(content: string, env: NamespaceEnv): Promise<
       content,
       type: 'episodic',
       source,
-      tags: ['session-summary', 'auto-stored'],
+      tags: ['session-summary', 'auto-stored', 'pending-distill'],
       importance: 0.6,
       ...(namespace ? { namespace } : {}),
     });

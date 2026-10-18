@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   construct: vi.fn(),
   mkdir: vi.fn(),
   git: vi.fn(),
+  getByTag: vi.fn(),
+  canAccessNamespace: vi.fn(),
 }));
 
 vi.mock('node:fs', () => ({ mkdirSync: mocks.mkdir }));
@@ -21,6 +23,8 @@ vi.mock('@engram-ai-memory/core', async (importOriginal) => ({
     initialize = mocks.initialize;
     recall = mocks.recall;
     shutdown = mocks.shutdown;
+    getByTag = mocks.getByTag;
+    canAccessNamespace = mocks.canAccessNamespace;
   },
 }));
 
@@ -30,6 +34,8 @@ beforeEach(() => {
     args.includes('--show-toplevel') ? '/work/neuralCore\n' : 'feature/memory\n');
   mocks.initialize.mockResolvedValue(undefined);
   mocks.recall.mockResolvedValue({ context: 'Past project decisions.' });
+  mocks.getByTag.mockResolvedValue([]);
+  mocks.canAccessNamespace.mockReturnValue(true);
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -99,6 +105,15 @@ describe('runSessionStart', () => {
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
 
+  it('keeps the recalled context when counting pending sessions fails', async () => {
+    mocks.getByTag.mockImplementation(() => { throw new Error('brain failed'); });
+    const write = vi.fn();
+    expect(await runSessionStart('{"cwd":"/work/neuralCore"}', env, write)).toBe(0);
+    expect(write).toHaveBeenCalledOnce();
+    expect(write.mock.calls[0]![0]).toContain('Past project decisions.');
+    expect(write.mock.calls[0]![0]).not.toContain('get_distill_tasks');
+  });
+
   it('is silent and exits zero when the DB directory cannot be created', async () => {
     mocks.mkdir.mockImplementation(() => { throw new Error('invalid DB path'); });
     const write = vi.fn();
@@ -119,5 +134,27 @@ describe('runSessionStart', () => {
     const write = vi.fn();
     expect(await runSessionStart('{}', env, write)).toBe(0);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it.each(['', 'x'.repeat(7000)])('adds one bounded reminder even with empty or full recall', async (context) => {
+    mocks.recall.mockResolvedValue({ context });
+    mocks.getByTag.mockResolvedValue([{ namespace: 'work' }, { namespace: null }]);
+    const write = vi.fn();
+    await runSessionStart('{}', env, write);
+    const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
+    expect(output.length).toBeLessThanOrEqual(6000);
+    expect(output.split('\n').filter((line) => line.includes('get_distill_tasks'))).toEqual([
+      '2 past sessions are waiting to be distilled — call get_distill_tasks when convenient.',
+    ]);
+    expect(mocks.getByTag).toHaveBeenCalledWith('pending-distill', Number.MAX_SAFE_INTEGER);
+  });
+
+  it('adds no reminder when pending sessions are outside the caller scope', async () => {
+    mocks.getByTag.mockResolvedValue([{ namespace: 'other' }]);
+    mocks.canAccessNamespace.mockReturnValue(false);
+    const write = vi.fn();
+    await runSessionStart('{}', env, write);
+    expect(JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext)
+      .toBe('Past project decisions.');
   });
 });
