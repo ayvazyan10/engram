@@ -50,6 +50,17 @@ Claude Desktop  →  node ~/.engram/mcp/server/index.js
 
 ## MCP Integration (Claude Code, Cursor, Windsurf, Cline)
 
+### Claude Code plugin (recommended)
+
+Run these commands in Claude Code:
+
+```text
+/plugin marketplace add ayvazyan10/engram
+/plugin install engram@engram
+```
+
+The plugin connects Engram's MCP tools and recalls project memory automatically at SessionStart. At SessionEnd, it saves a summary of the assistant's transcript in the background using the same local database, without requiring the REST server. Node.js 22 or newer and npm are required.
+
 The MCP server exposes Engram as native tools inside any MCP-compatible AI client. No API calls needed — your AI uses `store_memory`, `recall_context`, etc. directly as tool calls.
 
 ### Setup
@@ -73,7 +84,7 @@ reads its own file — check its documentation and paste the same block there.
   "mcpServers": {
     "engram": {
       "command": "npx",
-      "args": ["-y", "@engram-ai-memory/mcp@latest"],
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
       "env": {
         "ENGRAM_DB_PATH": "~/.engram/engram.db",
         "ENGRAM_SOURCE": "claude-code"
@@ -99,7 +110,8 @@ pnpm turbo run build --filter=@engram-ai-memory/mcp
       "command": "node",
       "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
       "env": {
-        "ENGRAM_DB_PATH": "~/.engram/engram.db"
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "claude-code"
       }
     }
   }
@@ -107,6 +119,230 @@ pnpm turbo run build --filter=@engram-ai-memory/mcp
 ```
 
 **Restart your AI client** — 21 tools will appear automatically.
+
+### Claude Code
+
+```bash
+claude mcp add engram -s user -e ENGRAM_DB_PATH=$HOME/.engram/engram.db -e ENGRAM_SOURCE=claude-code -- npx -y -p @engram-ai-memory/mcp@latest engram-mcp
+```
+
+### Claude Desktop
+
+`claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "claude-desktop"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+`~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "cursor"
+      }
+    }
+  }
+}
+```
+
+Cursor ignores MCP server instructions, so add `.cursor/rules/engram.mdc`:
+
+```
+At the start of each task call recall_context; store decisions with store_memory
+```
+
+### Windsurf
+
+`~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "windsurf"
+      }
+    }
+  }
+}
+```
+
+### Cline
+
+`cline_mcp_settings.json` (Cline → MCP Servers → Configure):
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "cline"
+      }
+    }
+  }
+}
+```
+
+### VS Code
+
+`.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "engram": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "vscode"
+      }
+    }
+  }
+}
+```
+
+### Codex CLI
+
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.engram]
+command = "npx"
+args = ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"]
+env = { ENGRAM_DB_PATH = "~/.engram/engram.db", ENGRAM_SOURCE = "codex" }
+startup_timeout_sec = 60
+```
+
+Add to `AGENTS.md`:
+
+```
+At the start of each task call recall_context; store decisions with store_memory
+```
+
+### Gemini CLI
+
+`~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "gemini-cli"
+      }
+    }
+  }
+}
+```
+
+Add to `GEMINI.md`:
+
+```
+At the start of each task call recall_context; store decisions with store_memory
+```
+
+### OpenCode
+
+`opencode.json`:
+
+```json
+{
+  "mcp": {
+    "engram": {
+      "type": "local",
+      "command": ["npx", "-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "environment": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "opencode"
+      }
+    }
+  }
+}
+```
+
+### Zed
+
+`settings.json`:
+
+```json
+{
+  "context_servers": {
+    "engram": {
+      "command": {
+        "path": "npx",
+        "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+        "env": {
+          "ENGRAM_DB_PATH": "~/.engram/engram.db",
+          "ENGRAM_SOURCE": "zed"
+        }
+      }
+    }
+  }
+}
+```
+
+### Continue
+
+`~/.continue/config.yaml`:
+
+```yaml
+mcpServers:
+  - name: engram
+    command: npx
+    args: ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"]
+    env:
+      ENGRAM_DB_PATH: "~/.engram/engram.db"
+      ENGRAM_SOURCE: continue
+```
+
+### LM Studio
+
+`~/.lmstudio/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "env": {
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "lm-studio"
+      }
+    }
+  }
+}
+```
 
 ### Auto-store conversations (optional)
 
@@ -482,7 +718,7 @@ pnpm turbo run build --filter=@engram-ai-memory/adapter-ollama
 **2. Start the proxy**
 
 ```bash
-ENGRAM_DB_PATH=/path/to/engram.db \
+ENGRAM_API=http://localhost:4901 \
   node adapters/ollama/dist/proxy.js
 ```
 
@@ -507,6 +743,7 @@ base_url = "http://localhost:11435/v1"
 | `ENGRAM_PROXY_HOST` | `127.0.0.1` | Bind address — see below |
 | `OLLAMA_TARGET` | `http://localhost:11434` | Real Ollama server URL. Parsed at startup; an unparseable value exits non-zero |
 | `ENGRAM_API` | `http://localhost:4901` | Engram REST API URL |
+| `ENGRAM_API_KEY` | *(none)* | Sent as `X-API-Key` to the Engram REST API when set |
 | `ENGRAM_MAX_TOKENS` | `1500` | Max context tokens to inject |
 | `ENGRAM_MAX_BODY_BYTES` | `10485760` (10 MiB) | Ceiling on a buffered request body. Over it, the proxy answers `413 Payload Too Large` and destroys the socket rather than draining a body it has already refused. Raise it for large multimodal requests |
 | `ENGRAM_TOOL_RETRY` | `true` | Retry once when model misses a tool call (`false` to disable) |
@@ -547,7 +784,8 @@ Asterisk has full MCP client support. Add Engram as an MCP server in `~/.asteris
       "command": "node",
       "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
       "env": {
-        "ENGRAM_DB_PATH": "/path/to/engram.db"
+        "ENGRAM_DB_PATH": "/path/to/engram.db",
+        "ENGRAM_SOURCE": "asterisk"
       }
     }
   ]

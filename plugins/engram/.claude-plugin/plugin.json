@@ -1,0 +1,7 @@
+{
+  "name": "engram",
+  "version": "0.1.0",
+  "description": "Persistent memory with automatic session recall and capture for Claude Code.",
+  "author": { "name": "ayvazyan10" },
+  "repository": "https://github.com/ayvazyan10/engram"
+}

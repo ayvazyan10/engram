@@ -133,6 +133,12 @@ export function configureMcpClient(
 ): void {
   const target = resolveMcpClient(source, home);
 
+  if (target.id === 'claude-code') {
+    console.log('  Claude Code plugin (recommended):');
+    console.log('  /plugin marketplace add ayvazyan10/engram');
+    console.log('  /plugin install engram@engram');
+  }
+
   if (target.kind === 'manual') {
     warn(`No MCP config file is known for --source ${source} — nothing was registered.`);
     console.log(`  ${D}Engram can configure: ${supportedClientList()}${X}`);
@@ -230,4 +236,3 @@ export function setupClaudeCode(
 }
 
 /* eslint-enable @typescript-eslint/no-explicit-any */
-

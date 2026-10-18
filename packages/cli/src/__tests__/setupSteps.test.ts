@@ -161,6 +161,9 @@ describe('configureMcpClient', () => {
     expect(JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).mcpServers.engram).toEqual(server);
     // ~/.mcp.json is the file setup used to write and nothing reads.
     expect(fs.existsSync(path.join(home, '.mcp.json'))).toBe(false);
+    expect(output()).toContain('Claude Code plugin (recommended)');
+    expect(output()).toContain('/plugin marketplace add ayvazyan10/engram');
+    expect(output()).toContain('/plugin install engram@engram');
   });
 
   it('keeps other servers already registered with that client', () => {

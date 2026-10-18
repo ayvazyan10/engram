@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "engram": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "-p",
+        "@engram-ai-memory/mcp@latest",
+        "engram-mcp"
+      ],
+      "env": {
+        "ENGRAM_DB_PATH": "${ENGRAM_DB_PATH:-~/.engram/engram.db}",
+        "ENGRAM_SOURCE": "${ENGRAM_SOURCE:-claude-code}"
+      }
+    }
+  }
+}

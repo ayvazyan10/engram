@@ -1,0 +1,8 @@
+{
+  "name": "engram",
+  "owner": { "name": "ayvazyan10" },
+  "description": "Engram persistent memory for Claude Code.",
+  "plugins": [
+    { "name": "engram", "source": "./plugins/engram" }
+  ]
+}

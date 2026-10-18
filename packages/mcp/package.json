@@ -9,7 +9,8 @@
   "bin": {
     "mcp": "./dist/server.js",
     "engram-mcp": "./dist/server.js",
-    "engram-store-session": "./dist/store-session.js"
+    "engram-store-session": "./dist/store-session.js",
+    "engram-session-start": "./dist/session-start.js"
   },
   "scripts": {
     "build": "tsc",
