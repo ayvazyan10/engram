@@ -13,8 +13,17 @@
 
 import path from 'path';
 
-export const NAMESPACE_MODES = ['none', 'filter', 'isolated'] as const;
+export const NAMESPACE_MODES = ['none', 'filter', 'isolated', 'project'] as const;
 export type NamespaceModeName = (typeof NAMESPACE_MODES)[number];
+
+/**
+ * The mode the REST server runs with. Clients resolve `project` to a filter
+ * scope, but the server is the one view that sees every project, so it gets
+ * `none`. Other modes mean the same thing to both.
+ */
+export function serverNamespaceMode(mode: NamespaceModeName): NamespaceModeName {
+  return mode === 'project' ? 'none' : mode;
+}
 
 export const SYNC_MODES = ['auto', 'manual', 'off'] as const;
 export type SyncModeName = (typeof SYNC_MODES)[number];
@@ -59,7 +68,7 @@ export function defaultConfig(engramHome: string): EngramConfig {
     port: 4901,
     host: '127.0.0.1',
     namespace: null,
-    namespaceMode: 'none',
+    namespaceMode: 'project',
     embeddingModel: 'Xenova/all-MiniLM-L6-v2',
     indexPath: path.join(engramHome, 'engram.db.index'),
     repoPath: path.join(engramHome, 'repo'),
@@ -111,12 +120,15 @@ export function normalizeConfig(stored: unknown, defaults: EngramConfig): Normal
     ? stored['namespace']
     : null;
 
-  // A hand-edited config can carry an empty or bogus mode; fall back to the
-  // legacy derivation rather than exporting garbage into the child process
-  // env, where it would abort the MCP server on startup.
-  const namespaceMode = NAMESPACE_MODES.includes(stored['namespaceMode'] as NamespaceModeName)
-    ? (stored['namespaceMode'] as NamespaceModeName)
-    : namespace ? 'filter' : 'none';
+  // An unset mode means `project` (the owner's default). A hand-edited config
+  // can also carry an empty or bogus mode; fall back to the legacy derivation
+  // rather than exporting garbage into the child process env, where it would
+  // abort the MCP server on startup.
+  const storedMode = stored['namespaceMode'];
+  const namespaceMode = NAMESPACE_MODES.includes(storedMode as NamespaceModeName)
+    ? (storedMode as NamespaceModeName)
+    : storedMode === undefined ? defaults.namespaceMode
+      : namespace ? 'filter' : 'none';
 
   const config: EngramConfig = {
     dbPath: takeString(stored, 'dbPath', defaults.dbPath, problems),

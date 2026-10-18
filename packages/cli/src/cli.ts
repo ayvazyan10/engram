@@ -20,6 +20,7 @@ import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
 import {
   defaultConfig, normalizeConfig, isConfigKey, parseConfigValue, applyDbPathEnv, CONFIG_KEYS,
+  serverNamespaceMode,
 } from './engramConfig.js';
 import { stopProcess, describeStopOutcome } from './stopServer.js';
 import {
@@ -355,7 +356,7 @@ program
       ENGRAM_DB_PATH: config.dbPath,
       ENGRAM_INDEX_PATH: config.indexPath,
       ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
-      ENGRAM_NAMESPACE_MODE: config.namespaceMode,
+      ENGRAM_NAMESPACE_MODE: serverNamespaceMode(config.namespaceMode),
       ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
       ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
       ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
@@ -1004,7 +1005,7 @@ program
           ENGRAM_DB_PATH: config.dbPath,
           ENGRAM_INDEX_PATH: config.indexPath,
           ENGRAM_EMBEDDING_MODEL: config.embeddingModel,
-          ENGRAM_NAMESPACE_MODE: config.namespaceMode,
+          ENGRAM_NAMESPACE_MODE: serverNamespaceMode(config.namespaceMode),
           ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
           ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
           ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),

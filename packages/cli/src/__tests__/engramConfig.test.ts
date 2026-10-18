@@ -23,6 +23,7 @@ import {
   isConfigKey,
   parseConfigValue,
   applyDbPathEnv,
+  serverNamespaceMode,
   CONFIG_KEYS,
 } from '../engramConfig.js';
 
@@ -34,7 +35,7 @@ describe('defaultConfig', () => {
     expect(defaults.indexPath).toBe(path.join('/home/tester/.engram', 'engram.db.index'));
     expect(defaults.repoPath).toBe(path.join('/home/tester/.engram', 'repo'));
     expect(defaults.port).toBe(4901);
-    expect(defaults.namespaceMode).toBe('none');
+    expect(defaults.namespaceMode).toBe('project');
   });
 });
 
@@ -60,6 +61,15 @@ describe('normalizeConfig', () => {
       expect(config.port, JSON.stringify(port)).toBe(defaults.port);
       expect(problems.length, JSON.stringify(port)).toBe(1);
     }
+  });
+
+  it('defaults an unset namespace mode to project', () => {
+    expect(normalizeConfig({}, defaults).config.namespaceMode).toBe('project');
+    expect(normalizeConfig({ namespace: 'work' }, defaults).config.namespaceMode).toBe('project');
+  });
+
+  it('keeps a stored project namespace mode', () => {
+    expect(normalizeConfig({ namespaceMode: 'project' }, defaults).config.namespaceMode).toBe('project');
   });
 
   it('falls back to the legacy derivation for a bogus namespace mode', () => {
@@ -124,6 +134,7 @@ describe('parseConfigValue', () => {
 
   it('constrains namespaceMode and syncMode to what the code implements', () => {
     expect(parseConfigValue('namespaceMode', 'isolated')).toEqual({ ok: true, value: 'isolated' });
+    expect(parseConfigValue('namespaceMode', 'project')).toEqual({ ok: true, value: 'project' });
     expect(parseConfigValue('namespaceMode', 'private').ok).toBe(false);
     expect(parseConfigValue('syncMode', 'manual')).toEqual({ ok: true, value: 'manual' });
     expect(parseConfigValue('syncMode', 'hourly').ok).toBe(false);
@@ -141,6 +152,18 @@ describe('parseConfigValue', () => {
 
   it('passes other strings through', () => {
     expect(parseConfigValue('dbPath', '/data/engram.db')).toEqual({ ok: true, value: '/data/engram.db' });
+  });
+});
+
+describe('serverNamespaceMode', () => {
+  it('maps project to none so the server sees every project', () => {
+    expect(serverNamespaceMode('project')).toBe('none');
+  });
+
+  it('passes every other mode through', () => {
+    expect(serverNamespaceMode('none')).toBe('none');
+    expect(serverNamespaceMode('filter')).toBe('filter');
+    expect(serverNamespaceMode('isolated')).toBe('isolated');
   });
 });
 
