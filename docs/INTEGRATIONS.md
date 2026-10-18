@@ -2,7 +2,7 @@
 
 Engram exposes multiple integration surfaces:
 
-1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 21 tools)
+1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 24 tools)
 2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
 3. **REST API** — for everything else (Ollama, custom apps, 53 endpoints)
 4. **CLI** — terminal workflows and scripting
@@ -138,7 +138,7 @@ pnpm turbo run build --filter=@engram-ai-memory/mcp
 }
 ```
 
-**Restart your AI client** — 21 tools will appear automatically.
+**Restart your AI client** — 24 tools will appear automatically.
 
 ### Claude Code
 
@@ -815,7 +815,7 @@ Asterisk has full MCP client support. Add Engram as an MCP server in `~/.asteris
 }
 ```
 
-Restart Asterisk. All 21 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
+Restart Asterisk. All 24 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
 
 If Engram is already configured for Claude Code, use the same `server.js` path and database — both tools share the same brain.
 

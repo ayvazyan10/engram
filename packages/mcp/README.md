@@ -1,6 +1,6 @@
 # @engram-ai-memory/mcp
 
-MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to any AI client (Claude Code, Cursor, Windsurf, Cline, and any MCP-compatible client). 21 tools for memory management, search, recall, decay, contradictions, tags, webhooks, reflection, and more.
+MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to any AI client (Claude Code, Cursor, Windsurf, Cline, and any MCP-compatible client). 24 tools for memory management, search, recall, decay, contradictions, tags, webhooks, reflection, distillation, and more.
 
 ## Install
 
@@ -55,7 +55,7 @@ one of them:
 
 Set `ENGRAM_SOURCE` to your AI client: `claude-code`, `cursor`, `windsurf`, `cline`.
 
-Restart your AI client. 21 tools appear automatically.
+Restart your AI client. 24 tools appear automatically.
 
 ## Tools
 
@@ -69,6 +69,7 @@ Restart your AI client. 21 tools appear automatically.
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
 | **Reflection** | `request_reflection`, `store_reflection`, `get_reflections` |
+| **Distillation** | `get_distill_tasks`, `complete_distill` |
 
 ## Recommended Workflow
 

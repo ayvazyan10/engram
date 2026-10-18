@@ -96,7 +96,7 @@ CLI            ──direct───────→ ┘
 
 | Integration | Method | How |
 |---|---|---|
-| **Claude Code** | MCP (21 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
+| **Claude Code** | MCP (24 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
 | **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/skills/ayvazyan10/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
 | **Any app** | Direct REST API | `POST /api/recall` + `POST /api/memory` |
@@ -290,7 +290,7 @@ If you installed via `engram setup`, you can point to the local build instead:
 }
 ```
 
-Restart your AI client. **21 tools** are now available:
+Restart your AI client. **24 tools** are now available:
 
 | Category | Tools |
 |---|---|
@@ -299,6 +299,7 @@ Restart your AI client. **21 tools** are now available:
 | **Lifecycle** | `decay_sweep`, `decay_policy`, `re_embed` |
 | **Contradictions** | `check_contradictions`, `resolve_contradiction` |
 | **Reflection** | `request_reflection`, `store_reflection`, `get_reflections` |
+| **Distillation** | `get_distill_tasks`, `complete_distill` |
 | **Tags** | `list_tags`, `tag_memory` |
 | **Webhooks** | `webhook_subscribe`, `webhook_list` |
 | **Plugins** | `plugin_list` |
@@ -336,6 +337,8 @@ Add to `~/.claude/settings.json`:
 
 Every session now auto-stores a summary to engram — the brain grows without manual effort.
 
+Stored sessions are tagged `pending-distill`. The AI connected to Engram calls `get_distill_tasks`, extracts durable facts itself (Engram runs no LLM and needs no API key), and calls `complete_distill`, which stores the facts and then archives the raw session. SessionStart reminds the AI when sessions are waiting to be distilled.
+
 ---
 
 ## Claude Desktop Extension (1-click install)
@@ -352,7 +355,7 @@ Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan
 
 Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
 
-> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 21 MCP tools are then available in Claude Desktop.
+> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 24 MCP tools are then available in Claude Desktop.
 
 ---
 
@@ -361,7 +364,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | Package | Description | npm |
 |---|---|---|
 | `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, reflection | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
-| `@engram-ai-memory/mcp` | MCP Server — 21 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
+| `@engram-ai-memory/mcp` | MCP Server — 24 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
 | `@engram-ai-memory/cli` | CLI — store, search, recall, reflections, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
 | `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (53 endpoints) | — |
 | `@engram-ai-memory/web` | Multi-view dashboard — 3D neural graph, Timeline, Analytics, Reflections | — |
