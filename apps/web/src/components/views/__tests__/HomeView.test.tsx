@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import HomeView from '../HomeView.js';
 import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js';
@@ -28,9 +28,9 @@ function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   };
 }
 
-function renderHome() {
+function renderHome(onStore: () => void = () => {}) {
   return render(
-    <HomeView loading={false} error={null} onRetry={() => {}} onLoadMore={() => {}} loadingMore={false} onStore={() => {}} />
+    <HomeView loading={false} error={null} onRetry={() => {}} onLoadMore={() => {}} loadingMore={false} onStore={onStore} />
   );
 }
 
@@ -94,5 +94,92 @@ describe('HomeView', () => {
     renderHome();
     expect(screen.getByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Recent memories' })).not.toBeInTheDocument();
+  });
+});
+
+describe('HomeView: what does my AI know?', () => {
+  const CONTEXT = [
+    '[NEURAL MEMORY CONTEXT]',
+    '',
+    '[KNOWLEDGE]',
+    '• [094a5819 · 2026-10-18] The deploy pipeline runs on GitHub Actions.',
+    '• [deadbeef · 2026-10-17] A memory the client cannot place.',
+    '',
+    '[END MEMORY CONTEXT]',
+  ].join('\n');
+  const FULL_ID = '094a5819-c599-40e3-be56-4ab69755d647';
+  const originalClipboard = navigator.clipboard;
+
+  beforeEach(() => {
+    resetServerStats();
+    useNeuralStore.setState({ selectedNeuronId: null });
+    useMemoryStore.setState({
+      records: [record()],
+      searchResults: [],
+      searchQuery: '',
+      isSearching: false,
+      currentContext: '',
+      contextIds: [],
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: originalClipboard, configurable: true });
+  });
+
+  function openLens() {
+    fireEvent.click(screen.getByRole('tab', { name: 'What my AI knows' }));
+  }
+
+  it('is a second lens on the same search box, and says what it shows in one sentence', () => {
+    renderHome();
+    expect(screen.getByRole('tab', { name: 'Memories' })).toHaveAttribute('aria-selected', 'true');
+    openLens();
+
+    expect(screen.getByRole('tab', { name: 'What my AI knows' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('heading', { name: 'What your AI would receive' })).toBeInTheDocument();
+    expect(screen.getByText(/exact text your AI gets back/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('What might your AI be asked?')).toBeInTheDocument();
+    expect(screen.getByText('Type what your AI might be asked, then press Enter.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Recent memories' })).not.toBeInTheDocument();
+  });
+
+  it('renders the recall block verbatim and opens a memory from its [id · date] prefix', () => {
+    useMemoryStore.setState({ searchQuery: 'deploy', currentContext: CONTEXT, contextIds: [FULL_ID] });
+    renderHome();
+    openLens();
+
+    const block = document.querySelector('pre')!;
+    expect(block.textContent).toBe(CONTEXT);
+    // A prefix the client can resolve is a control; one it cannot stays text.
+    expect(within(block).getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByText('1 memory · ' + CONTEXT.length.toLocaleString() + ' characters')).toBeInTheDocument();
+
+    fireEvent.click(within(block).getByRole('button', { name: '[094a5819 · 2026-10-18]' }));
+    expect(useNeuralStore.getState().selectedNeuronId).toBe(FULL_ID);
+  });
+
+  it('copies exactly the block the AI would get', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    useMemoryStore.setState({ searchQuery: 'deploy', currentContext: CONTEXT, contextIds: [FULL_ID] });
+    renderHome();
+    openLens();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith(CONTEXT);
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+  });
+
+  it('says plainly when the AI would get nothing, and offers to store a memory', () => {
+    const onStore = vi.fn();
+    useMemoryStore.setState({ searchQuery: 'zebra knitting', currentContext: '', contextIds: [] });
+    renderHome(onStore);
+    openLens();
+
+    expect(screen.getByText(/your AI would get no memories back/)).toHaveTextContent('zebra knitting');
+    expect(document.querySelector('pre')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Store a memory' }));
+    expect(onStore).toHaveBeenCalled();
   });
 });

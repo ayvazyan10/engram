@@ -121,9 +121,9 @@ export default function AppLayout() {
       .catch(() => {});
   }, []);
 
-  /** Re-run the plate load after a failure. The failure already reset the
-   *  ref-counted guard, so bumping the attempt counter is what actually
-   *  re-fires the effect. */
+  /** Re-run the plate load after a failure. A failed load never set the
+   *  guard, so bumping the attempt counter is what actually re-fires the
+   *  effect. */
   const retryPlate = useCallback(() => {
     setPlateError(null);
     setPlateAttempt((n) => n + 1);
@@ -172,16 +172,22 @@ export default function AppLayout() {
   // this store's real shape, and an id-derived sphere is invented data — the
   // one surface that used to confess it (the scene key) has been retired
   // because each plate now states its own denominators.
+  //
+  // The guard is earned when a load LANDS, not when it starts. A run whose
+  // cleanup fires first (StrictMode's dev-only double effect, or leaving the
+  // plates mid-load) discards its response, so the next run must fetch again —
+  // setting the guard up front left the dev server on "Reading the store"
+  // forever, waiting on a response its own cleanup had thrown away.
   const sceneFetchedForRef = useRef(-1);
   useEffect(() => {
     if (viewMode !== '3d') return;
     if (sceneFetchedForRef.current === storeChanges) return;
-    sceneFetchedForRef.current = storeChanges;
 
     let cancelled = false;
     loadPlateData()
       .then(({ data, layout, edges }) => {
         if (cancelled) return;
+        sceneFetchedForRef.current = storeChanges;
         setPlateData(data);
         setPlateError(null);
         setSceneNodes(layout.nodes);
@@ -204,7 +210,6 @@ export default function AppLayout() {
         if (err instanceof ApiError && err.status === 401) return;
         // Anything else is stated on the plate box. It must not be allowed to
         // look like an empty store — see PlateSurface for the two treatments.
-        sceneFetchedForRef.current = -1;
         setPlateError(err instanceof Error ? err.message : 'Could not reach Engram API');
       });
 

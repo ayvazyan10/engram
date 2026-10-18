@@ -9,6 +9,7 @@ import { parseTagLabel } from '../../lib/tagLabel.js';
 import { memoryRowText, toPlainText } from '../../lib/plainText.js';
 import { formatDateTime } from '../../lib/dates.js';
 import ConfirmDialog from './ConfirmDialog.js';
+import MemoryEditForm from './MemoryEditForm.js';
 import { TypeTag } from './DataMark.js';
 
 /** One edge of the selected memory, with the memory at its other end named:
@@ -42,7 +43,7 @@ function failureMessage(action: string, err: unknown): string {
 
 export default function NeuronInspector() {
   const { selectedNeuronId, selectNeuron, contradictionPairs, removeNeuron, setContradictionPairs } = useNeuralStore();
-  const { records, removeRecord, updateRecordTags } = useMemoryStore();
+  const { records, removeRecord, updateRecordTags, updateRecord } = useMemoryStore();
   const t = useTemplateStore((s) => s.activeTemplate);
   const [conns, setConns] = useState<GraphConn[]>([]);
   // A failed neighbourhood fetch used to make the section vanish, which read
@@ -60,6 +61,9 @@ export default function NeuronInspector() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [showAllContent, setShowAllContent] = useState(false);
+  const [editing, setEditing] = useState(false);
+  /** The confirmation a save leaves behind, until the reader moves on. */
+  const [savedNote, setSavedNote] = useState<string | null>(null);
   // W8: a search hit outside the first 200 loaded memories (the server caps
   // listMemories there) selects an id `records` has never heard of.
   // getGraph's `node` field already carries the full row for this id — reuse
@@ -78,6 +82,8 @@ export default function NeuronInspector() {
     setActionError(null);
     setConfirmingArchive(false);
     setShowAllContent(false);
+    setEditing(false);
+    setSavedNote(null);
     if (!selectedNeuronId) return;
     // W5: no id check on resolve meant a slow response for a previously
     // selected neuron could arrive after a newer selection and overwrite its
@@ -168,6 +174,16 @@ export default function NeuronInspector() {
     }
   }, [selectedNeuronId, updateRecordTags]);
 
+  const handleSaved = useCallback((updated: MemoryRecord, reindexed: boolean) => {
+    // Both copies: `records` for a loaded memory (and the cards that show
+    // it), the fallback for one selected from beyond the loaded page.
+    updateRecord(updated);
+    setFallbackMemory(updated);
+    setEditing(false);
+    setActionError(null);
+    setSavedNote(reindexed ? 'Saved and re-indexed for search.' : 'Saved.');
+  }, [updateRecord]);
+
   const handleResolve = useCallback(async (sourceId: string, targetId: string, strategy: string) => {
     setResolving(true);
     try {
@@ -224,6 +240,22 @@ export default function NeuronInspector() {
           {memory.source && <span style={{ ...styles.source, color: t.textMuted }}>{memory.source}</span>}
         </div>
         <div style={{ display: 'flex', gap: SPACE['2xs'] }}>
+          {!editing && (
+            <button
+              className="ec-hover-tint"
+              style={{ ...styles.editBtn, background: t.inputBg, borderColor: t.panelBorder, color: t.textSecondary }}
+              onClick={() => {
+                setSavedNote(null);
+                setEditing(true);
+              }}
+              title="Correct this memory"
+            >
+              <svg viewBox="0 0 16 16" fill="none" style={{ width: 12, height: 12 }} aria-hidden="true">
+                <path d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+              </svg>
+              Edit
+            </button>
+          )}
           <button
             className="ec-hover-tint"
             style={{ ...styles.iconBtn, background: t.inputBg, borderColor: t.panelBorder, color: STATUS.danger, opacity: deleting ? 0.4 : 1 }}
@@ -251,7 +283,7 @@ export default function NeuronInspector() {
       </div>
 
       {/* Importance bar */}
-      <div style={styles.importanceRow}>
+      {!editing && <div style={styles.importanceRow}>
         <span style={{ ...styles.dimLabel, color: t.textMuted }}>Importance</span>
         <div style={{ ...styles.importanceTrack, background: t.inputBg }}>
           <div style={{ ...styles.importanceFill, width: `${Math.round(memory.importance * 100)}%`, background: color }} />
@@ -259,7 +291,7 @@ export default function NeuronInspector() {
         {/* F2: this read-out used to wear the type colour. The bar beside it
             is the mark; the number is ink. */}
         <span className="ec-tabular" style={{ color: t.textPrimary, fontSize: TYPE.sm, fontWeight: WEIGHT.semibold, minWidth: '32px', textAlign: 'right' as const }}>{Math.round(memory.importance * 100)}%</span>
-      </div>
+      </div>}
 
       <div style={{ ...styles.divider, background: t.panelBorder }} />
 
@@ -282,80 +314,96 @@ export default function NeuronInspector() {
         </div>
       )}
 
-      <div style={styles.body}>
-        {/* Concept — L1: was a bordered chip identical in shape to the
-            sidebar's (then-inert) filter pills, so it promised an interaction
-            it never had. Flattened to the same tinted label the type badge
-            above it uses, which reads as a label rather than a control. */}
-        {conceptText && (
-          <Section label="Concept" t={t}>
-            <div className="ec-wrap-anywhere" style={{ ...styles.conceptChip, background: withAlpha(color, 0.13), color: t.textPrimary }}>{conceptText}</div>
-          </Section>
-        )}
+      {savedNote && (
+        <div role="status" style={{ ...styles.savedNote, color: STATUS.success, background: withAlpha(STATUS.success, 0.08), border: `1px solid ${withAlpha(STATUS.success, 0.3)}` }}>
+          ✓ {savedNote}
+        </div>
+      )}
 
-        {/* Tags — editable. H10: the write controls used to sit below an
-            unbounded Content block (up to ~4000px tall), which put every
-            interactive thing in this panel below the fold. */}
-        <TagsSection
-          t={t}
+      {editing ? (
+        <MemoryEditForm
+          key={memory.id}
+          memory={memory}
           tags={localTags}
-          tagInput={tagInput}
-          onTagInputChange={setTagInput}
-          onAddTag={handleAddTag}
-          onRemoveTag={handleRemoveTag}
+          onCancel={() => setEditing(false)}
+          onSaved={handleSaved}
         />
-
-        {/* Date */}
-        <Section label="Stored" t={t}>
-          <div className="ec-tabular" style={{ ...styles.meta, color: t.textMuted }}>{formatDateTime(memory.createdAt)}</div>
-        </Section>
-
-        {/* Content */}
-        <Section label="Content" t={t}>
-          <div
-            className={showAllContent ? 'ec-wrap-anywhere' : 'ec-wrap-anywhere ec-clamp'}
-            style={{ ...styles.content, color: t.textPrimary, ...(showAllContent ? {} : clampVars) }}
-          >
-            {contentText}
-          </div>
-          {contentText.length > CONTENT_CLAMP_THRESHOLD && (
-            <button
-              className="ec-hover-tint"
-              style={{ ...styles.showAllBtn, color: t.textMuted, borderColor: t.panelBorder }}
-              onClick={() => setShowAllContent((v) => !v)}
-              aria-expanded={showAllContent}
-            >
-              {showAllContent ? 'Show less' : `Show all · ${contentText.length} chars`}
-            </button>
+      ) : (
+        <div style={styles.body}>
+          {/* Concept — L1: was a bordered chip identical in shape to the
+              sidebar's (then-inert) filter pills, so it promised an interaction
+              it never had. Flattened to the same tinted label the type badge
+              above it uses, which reads as a label rather than a control. */}
+          {conceptText && (
+            <Section label="Concept" t={t}>
+              <div className="ec-wrap-anywhere" style={{ ...styles.conceptChip, background: withAlpha(color, 0.13), color: t.textPrimary }}>{conceptText}</div>
+            </Section>
           )}
-        </Section>
 
-        {/* Summary */}
-        {summaryText && (
-          <Section label="Summary" t={t}>
-            <div className="ec-wrap-anywhere" style={{ ...styles.summary, color: t.textSecondary }}>{summaryText}</div>
-          </Section>
-        )}
-
-        {contradictions.length > 0 && (
-          <ContradictionsSection
-            contradictions={contradictions}
-            records={records}
-            selectedNeuronId={selectedNeuronId}
-            resolving={resolving}
-            onResolve={handleResolve}
+          {/* Tags — editable. H10: the write controls used to sit below an
+              unbounded Content block (up to ~4000px tall), which put every
+              interactive thing in this panel below the fold. */}
+          <TagsSection
             t={t}
+            tags={localTags}
+            tagInput={tagInput}
+            onTagInputChange={setTagInput}
+            onAddTag={handleAddTag}
+            onRemoveTag={handleRemoveTag}
           />
-        )}
 
-        {connsError ? (
-          <Section label="Connections" t={t}>
-            <div style={{ ...styles.meta, color: t.textMuted }}>Could not load this memory&rsquo;s connections.</div>
+          {/* Date */}
+          <Section label="Stored" t={t}>
+            <div className="ec-tabular" style={{ ...styles.meta, color: t.textMuted }}>{formatDateTime(memory.createdAt)}</div>
           </Section>
-        ) : (
-          conns.length > 0 && <ConnectionsSection conns={conns} color={color} onSelect={selectNeuron} t={t} />
-        )}
-      </div>
+
+          {/* Content */}
+          <Section label="Content" t={t}>
+            <div
+              className={showAllContent ? 'ec-wrap-anywhere' : 'ec-wrap-anywhere ec-clamp'}
+              style={{ ...styles.content, color: t.textPrimary, ...(showAllContent ? {} : clampVars) }}
+            >
+              {contentText}
+            </div>
+            {contentText.length > CONTENT_CLAMP_THRESHOLD && (
+              <button
+                className="ec-hover-tint"
+                style={{ ...styles.showAllBtn, color: t.textMuted, borderColor: t.panelBorder }}
+                onClick={() => setShowAllContent((v) => !v)}
+                aria-expanded={showAllContent}
+              >
+                {showAllContent ? 'Show less' : `Show all · ${contentText.length} chars`}
+              </button>
+            )}
+          </Section>
+
+          {/* Summary */}
+          {summaryText && (
+            <Section label="Summary" t={t}>
+              <div className="ec-wrap-anywhere" style={{ ...styles.summary, color: t.textSecondary }}>{summaryText}</div>
+            </Section>
+          )}
+
+          {contradictions.length > 0 && (
+            <ContradictionsSection
+              contradictions={contradictions}
+              records={records}
+              selectedNeuronId={selectedNeuronId}
+              resolving={resolving}
+              onResolve={handleResolve}
+              t={t}
+            />
+          )}
+
+          {connsError ? (
+            <Section label="Connections" t={t}>
+              <div style={{ ...styles.meta, color: t.textMuted }}>Could not load this memory&rsquo;s connections.</div>
+            </Section>
+          ) : (
+            conns.length > 0 && <ConnectionsSection conns={conns} color={color} onSelect={selectNeuron} t={t} />
+          )}
+        </div>
+      )}
 
       {/* H8: was a native confirm(). There is no un-archive route on the
           server (`DELETE /memory/:id` is the only archive call, and nothing
@@ -495,7 +543,7 @@ function ContradictionsSection({ contradictions, records, selectedNeuronId, reso
               {other?.content.slice(0, 100) ?? otherId.slice(0, 8)}
               {(other?.content.length ?? 0) > 100 ? '…' : ''}
             </div>
-            <div className="ec-tabular" style={{ fontSize: TYPE.xs, color: STATUS.contradiction, marginTop: SPACE['2xs'] }}>
+            <div className="ec-tabular" style={{ fontSize: TYPE.sm, color: STATUS.contradiction, marginTop: SPACE['2xs'] }}>
               Confidence {Math.round(c.confidence * 100)}%
             </div>
             <div style={{ display: 'flex', gap: SPACE['2xs'], marginTop: SPACE.xs, flexWrap: 'wrap' }}>
@@ -560,17 +608,26 @@ const styles = {
   empty: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', justifyContent: 'center', height: '100%', gap: SPACE['2xs'], padding: SPACE.xl, textAlign: 'center' as const },
   emptyGlyph: { fontSize: TYPE.glyph, lineHeight: 1, marginBottom: SPACE.xs },
   emptyText: { fontSize: TYPE.base, fontWeight: WEIGHT.medium, lineHeight: 1.5 },
-  emptyHint: { fontSize: TYPE.xs, lineHeight: 1.5, maxWidth: 200 },
+  emptyHint: { fontSize: TYPE.sm, lineHeight: 1.5, maxWidth: 200 },
   header: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: SPACE.sm, padding: `${SPACE.md} ${SPACE.lg} ${SPACE.sm}` },
   headerMeta: { display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-start', gap: SPACE['2xs'], minWidth: 0 },
   badge: { padding: '3px 8px', borderRadius: RADIUS.sm },
-  source: { fontSize: TYPE.xs, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, maxWidth: '100%' },
+  source: { fontSize: TYPE.sm, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, maxWidth: '100%' },
   iconBtn: {
     width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
     border: '1px solid', borderRadius: RADIUS.sm, flexShrink: 0,
   },
+  editBtn: {
+    height: 28, display: 'flex', alignItems: 'center', gap: SPACE.xs, padding: `0 ${SPACE.sm}`,
+    border: '1px solid', borderRadius: RADIUS.sm, flexShrink: 0,
+    fontSize: TYPE.sm, fontWeight: WEIGHT.medium, fontFamily: 'inherit',
+  },
+  savedNote: {
+    margin: `${SPACE.sm} ${SPACE.lg} 0`, padding: `${SPACE.xs} ${SPACE.sm}`,
+    borderRadius: RADIUS.sm, fontSize: TYPE.sm, lineHeight: 1.4,
+  },
   importanceRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm, padding: `${SPACE['2xs']} ${SPACE.lg} ${SPACE.md}` },
-  dimLabel: { fontSize: TYPE.xs, minWidth: '60px' },
+  dimLabel: { fontSize: TYPE.sm, minWidth: '60px' },
   importanceTrack: { flex: 1, height: '3px', borderRadius: '2px', overflow: 'hidden' },
   importanceFill: { height: '100%', borderRadius: '2px', opacity: 0.9 },
   divider: { height: '1px', flexShrink: 0 },
@@ -579,13 +636,13 @@ const styles = {
   // Sentence case, medium, a shade under the body: a label names the block
   // beneath it and then gets out of the way. The tracked capitals it used to
   // wear made every label as loud as the content it introduced.
-  sectionLabel: { fontSize: TYPE.xs, fontWeight: WEIGHT.medium, letterSpacing: '0.01em', lineHeight: 1.3 },
+  sectionLabel: { fontSize: TYPE.sm, fontWeight: WEIGHT.medium, letterSpacing: '0.01em', lineHeight: 1.3 },
   conceptChip: { display: 'inline-block', fontSize: TYPE.base, fontWeight: WEIGHT.medium, padding: `${SPACE['3xs']} ${SPACE.sm}`, borderRadius: RADIUS.sm, width: 'fit-content', maxWidth: '100%', lineHeight: 1.45 },
   content: { fontSize: TYPE.base, lineHeight: 1.6 },
   showAllBtn: {
     alignSelf: 'flex-start',
     marginTop: SPACE['2xs'],
-    fontSize: TYPE.xs,
+    fontSize: TYPE.sm,
     fontWeight: WEIGHT.medium,
     background: 'transparent',
     border: '1px solid',
@@ -651,7 +708,7 @@ const styles = {
     border: '1px solid', borderRadius: RADIUS.md, padding: SPACE.md,
   },
   resolveBtn: {
-    fontSize: TYPE.xs, fontWeight: WEIGHT.medium, background: 'transparent', border: '1px solid',
+    fontSize: TYPE.sm, fontWeight: WEIGHT.medium, background: 'transparent', border: '1px solid',
     borderRadius: RADIUS.tight, padding: `${SPACE['3xs']} ${SPACE.sm}`, textTransform: 'capitalize' as const, minHeight: 24,
   },
   connList: { display: 'flex', flexDirection: 'column' as const, gap: SPACE.xs },
@@ -662,7 +719,7 @@ const styles = {
   },
   connLabel: { fontSize: TYPE.sm, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, maxWidth: '100%' },
   connRow: { display: 'flex', alignItems: 'center', gap: SPACE.sm, width: '100%' },
-  relBadge: { fontSize: TYPE.xs, padding: `${SPACE['3xs']} ${SPACE.xs}`, borderRadius: RADIUS.tight, whiteSpace: 'nowrap' as const, minWidth: '82px', lineHeight: 1.4 },
+  relBadge: { fontSize: TYPE.sm, padding: `${SPACE['3xs']} ${SPACE.xs}`, borderRadius: RADIUS.tight, whiteSpace: 'nowrap' as const, minWidth: '82px', lineHeight: 1.4 },
   strengthTrack: { display: 'block', flex: 1, height: '3px', borderRadius: '2px', overflow: 'hidden' },
   strengthFill: { display: 'block', height: '100%', borderRadius: '2px', opacity: 0.75 },
 } as const;

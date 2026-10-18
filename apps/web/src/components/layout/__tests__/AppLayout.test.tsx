@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import AppLayout from '../AppLayout.js';
@@ -330,6 +331,26 @@ describe('AppLayout plate sourcing', () => {
     await waitFor(() => expect(plateProps().error).toBe('offline'));
     expect(plateProps().memories).toBeNull();
     expect(useNeuralStore.getState().neurons).toHaveLength(0);
+  });
+
+  /**
+   * The dev server renders under StrictMode, which runs every effect, cleans
+   * it up, and runs it again. The first run's fetch is discarded by its
+   * cleanup; the "already fetched" guard used to be set before the fetch, so
+   * the second run skipped and the plates sat on "Reading the store" forever.
+   */
+  it('loads the plates under StrictMode, where the first effect run is thrown away', async () => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
+    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b']));
+
+    render(
+      <StrictMode>
+        <AppLayout />
+      </StrictMode>
+    );
+
+    await waitFor(() => expect(plateProps().memories).toBe(2));
+    expect(useNeuralStore.getState().neurons).toHaveLength(2);
   });
 
   it('retries the load when the plate asks it to', async () => {

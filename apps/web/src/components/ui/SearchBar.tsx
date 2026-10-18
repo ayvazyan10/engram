@@ -6,7 +6,11 @@ import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens
 
 /** `large` is Home's version: the same field, front and centre — no strip
  *  around it, a bigger target and type. */
-export default function SearchBar({ large = false }: { large?: boolean }) {
+/** recall_context's own default budget, so the context Home shows under
+ *  "What my AI knows" is the block an MCP client gets for the same words. */
+const RECALL_MAX_TOKENS = 2000;
+
+export default function SearchBar({ large = false, placeholder = 'Ask your memory anything…' }: { large?: boolean; placeholder?: string }) {
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -36,7 +40,7 @@ export default function SearchBar({ large = false }: { large?: boolean }) {
     try {
       const [searchRes, recallRes] = await Promise.all([
         api.search(query, 20),
-        api.recall(query, 1500),
+        api.recall(query, RECALL_MAX_TOKENS),
       ]);
       if (requestId !== latestRequestId.current) return; // superseded — drop it
       const results = searchRes.results as MemoryRecord[];
@@ -48,7 +52,7 @@ export default function SearchBar({ large = false }: { large?: boolean }) {
       setSearchQuery(query);
       setSearchResults(results);
       setHighlightedIds(new Set(results.map((r) => r.id)));
-      setContext(recallRes.context, recallRes.latencyMs);
+      setContext(recallRes.context, recallRes.latencyMs, recallIds(recallRes.memories));
     } catch (err) {
       if (requestId !== latestRequestId.current) return; // superseded — drop it
       // Status 0 is a request that never got an answer (lib/api.ts); its raw
@@ -118,7 +122,7 @@ export default function SearchBar({ large = false }: { large?: boolean }) {
             if (e.key === 'Enter') handleSearch();
             if (e.key === 'Escape') handleClear();
           }}
-          placeholder="Ask your memory anything…"
+          placeholder={placeholder}
           aria-label="Search memories"
           spellCheck={false}
           autoComplete="off"
@@ -179,6 +183,14 @@ export default function SearchBar({ large = false }: { large?: boolean }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** The full ids behind the recall block, which prints only 8-character
+ *  prefixes. */
+function recallIds(memories: unknown[]): string[] {
+  return memories.flatMap((m) =>
+    m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string' ? [(m as { id: string }).id] : []
   );
 }
 

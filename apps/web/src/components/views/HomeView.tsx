@@ -9,6 +9,8 @@ import SearchBar from '../ui/SearchBar.js';
 import MemoryCard from '../ui/MemoryCard.js';
 import NeuronInspector from '../ui/NeuronInspector.js';
 import Onboarding from './Onboarding.js';
+import WhatAiKnows from './WhatAiKnows.js';
+import { segmentBase, segmentState, trackStyle } from '../ui/segmented.js';
 
 interface Props {
   loading: boolean;
@@ -32,6 +34,9 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
   const stats = useServerStats();
   const isCompact = useMediaQuery(COMPACT_QUERY);
   const [onboarding, setOnboarding] = useState(false);
+  /** Two lenses on the one search box: the memories it matches, or the
+   *  context block an AI would be handed for the same words. */
+  const [lens, setLens] = useState<'memories' | 'ai'>('memories');
 
   const empty = !loading && !error && records.length === 0 && !searchQuery;
   useEffect(() => {
@@ -65,69 +70,91 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
     <div style={s.row}>
       <div style={{ ...s.scroll, background: t.rootBg }}>
         <div style={s.column}>
-          <SearchBar large />
+          <SearchBar large placeholder={lens === 'ai' ? 'What might your AI be asked?' : undefined} />
 
-          <div style={s.heading}>
-            <h1 style={{ ...s.title, color: t.textPrimary }}>
-              {searchQuery ? 'Results' : 'Recent memories'}
-            </h1>
-            <span className="ec-tabular" style={{ ...s.count, color: t.textMuted }}>
-              {searchQuery
-                ? `${list.length} found`
-                : more
-                  ? `${records.length} of ${total}`
-                  : `${records.length}`}
-            </span>
-            <button
-              type="button"
-              className="ec-hover-tint"
-              onClick={onStore}
-              style={{ ...s.storeBtn, color: t.textSecondary, borderColor: t.panelBorder }}
-            >
-              Store a memory
-            </button>
-          </div>
-
-          {(loading || isSearching) && (
-            <p style={{ ...s.state, color: t.textMuted }}>{isSearching ? 'Searching…' : 'Loading…'}</p>
-          )}
-
-          {error && !loading && (
-            <div role="alert" style={{ ...s.error, borderColor: withAlpha(STATUS.danger, 0.3), background: withAlpha(STATUS.danger, 0.07) }}>
-              <span style={{ color: STATUS.danger }}>{GLYPH.warning} {error}</span>
-              <button type="button" className="ec-hover-tint" onClick={onRetry} style={{ ...s.retryBtn, color: STATUS.danger, borderColor: withAlpha(STATUS.danger, 0.3) }}>
-                Retry
+          <div role="tablist" aria-label="Show" style={{ ...trackStyle(t), alignSelf: 'flex-start' }}>
+            {LENSES.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                role="tab"
+                aria-selected={lens === l.id}
+                className="ec-hover-tint"
+                onClick={() => setLens(l.id)}
+                style={{ ...segmentBase, ...segmentState(t, lens === l.id) }}
+              >
+                {l.label}
               </button>
-            </div>
-          )}
-
-          {searchQuery && list.length === 0 && !isSearching && (
-            <p style={{ ...s.state, color: t.textMuted }}>
-              Nothing matched. Try other words, or clear the search to see your recent memories.
-            </p>
-          )}
-
-          <div style={s.grid}>
-            {list.map((record) => (
-              <MemoryCard
-                key={record.id}
-                record={record}
-                selected={record.id === selectedNeuronId}
-                onSelect={(id) => selectNeuron(id === selectedNeuronId ? null : id)}
-              />
             ))}
           </div>
 
-          {more && !loading && (
-            <button
-              type="button"
-              className="ec-hover-tint"
-              onClick={onLoadMore}
-              disabled={loadingMore}
-              style={{ ...s.moreBtn, color: t.textSecondary, borderColor: t.panelBorder }}
-            >
-              {loadingMore ? 'Loading…' : `Show more (${total - records.length} older)`}
-            </button>
+          {lens === 'ai' ? (
+            <WhatAiKnows onStore={onStore} />
+          ) : (
+            <>
+            <div style={s.heading}>
+              <h1 style={{ ...s.title, color: t.textPrimary }}>
+                {searchQuery ? 'Results' : 'Recent memories'}
+              </h1>
+              <span className="ec-tabular" style={{ ...s.count, color: t.textMuted }}>
+                {searchQuery
+                  ? `${list.length} found`
+                  : more
+                    ? `${records.length} of ${total}`
+                    : `${records.length}`}
+              </span>
+              <button
+                type="button"
+                className="ec-hover-tint"
+                onClick={onStore}
+                style={{ ...s.storeBtn, color: t.textSecondary, borderColor: t.panelBorder }}
+              >
+                Store a memory
+              </button>
+            </div>
+
+            {(loading || isSearching) && (
+              <p style={{ ...s.state, color: t.textMuted }}>{isSearching ? 'Searching…' : 'Loading…'}</p>
+            )}
+
+            {error && !loading && (
+              <div role="alert" style={{ ...s.error, borderColor: withAlpha(STATUS.danger, 0.3), background: withAlpha(STATUS.danger, 0.07) }}>
+                <span style={{ color: STATUS.danger }}>{GLYPH.warning} {error}</span>
+                <button type="button" className="ec-hover-tint" onClick={onRetry} style={{ ...s.retryBtn, color: STATUS.danger, borderColor: withAlpha(STATUS.danger, 0.3) }}>
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {searchQuery && list.length === 0 && !isSearching && (
+              <p style={{ ...s.state, color: t.textMuted }}>
+                Nothing matched. Try other words, or clear the search to see your recent memories.
+              </p>
+            )}
+
+            <div style={s.grid}>
+              {list.map((record) => (
+                <MemoryCard
+                  key={record.id}
+                  record={record}
+                  selected={record.id === selectedNeuronId}
+                  onSelect={(id) => selectNeuron(id === selectedNeuronId ? null : id)}
+                />
+              ))}
+            </div>
+
+            {more && !loading && (
+              <button
+                type="button"
+                className="ec-hover-tint"
+                onClick={onLoadMore}
+                disabled={loadingMore}
+                style={{ ...s.moreBtn, color: t.textSecondary, borderColor: t.panelBorder }}
+              >
+                {loadingMore ? 'Loading…' : `Show more (${total - records.length} older)`}
+              </button>
+            )}
+            </>
           )}
         </div>
       </div>
@@ -140,6 +167,11 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
     </div>
   );
 }
+
+const LENSES = [
+  { id: 'memories', label: 'Memories' },
+  { id: 'ai', label: 'What my AI knows' },
+] as const;
 
 const s = {
   row: { flex: 1, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden' },
