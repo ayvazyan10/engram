@@ -60,6 +60,9 @@ importers:
       '@engram-ai-memory/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@engram-ai-memory/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@fastify/cors':
         specifier: ^10.0.2
         version: 10.1.0
@@ -72,6 +75,9 @@ importers:
       '@fastify/swagger-ui':
         specifier: ^5.2.2
         version: 5.2.5
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.11.0
+        version: 1.27.1(zod@4.3.6)
       drizzle-orm:
         specifier: ^0.40.0
         version: 0.40.1(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(gel@2.2.0)(pg@8.20.0)

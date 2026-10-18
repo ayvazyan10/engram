@@ -40,6 +40,7 @@ import { pluginRoutes } from './routes/plugins.js';
 import { reflectionRoutes } from './routes/reflection.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { syncRoutes } from './routes/sync.js';
+import { mcpRoutes } from './routes/mcp.js';
 
 /**
  * Where the API listens.
@@ -322,18 +323,26 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   // half already had. See security/hostGuard.ts for why Origin cannot do this.
   installHostGuard(app, readHostPolicy());
 
+  // MCP browser requests use the same Origin allowlist as CORS and WebSocket.
+  app.addHook('onRequest', async (req, reply) => {
+    const pathname = req.routeOptions.url ?? pathnameOf(req.url);
+    if (pathname === '/mcp' && !isAllowedOrigin(req.headers.origin)) {
+      await reply.code(403).send({ error: 'Forbidden origin' });
+    }
+  });
+
   // Per-client request rate limiting on /api/*. See security/rateLimit.ts.
   installRateLimit(app, readRateLimitConfig());
 
   // Optional API-key auth. Enabled only when ENGRAM_API_KEY is set, so the
   // local-first default is unchanged; health stays open for container probes.
   //
-  // Only /api/* is gated. Everything else — the dashboard's built static
+  // /api/*, /mcp and the OpenAPI documents are gated. The dashboard's built static
   // bundle (@fastify/static, registered below) and its SPA fallback
   // (setNotFoundHandler, also below) — is exempt by construction. A browser
   // cannot attach X-API-Key to a top-level navigation, so if '/' required the
   // key, the page that would let a user ever supply one could never load in
-  // the first place. Every real API route lives under /api/ (see the
+  // the first place. REST routes live under /api/ (see the
   // app.register(...routes, { prefix: '/api' }) calls below), so this is not
   // an accidental narrowing of what's protected — and neither the static
   // plugin nor the SPA fallback take the request path as a file path to
@@ -351,7 +360,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
       // cannot attach a key to a top-level navigation, same reason the
       // dashboard is exempt), but the machine-readable spec is gated with the
       // rest of the API surface.
-      if (pathname === '/docs/json' || pathname === '/docs/yaml') {
+      if (pathname === '/mcp' || pathname === '/docs/json' || pathname === '/docs/yaml') {
         // fall through to the key check
       } else if (!pathname.startsWith('/api/')) {
         return;
@@ -397,6 +406,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   await app.register(swaggerUi, { routePrefix: '/docs' });
 
   // Routes
+  await app.register(mcpRoutes);
   await app.register(healthRoutes, { prefix: '/api' });
   await app.register(memoryRoutes, { prefix: '/api' });
   await app.register(searchRoutes, { prefix: '/api' });

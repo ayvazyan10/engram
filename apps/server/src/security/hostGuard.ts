@@ -89,9 +89,9 @@ export function isAllowedHost(hostHeader: string | undefined, policy: HostPolicy
 }
 
 /**
- * Refuse /api/* requests whose Host is not allowlisted.
+ * Refuse /api/* and /mcp requests whose Host is not allowlisted.
  *
- * Scoped to /api/* on purpose. The dashboard shell and its static bundle stay
+ * Scoped to /api/* and /mcp on purpose. The dashboard shell and its static bundle stay
  * reachable under any Host: they hold no data, and gating them would recreate
  * the problem the static-asset exemption was added to fix (a browser cannot
  * put anything on a top-level navigation). A rebound page can therefore still
@@ -102,7 +102,8 @@ export function installHostGuard(app: FastifyInstance, policy: HostPolicy): void
   if (policy.disabled) return;
 
   app.addHook('onRequest', async (req, reply) => {
-    if (!(req.routeOptions.url ?? pathnameOf(req.url)).startsWith('/api/')) return;
+    const pathname = req.routeOptions.url ?? pathnameOf(req.url);
+    if (pathname !== '/mcp' && !pathname.startsWith('/api/')) return;
     if (isAllowedHost(req.headers.host, policy)) return;
 
     req.log.warn({ host: req.headers.host, url: req.url }, 'refused request with a non-allowlisted Host');

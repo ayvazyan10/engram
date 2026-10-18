@@ -50,6 +50,26 @@ Claude Desktop  →  node ~/.engram/mcp/server/index.js
 
 ## MCP Integration (Claude Code, Cursor, Windsurf, Cline)
 
+### Remote MCP over HTTP
+
+The REST server exposes Streamable HTTP MCP at `http(s)://<host>:<port>/mcp`.
+It provides the same tools as stdio MCP, using the same brain as the REST API.
+When `ENGRAM_API_KEY` is configured, send `X-API-Key: <ENGRAM_API_KEY>` or
+`Authorization: Bearer <ENGRAM_API_KEY>`. Otherwise, omit the auth headers.
+
+Example client configuration (replace the key placeholder with your configured key):
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "url": "http://localhost:4901/mcp",
+      "headers": { "X-API-Key": "<ENGRAM_API_KEY>" }
+    }
+  }
+}
+```
+
 ### Claude Code plugin (recommended)
 
 Run these commands in Claude Code:
