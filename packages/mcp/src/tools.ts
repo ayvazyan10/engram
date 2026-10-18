@@ -50,16 +50,14 @@ server.tool(
   'forget',
   'Archive outdated or incorrect memories. Use when info is superseded, user asks to forget, or after resolving contradictions.',
   {
-    ids: z.array(z.string()).describe('Memory IDs to archive'),
+    ids: z.array(z.string()).describe('Memory IDs or unique prefixes (at least 8 characters) to archive'),
     reason: z.string().optional().describe('Reason for forgetting (logged only)'),
   },
   { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   async ({ ids, reason }) => {
     await ensureInitialized();
 
-    // Check first, archive second. `brain.forget` on an unknown id resolves
-    // without doing anything, so archiving blind and counting the request was
-    // how a hallucinated id came back as "Archived 1 memory(ies)".
+    // Resolve first so aliases count once and missing or ambiguous ids are reported.
     const partition = partitionByExistence(brain, ids);
     for (const id of partition.existing) {
       await brain.forget(id);

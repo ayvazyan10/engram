@@ -50,6 +50,7 @@ server.tool(
       id: result.memory.id,
       type: result.memory.type,
       importance: result.memory.importance,
+      deduplicated: result.deduplicated ?? false,
       message: 'Memory stored successfully',
     };
 
@@ -73,6 +74,32 @@ server.tool(
           text: JSON.stringify(response),
         },
       ],
+    };
+  }
+);
+
+// ─── Tool: update_memory ──────────────────────────────────────────────────────
+server.tool(
+  'update_memory',
+  'Correct a stale fact or edit an existing memory by its full ID or unique prefix of at least 8 characters.',
+  {
+    id: z.string().describe('Memory ID or unique prefix (at least 8 characters)'),
+    content: z.string().min(1).optional().describe('Replacement memory content'),
+    importance: z.number().min(0).max(1).optional().describe('Importance score 0.0–1.0'),
+    tags: z.array(z.string()).optional().describe('Replacement tags'),
+    concept: z.string().optional().describe('Replacement concept name'),
+  },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  async ({ id, ...updates }) => {
+    await ensureInitialized();
+    const memory = await brain.updateMemory(id, updates);
+    syncEngine?.notifyWrite();
+    return {
+      content: [{ type: 'text', text: JSON.stringify({
+        id: memory.id, content: memory.content, importance: memory.importance,
+        tags: JSON.parse(memory.tags), concept: memory.concept,
+        message: 'Memory updated successfully',
+      }) }],
     };
   }
 );

@@ -122,6 +122,8 @@ const server = new McpServer(
       '  Use type="semantic" for facts, "episodic" for events, "procedural" for workflows.',
       '',
       'RECALL before answering:',
+      '  Recall shows [id · date] before each memory; id is an eight-character prefix.',
+      '  Use update_memory with that id to correct a stale fact.',
       '  - Past decisions, project history, conventions → search_memory first',
       '  - User preferences or prior corrections → search_memory first',
       '',

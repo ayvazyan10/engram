@@ -331,7 +331,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
     }
   });
 
-  // Per-client request rate limiting on /api/*. See security/rateLimit.ts.
+  // Per-client request rate limiting on /api/* and /mcp. See security/rateLimit.ts.
   installRateLimit(app, readRateLimitConfig());
 
   // Optional API-key auth. Enabled only when ENGRAM_API_KEY is set, so the
