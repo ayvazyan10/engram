@@ -119,6 +119,26 @@ describe('readProxyConfig', () => {
     expect(config.engramApi).toBe('http://localhost:4901');
   });
 
+  it('reads the upstream from ENGRAM_UPSTREAM', () => {
+    expect(readProxyConfig({ ENGRAM_UPSTREAM: 'http://localhost:1234' }).ollamaTarget).toBe(
+      'http://localhost:1234'
+    );
+  });
+
+  it('still reads the upstream from OLLAMA_TARGET', () => {
+    expect(readProxyConfig({ OLLAMA_TARGET: 'http://localhost:11434' }).ollamaTarget).toBe(
+      'http://localhost:11434'
+    );
+  });
+
+  it('prefers ENGRAM_UPSTREAM when both names are set', () => {
+    const config = readProxyConfig({
+      ENGRAM_UPSTREAM: 'https://openrouter.ai/api',
+      OLLAMA_TARGET: 'http://localhost:11434',
+    });
+    expect(config.ollamaTarget).toBe('https://openrouter.ai/api');
+  });
+
   it('reads ENGRAM_API_KEY, with blank meaning unset', () => {
     expect(readProxyConfig({ ENGRAM_API_KEY: 'secret' }).engramApiKey).toBe('secret');
     expect(readProxyConfig({}).engramApiKey).toBeUndefined();

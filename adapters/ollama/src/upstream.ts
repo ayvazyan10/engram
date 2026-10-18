@@ -32,6 +32,19 @@ export function upstreamPort(url: URL): number {
   return url.protocol === 'https:' ? DEFAULT_TLS_PORT : DEFAULT_OLLAMA_PORT;
 }
 
+/**
+ * Join the target URL's path prefix with the incoming request path.
+ *
+ * `ENGRAM_UPSTREAM=https://openrouter.ai/api` means a request for
+ * `/v1/chat/completions` has to reach `/api/v1/chat/completions`. A target
+ * with no path (the Ollama default) leaves the request path unchanged.
+ */
+function requestPath(target: UpstreamTarget, path: string | undefined): string {
+  const base = target.url.pathname.replace(/\/+$/, '');
+  const incoming = path ?? '/';
+  return `${base}${incoming.startsWith('/') ? incoming : `/${incoming}`}` || '/';
+}
+
 function requestOptions(
   target: UpstreamTarget,
   path: string | undefined,
@@ -41,7 +54,7 @@ function requestOptions(
   return {
     hostname: target.url.hostname,
     port: upstreamPort(target.url),
-    path,
+    path: requestPath(target, path),
     method,
     headers: { ...headers, host: target.url.host },
   };

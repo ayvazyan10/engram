@@ -167,9 +167,9 @@ export interface ProxyConfig {
  *   `ENGRAM_UPSTREAM_TIMEOUT_MS` how long a generation may take; a wrong value
  *   costs latency or context, not safety.
  *
- * `ENGRAM_PROXY_HOST`, `OLLAMA_TARGET` and `ENGRAM_API` are strings where
- * blank means unset, so each falls back to its documented default instead of
- * to the empty string.
+ * `ENGRAM_PROXY_HOST`, `ENGRAM_UPSTREAM` (with `OLLAMA_TARGET` as its older
+ * name) and `ENGRAM_API` are strings where blank means unset, so each falls
+ * back to its documented default instead of to the empty string.
  */
 export function readProxyConfig(
   env: EnvSource,
@@ -178,7 +178,10 @@ export function readProxyConfig(
   return {
     port: readEnvNumber(env, 'OLLAMA_PROXY_PORT', DEFAULT_PROXY_PORT, { min: 0, max: MAX_PORT }),
     listenHost: readEnvString(env, 'ENGRAM_PROXY_HOST') ?? DEFAULT_LISTEN_HOST,
-    ollamaTarget: readEnvString(env, 'OLLAMA_TARGET') ?? DEFAULT_OLLAMA_TARGET,
+    ollamaTarget:
+      readEnvString(env, 'ENGRAM_UPSTREAM') ??
+      readEnvString(env, 'OLLAMA_TARGET') ??
+      DEFAULT_OLLAMA_TARGET,
     engramApi: readEnvString(env, 'ENGRAM_API') ?? DEFAULT_ENGRAM_API,
     engramApiKey: readEnvString(env, 'ENGRAM_API_KEY'),
     maxTokens: readEnvNumberOr(env, 'ENGRAM_MAX_TOKENS', DEFAULT_MAX_TOKENS, { min: 1 }, warn),

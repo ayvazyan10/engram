@@ -86,6 +86,51 @@ function startUpstream(): Promise<string> {
   });
 }
 
+interface SeenUpstreamRequest {
+  readonly method: string | undefined;
+  readonly path: string;
+  readonly authorization: string | undefined;
+  readonly body: string;
+}
+
+/**
+ * An OpenAI-compatible stub mounted under /api, the shape OpenRouter uses.
+ * It records each request so tests can inspect what the proxy forwarded.
+ */
+function startOpenAIUpstream(): Promise<{ url: string; seen: SeenUpstreamRequest[] }> {
+  const seen: SeenUpstreamRequest[] = [];
+  return startHttp((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString();
+      seen.push({
+        method: req.method,
+        path: req.url ?? '',
+        authorization: req.headers.authorization,
+        body,
+      });
+
+      if (req.method === 'GET' && req.url === '/api/v1/models') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"object":"list","data":[{"id":"fake-model","object":"model"}]}');
+        return;
+      }
+
+      if ((JSON.parse(body) as { stream?: boolean }).stream === true) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"po"}}]}\n\n');
+        res.write('data: {"choices":[{"delta":{"content":"ng"},"finish_reason":"stop"}]}\n\n');
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"choices":[{"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}');
+    });
+  }).then((url) => ({ url: `${url}/api`, seen }));
+}
+
 type SpawnedProxy = Omit<RunningProxy, 'port'>;
 
 function spawnProxy(env: Record<string, string>): SpawnedProxy {
@@ -146,11 +191,24 @@ interface Reply {
 }
 
 /** POST to the proxy; a killed proxy surfaces as a socket error, not a status. */
-function post(port: number, urlPath: string, body: string | Buffer, host = '127.0.0.1'): Promise<Reply> {
+function post(
+  port: number,
+  urlPath: string,
+  body: string | Buffer,
+  host = '127.0.0.1',
+  headers: Record<string, string> = {}
+): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const payload = Buffer.isBuffer(body) ? body : Buffer.from(body);
     const req = http.request(
-      { host, port, path: urlPath, method: 'POST', agent: false, headers: { 'content-length': payload.length } },
+      {
+        host,
+        port,
+        path: urlPath,
+        method: 'POST',
+        agent: false,
+        headers: { 'content-length': payload.length, ...headers },
+      },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
@@ -159,6 +217,22 @@ function post(port: number, urlPath: string, body: string | Buffer, host = '127.
     );
     req.on('error', reject);
     req.end(payload);
+  });
+}
+
+/** GET from the proxy, using the same reply shape as `post`. */
+function get(port: number, urlPath: string): Promise<Reply> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: urlPath, method: 'GET', agent: false },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }));
+      }
+    );
+    req.on('error', reject);
+    req.end();
   });
 }
 
@@ -550,6 +624,54 @@ describe('tool-call retry eligibility', () => {
     expect(reply.status).toBe(200);
     expect(reply.body).toContain('tool result');
     expect(hits).toBe(2);
+  });
+});
+
+describe('OpenAI-compatible upstream', () => {
+  it('injects memory, forwards Authorization, streams SSE and proxies /v1/models', async () => {
+    const upstream = await startOpenAIUpstream();
+    const engram = await startHttp((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(req.url === '/api/recall' ? '{"context":"remembered facts"}' : '{}');
+      });
+    });
+    const proxy = await startProxy({ ENGRAM_UPSTREAM: upstream.url, ENGRAM_API: engram });
+
+    const reply = await post(
+      proxy.port,
+      '/v1/chat/completions',
+      JSON.stringify({ model: 'fake', messages: [{ role: 'user', content: 'hello' }] }),
+      '127.0.0.1',
+      { authorization: 'Bearer client-key' }
+    );
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('pong');
+
+    const plain = upstream.seen.find((r) => r.path === '/api/v1/chat/completions');
+    expect(plain).toBeDefined();
+    const forwarded = JSON.parse(plain!.body) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(forwarded.messages[0]).toEqual({ role: 'system', content: 'remembered facts' });
+    expect(plain!.authorization).toBe('Bearer client-key');
+
+    const streamed = await post(
+      proxy.port,
+      '/v1/chat/completions',
+      JSON.stringify({ model: 'fake', stream: true, messages: [{ role: 'user', content: 'stream' }] }),
+      '127.0.0.1',
+      { authorization: 'Bearer client-key' }
+    );
+    expect(streamed.status).toBe(200);
+    expect(streamed.body).toContain('data: {"choices":[{"delta":{"content":"po"}}]}\n\n');
+    expect(streamed.body.trimEnd().endsWith('data: [DONE]')).toBe(true);
+
+    const models = await get(proxy.port, '/v1/models');
+    expect(models.status).toBe(200);
+    expect(models.body).toContain('fake-model');
+    expect(upstream.seen.some((r) => r.method === 'GET' && r.path === '/api/v1/models')).toBe(true);
   });
 });
 
