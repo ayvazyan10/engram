@@ -13,6 +13,7 @@ import {
   readJson,
   readJsonOrEmpty,
   registerHook,
+  quoteHookCommand,
   renderHook,
   installHookScript,
   updateJsonConfig,
@@ -38,7 +39,7 @@ describe('registerHook', () => {
     registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
     const entries = (s as any).hooks.UserPromptSubmit;
     expect(entries).toHaveLength(1);
-    expect(entries[0].hooks[0]).toMatchObject({ type: 'command', command: '/a/engram-recall.sh', timeout: 8 });
+    expect(entries[0].hooks[0]).toMatchObject({ type: 'command', command: "'/a/engram-recall.sh'", timeout: 8 });
   });
 
   it('is idempotent across repeated runs', () => {
@@ -61,6 +62,31 @@ describe('registerHook', () => {
     };
     registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
     expect(s.hooks.UserPromptSubmit).toHaveLength(2);
+  });
+
+  it('still dedupes against an entry written quoted by a previous run', () => {
+    const s: Record<string, any> = {
+      hooks: { UserPromptSubmit: [{ matcher: '', hooks: [{ type: 'command', command: "'/home/me/My Files/engram-recall.sh'" }] }] },
+    };
+    registerHook(s, 'UserPromptSubmit', '/home/me/My Files/engram-recall.sh', 8);
+    expect(s.hooks.UserPromptSubmit).toHaveLength(1);
+  });
+});
+
+describe('quoteHookCommand', () => {
+  it('single-quotes a POSIX path so spaces survive the shell', () => {
+    expect(quoteHookCommand('/home/me/My Files/engram-recall.sh', 'linux'))
+      .toBe("'/home/me/My Files/engram-recall.sh'");
+  });
+
+  it('escapes an embedded single quote with close-escape-reopen', () => {
+    expect(quoteHookCommand("/home/o'brien/engram-recall.sh", 'linux'))
+      .toBe("'/home/o'\\''brien/engram-recall.sh'");
+  });
+
+  it('double-quotes a Windows path', () => {
+    expect(quoteHookCommand('C:\\Users\\My Files\\engram-recall.sh', 'win32'))
+      .toBe('"C:\\Users\\My Files\\engram-recall.sh"');
   });
 });
 

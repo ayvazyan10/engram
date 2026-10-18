@@ -165,6 +165,23 @@ export function installHookScript(templateDir: string, hooksDir: string, file: s
   return dest;
 }
 
+/** Quote a hook script path so a home directory containing spaces still runs. */
+export function quoteHookCommand(command: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return `"${command}"`;
+  return `'${command.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Undo quoteHookCommand for basename comparison, including older quoted entries. */
+function unquoteHookCommand(command: string): string {
+  if (command.length >= 2 && command.startsWith("'") && command.endsWith("'")) {
+    return command.slice(1, -1).replace(/'\\''/g, "'");
+  }
+  if (command.length >= 2 && command.startsWith('"') && command.endsWith('"')) {
+    return command.slice(1, -1);
+  }
+  return command;
+}
+
 /**
  * Register a hook command for an event in a settings object, without duplicating
  * it. Dedupe is by script basename, not exact path, so a re-run or a moved
@@ -175,8 +192,8 @@ export function registerHook(settings: Record<string, any>, event: string, comma
   const entries: any[] = hooks[event] || (hooks[event] = []);
   const base = path.basename(command);
   const already = entries.some((e) =>
-    (e.hooks || []).some((h: any) => typeof h.command === 'string' && path.basename(h.command) === base));
-  if (!already) entries.push({ matcher: '', hooks: [{ type: 'command', command, timeout }] });
+    (e.hooks || []).some((h: any) => typeof h.command === 'string' && path.basename(unquoteHookCommand(h.command)) === base));
+  if (!already) entries.push({ matcher: '', hooks: [{ type: 'command', command: quoteHookCommand(command), timeout }] });
 }
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

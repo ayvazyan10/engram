@@ -1219,8 +1219,14 @@ program
     let parseFailures = 0;
 
     try {
-      const doc = JSON.parse(input) as { memories?: Array<Record<string, unknown>> };
-      memories = doc.memories ?? [];
+      const doc = JSON.parse(input) as {
+        type?: string;
+        data?: Record<string, unknown>;
+        memories?: Array<Record<string, unknown>>;
+      };
+      // A single-record NDJSON line parses as a whole JSON document too, but
+      // has no `memories` key — treat its `data` as the one memory.
+      memories = doc.type === 'memory' && doc.data ? [doc.data] : doc.memories ?? [];
     } catch {
       for (const line of input.split('\n')) {
         const trimmed = line.trim();
@@ -1238,11 +1244,18 @@ program
     if (parseFailures > 0) warn(`${parseFailures} malformed line(s) skipped`);
 
     console.log(`Found ${memories.length} memories to import`);
-    if (memories.length === 0) {
+    if (memories.length === 0 && parseFailures === 0) {
       console.error('Nothing to import — input is neither a JSON export nor NDJSON.');
       process.exit(1);
     }
-    if (opts.dryRun) { console.log('Dry run — no changes.'); return; }
+    if (opts.dryRun) {
+      if (parseFailures > 0) {
+        console.log(`Imported: 0  Skipped: ${parseFailures}`);
+        process.exitCode = 1;
+      }
+      console.log('Dry run — no changes.');
+      return;
+    }
 
     let imported = 0;
     let skipped = 0;
@@ -1254,6 +1267,8 @@ program
           content: m.content, type: m.type ?? 'episodic', source: m.source ?? 'import',
           importance: m.importance, concept: m.concept,
           tags: typeof m.tags === 'string' ? JSON.parse(m.tags as string) : m.tags,
+          metadata: typeof m.metadata === 'string' ? JSON.parse(m.metadata as string) : m.metadata,
+          sessionId: m.sessionId,
           namespace: m.namespace,
         });
         imported++;
@@ -1274,11 +1289,10 @@ program
       }
     }
 
+    skipped += parseFailures;
     console.log(`Imported: ${imported}  Skipped: ${skipped}`);
-    if (firstError) {
-      fail(`First failure: ${firstError}`);
-      process.exit(1);
-    }
+    if (firstError) fail(`First failure: ${firstError}`);
+    if (firstError || parseFailures > 0) process.exitCode = 1;
   });
 
 // ─── Reflection ─────────────────────────────────────────────────────────────
