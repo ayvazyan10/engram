@@ -910,6 +910,24 @@ export class NeuralBrain {
    * Store a new memory.
    */
   async store(input: StoreInput): Promise<StoreResult> {
+    return this.storeWithEmbedding(input);
+  }
+
+  /** Embed once, then store in order so deduplication and links see earlier writes. */
+  async storeBatch(inputs: StoreInput[]): Promise<StoreResult[]> {
+    this.assertInitialized();
+    if (inputs.length === 0) return [];
+    const embeddings = await embedBatch(inputs.map((input) => memoryEmbeddingText({
+      ...input, concept: input.concept ?? extractConcept(input.content),
+    })));
+    const results: StoreResult[] = [];
+    for (const [index, input] of inputs.entries()) {
+      results.push(await this.storeWithEmbedding(input, embeddings[index]!));
+    }
+    return results;
+  }
+
+  private async storeWithEmbedding(input: StoreInput, precomputedEmbedding?: Float32Array): Promise<StoreResult> {
     this.assertInitialized();
     const dedupThreshold = readDedupThreshold(process.env);
     // Checked before anything is embedded or written. `input.importance ??
@@ -930,7 +948,7 @@ export class NeuralBrain {
     const deviceId = getDeviceId();
 
     const concept = input.concept ?? extractConcept(input.content);
-    const embedding = await embed(memoryEmbeddingText({ ...input, type, concept }));
+    const embedding = precomputedEmbedding ?? await embed(memoryEmbeddingText({ ...input, type, concept }));
     const embeddingBuf = packFP16(embedding);
 
     const record: NewMemory = {

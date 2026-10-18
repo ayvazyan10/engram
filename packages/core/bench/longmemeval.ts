@@ -55,18 +55,16 @@ function options() {
 }
 
 async function storeHaystack(brain: NeuralBrain, question: Question): Promise<void> {
-  for (const [index, session] of question.haystack_sessions.entries()) {
+  const inputs = question.haystack_sessions.flatMap((session, index) => {
     const sessionId = question.haystack_session_ids[index];
     if (sessionId === undefined) throw new Error(`Missing session id: ${question.question_id}/${index}`);
-    for (const turn of session) {
-      // StoreInput has no precomputed embedding or batch-store option.
-      await brain.store({
-        type: 'episodic',
-        content: `${turn.role}: ${turn.content}`,
-        sessionId,
-      });
-    }
-  }
+    return session.map((turn) => ({
+      type: 'episodic' as const,
+      content: `${turn.role}: ${turn.content}`,
+      sessionId,
+    }));
+  });
+  await brain.storeBatch(inputs);
 }
 
 async function evaluate(question: Question): Promise<Evaluation> {
