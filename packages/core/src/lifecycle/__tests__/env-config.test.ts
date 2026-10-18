@@ -9,7 +9,7 @@
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDatabase, closeDatabase } from '../../db/adapter.ts';
+import { getDatabase, closeDatabase, resolveDbPath } from '../../db/adapter.ts';
 import { describe, it, expect, vi } from 'vitest';
 import {
   EnvConfigError,
@@ -155,6 +155,25 @@ describe('readEnvEnum', () => {
       /M must be one of: auto, manual, off — got "Auto"/
     );
     expect(() => readEnvEnum({ M: 'offf' }, 'M', modes)).toThrow(EnvConfigError);
+  });
+});
+
+describe('resolveDbPath', () => {
+  const home = '/home/tester';
+
+  it('treats blank, whitespace and absent as the default brain', () => {
+    expect(resolveDbPath('', home)).toBe(path.join(home, '.engram', 'engram.db'));
+    expect(resolveDbPath('   ', home)).toBe(path.join(home, '.engram', 'engram.db'));
+    expect(resolveDbPath(undefined, home)).toBe(path.join(home, '.engram', 'engram.db'));
+  });
+
+  it('expands bare ~ and a leading ~/ to the home directory', () => {
+    expect(resolveDbPath('~', home)).toBe(home);
+    expect(resolveDbPath('~/x/engram.db', home)).toBe(path.join(home, 'x/engram.db'));
+  });
+
+  it('passes an absolute path through unchanged', () => {
+    expect(resolveDbPath('/var/data/engram.db', home)).toBe('/var/data/engram.db');
   });
 });
 

@@ -8,35 +8,15 @@
  *   node store-session.js "session summary text"
  */
 
-import { NeuralBrain } from '@engram-ai-memory/core';
+import { NeuralBrain, resolveDbPath } from '@engram-ai-memory/core';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { resolveNamespaceSettings, type NamespaceEnv } from './namespaceEnv.js';
 
+export { resolveDbPath };
+
 /** Shortest summary worth a row — anything below this is a hook misfire. */
 const MIN_CONTENT_LENGTH = 10;
-
-/**
- * Where memories go when the caller gave us no path.
- *
- * Duplicated (not imported) from `resolveDbPath` in server.ts: importing that
- * module here would build a NeuralBrain, an McpServer and 21 tool handlers to
- * store one row. Keep both copies identical — the same trap is behind both.
- *
- * `??` is not enough. A host that templates an unset optional config field
- * passes an EMPTY STRING rather than omitting the variable, and better-sqlite3
- * reads '' as an anonymous temporary database that is deleted on close: the
- * session summary is reported as stored and thrown away moments later. The
- * default is the one scripts/claude-code-hook.sh and the extension manifest
- * both advertise.
- */
-export function resolveDbPath(raw: string | undefined, home: string = os.homedir()): string {
-  if (!raw || raw.trim().length === 0) return path.join(home, '.engram', 'engram.db');
-  if (raw === '~') return home;
-  if (raw.startsWith('~/')) return path.join(home, raw.slice(2));
-  return raw;
-}
 
 /**
  * The summary to store: the command line if there is one, otherwise stdin.

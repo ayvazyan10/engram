@@ -15,9 +15,8 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { NeuralBrain, SyncEngine, redactSyncUrl } from '@engram-ai-memory/core';
+import { NeuralBrain, SyncEngine, redactSyncUrl, resolveDbPath } from '@engram-ai-memory/core';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { registerTools } from './tools.js';
 import { resolveNamespaceSettings } from './namespaceEnv.js';
@@ -35,31 +34,7 @@ const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
 // write into the same database and must agree on which namespace that is.
 const { namespaceMode, namespace } = resolveNamespaceSettings(process.env);
 
-/**
- * Where memories go when the host gave us no path.
- *
- * Same trap as ENGRAM_NAMESPACE_MODE above, with a far worse ending: hosts
- * that template an unset optional config field pass an EMPTY STRING rather
- * than omitting the variable, and better-sqlite3 reads '' as an ANONYMOUS
- * TEMPORARY DATABASE that is deleted when the connection closes. The Claude
- * Desktop extension's `db_path` defaults to "" and tells the user to leave it
- * empty, so every install that followed the instructions reported memories as
- * stored and threw all of them away on exit, with no .db file anywhere.
- *
- * The default is the one the manifest advertises (~/.engram/engram.db), not
- * `process.cwd()/engram.db`: under Claude Desktop the cwd belongs to the app,
- * so a database there is one nobody chose and nobody can find.
- *
- * A configured path is used as given, except that a leading `~/` is expanded:
- * a JSON client config has no shell to do it, and a literal `~` directory
- * would be created under whatever cwd the client launched us in.
- */
-export function resolveDbPath(raw: string | undefined, home: string = os.homedir()): string {
-  if (!raw || raw.trim().length === 0) return path.join(home, '.engram', 'engram.db');
-  if (raw === '~') return home;
-  if (raw.startsWith('~/')) return path.join(home, raw.slice(2));
-  return raw;
-}
+export { resolveDbPath };
 
 /**
  * Create the directory the database file lives in. better-sqlite3 does not,

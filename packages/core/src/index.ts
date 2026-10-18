@@ -101,6 +101,7 @@ export type {
 } from './reflection/index.js';
 
 // DB client
+export { resolveDbPath } from './db/adapter.js';
 export { getDb, closeDb, schema, getDatabaseDialect, getDatabaseConnection } from './db/index.js';
 export type { DatabaseDialect, AdapterConfig, DatabaseConnection } from './db/index.js';
 

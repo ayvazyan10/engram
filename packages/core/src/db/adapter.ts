@@ -79,16 +79,28 @@ function configuredPath(value: string | undefined): string | undefined {
 }
 
 /**
+ * Where the database file lives when the host gave no path.
+ *
+ * Blank means "not configured" — better-sqlite3 reads '' as an anonymous
+ * temporary database that is deleted on close. A leading `~/` is expanded
+ * because a JSON client config has no shell to do it.
+ */
+export function resolveDbPath(raw: string | undefined, home: string = os.homedir()): string {
+  if (!raw || raw.trim().length === 0) return path.join(home, '.engram', 'engram.db');
+  if (raw === '~') return home;
+  if (raw.startsWith('~/')) return path.join(home, raw.slice(2));
+  return raw;
+}
+
+/**
  * Resolve config from explicit options, env vars, and defaults.
  */
 function resolveConfig(config?: AdapterConfig): { sqlitePath: string } {
-  const sqlitePath =
-    configuredPath(config?.sqlitePath) ??
-    configuredPath(process.env['ENGRAM_DB_PATH']) ??
-    path.join(os.homedir(), '.engram', 'engram.db');
-
-  return { sqlitePath: sqlitePath.startsWith('~/')
-    ? path.join(os.homedir(), sqlitePath.slice(2)) : sqlitePath };
+  return {
+    sqlitePath: resolveDbPath(
+      configuredPath(config?.sqlitePath) ?? configuredPath(process.env['ENGRAM_DB_PATH'])
+    ),
+  };
 }
 
 /**
