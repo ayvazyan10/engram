@@ -144,6 +144,7 @@ export interface ProxyConfig {
   readonly listenHost: string;
   readonly ollamaTarget: string;
   readonly engramApi: string;
+  readonly engramApiKey: string | undefined;
   readonly maxTokens: number;
   readonly maxBodyBytes: number;
   readonly toolRetry: boolean;
@@ -179,6 +180,7 @@ export function readProxyConfig(
     listenHost: readEnvString(env, 'ENGRAM_PROXY_HOST') ?? DEFAULT_LISTEN_HOST,
     ollamaTarget: readEnvString(env, 'OLLAMA_TARGET') ?? DEFAULT_OLLAMA_TARGET,
     engramApi: readEnvString(env, 'ENGRAM_API') ?? DEFAULT_ENGRAM_API,
+    engramApiKey: readEnvString(env, 'ENGRAM_API_KEY'),
     maxTokens: readEnvNumberOr(env, 'ENGRAM_MAX_TOKENS', DEFAULT_MAX_TOKENS, { min: 1 }, warn),
     maxBodyBytes: readEnvNumber(env, 'ENGRAM_MAX_BODY_BYTES', DEFAULT_MAX_BODY_BYTES, { min: 1 }),
     // Opt-OUT flag: only the exact string "false" disables it, so a blank value

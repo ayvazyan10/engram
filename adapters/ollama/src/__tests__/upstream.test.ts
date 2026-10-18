@@ -187,6 +187,90 @@ describe('passthrough', () => {
     });
     expect(response.status).toBe(502);
   });
+
+  it('ends the response instead of crashing when the upstream dies mid-body', async () => {
+    const { target } = await startServer((_req, res) => {
+      res.writeHead(200);
+      res.write('{"partial":true', () => {
+        // Flush the head first, then reset the socket mid-body. Without an
+        // 'error' listener on proxyRes this was an unhandled event.
+        setTimeout(() => res.socket?.destroy(), 30);
+      });
+    });
+
+    const response = await callThrough((req, res) => {
+      passthrough(target, req, res, Buffer.from(''));
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('"partial"');
+  });
+
+  it('times out instead of hanging forever on a silent upstream', async () => {
+    const { target } = await startServer(() => {
+      // Never respond.
+    });
+    const fast: UpstreamTarget = { url: target.url, timeoutMs: 150 };
+
+    const response = await callThrough((req, res) => {
+      passthrough(fast, req, res, Buffer.from(''));
+    });
+
+    expect(response.status).toBe(502);
+    expect(response.body).toBe('Bad Gateway');
+  });
+
+  it('destroys the upstream request when the client disconnects early', async () => {
+    let upstreamClosed!: () => void;
+    const closed = new Promise<void>((resolve) => { upstreamClosed = resolve; });
+    let markReached!: () => void;
+    const reached = new Promise<void>((resolve) => { markReached = resolve; });
+
+    const { target } = await startServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        markReached();
+        // If the proxy fails to cancel, this eventually closes the socket so
+        // teardown can finish instead of waiting on a silent connection.
+        const timer = setTimeout(() => {
+          res.end('{}', () => res.socket?.destroy());
+        }, 1500);
+        req.socket.on('close', () => {
+          clearTimeout(timer);
+          upstreamClosed();
+        });
+      });
+    });
+
+    const proxyServer = http.createServer((req, res) => {
+      res.on('error', () => {});
+      passthrough(target, req, res, Buffer.from(''));
+    });
+    servers.push(proxyServer);
+    await new Promise<void>((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
+    const proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    const client = http.request({
+      hostname: '127.0.0.1',
+      port: proxyPort,
+      path: '/api/generate',
+      method: 'POST',
+      agent: false,
+    });
+    client.on('error', () => {});
+    client.end('{}');
+
+    await reached;
+    client.destroy();
+
+    const result = await Promise.race([
+      closed.then(() => 'closed'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('open'), 1000)),
+    ]);
+
+    proxyServer.closeAllConnections();
+    expect(result).toBe('closed');
+  });
 });
 
 describe('header forwarding', () => {

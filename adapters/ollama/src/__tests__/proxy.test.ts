@@ -31,25 +31,57 @@ const children: ChildProcess[] = [];
 const servers: net.Server[] = [];
 
 afterEach(async () => {
-  for (const child of children.splice(0)) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  }
+  await Promise.all(
+    children.splice(0).map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
+          const timer = setTimeout(resolve, 2000);
+          timer.unref();
+          child.once('exit', () => { clearTimeout(timer); resolve(); });
+          // tsx runs the proxy as its own child, so killing only the wrapper
+          // orphans the proxy. detached:true made the wrapper a process-group
+          // leader; kill the whole group.
+          try {
+            if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+            else child.kill('SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+        })
+    )
+  );
   await Promise.all(servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
 });
 
-/** A stub that answers like Ollama, so the proxy has somewhere to forward to. */
-function startUpstream(): Promise<string> {
+/** Start a stub server on an ephemeral port and return its base URL. */
+function startHttp(handler: http.RequestListener): Promise<string> {
   return new Promise((resolve) => {
-    const server = http.createServer((req, res) => {
-      req.resume();
-      req.on('end', () => {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end('{"message":{"role":"assistant","content":"pong"},"done":true}');
-      });
-    });
+    const server = http.createServer(handler);
     servers.push(server);
     server.listen(0, '127.0.0.1', () => {
       resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    });
+  });
+}
+
+/** Wait for an async condition without depending on real-time sleeps. */
+async function waitUntil(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error('condition was not met before the deadline');
+}
+
+/** A stub that answers like Ollama, so the proxy has somewhere to forward to. */
+function startUpstream(): Promise<string> {
+  return startHttp((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"message":{"role":"assistant","content":"pong"},"done":true}');
     });
   });
 }
@@ -60,6 +92,7 @@ function spawnProxy(env: Record<string, string>): SpawnedProxy {
   const child = spawn(TSX, [PROXY_ENTRY], {
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
+    detached: true,
   });
   children.push(child);
 
@@ -318,5 +351,258 @@ describe('listen failure', () => {
     const code = await new Promise<number | null>((resolve) => proxy.child.on('exit', resolve));
     expect(code).toBe(1);
     expect(proxy.output()).toContain('EADDRINUSE');
+  });
+});
+
+describe('Engram API credentials', () => {
+  it('sends ENGRAM_API_KEY as X-API-Key on recall and store', async () => {
+    const seen: Array<{ path: string; key: string | undefined }> = [];
+    const engram = await startHttp((req, res) => {
+      seen.push({ path: req.url ?? '', key: req.headers['x-api-key'] as string | undefined });
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(req.url === '/api/recall' ? '{"context":"remembered"}' : '{}');
+      });
+    });
+    const upstream = await startUpstream();
+    const proxy = await startProxy({
+      OLLAMA_TARGET: upstream,
+      ENGRAM_API: engram,
+      ENGRAM_API_KEY: 'secret-key',
+    });
+
+    const reply = await post(
+      proxy.port,
+      '/api/chat',
+      JSON.stringify({ messages: [{ role: 'user', content: 'ping' }] })
+    );
+    expect(reply.status).toBe(200);
+    await waitUntil(() => seen.some((s) => s.path === '/api/memory'));
+
+    // Without the header the server rejects every call and memory silently
+    // stops working while the proxy still answers normally.
+    expect(seen.find((s) => s.path === '/api/recall')?.key).toBe('secret-key');
+    expect(seen.find((s) => s.path === '/api/memory')?.key).toBe('secret-key');
+  });
+
+  it('logs only the first non-OK Engram response status', async () => {
+    const engram = await startHttp((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(401);
+        res.end('unauthorized');
+      });
+    });
+    const upstream = await startUpstream();
+    const proxy = await startProxy({
+      OLLAMA_TARGET: upstream,
+      ENGRAM_API: engram,
+      ENGRAM_API_KEY: 'wrong-key',
+    });
+
+    await post(proxy.port, '/api/chat', JSON.stringify({ messages: [{ role: 'user', content: 'one' }] }));
+    await post(proxy.port, '/api/chat', JSON.stringify({ messages: [{ role: 'user', content: 'two' }] }));
+
+    await waitUntil(() => proxy.output().includes('HTTP 401'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(proxy.output().match(/HTTP 401/g)).toHaveLength(1);
+  });
+});
+
+describe('client disconnect during recall', () => {
+  it('does not dispatch to Ollama when the client is already gone', async () => {
+    let recallStarted = false;
+    const engram = await startHttp((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        recallStarted = true;
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"context":"slow"}');
+        }, 400);
+      });
+    });
+
+    let upstreamHits = 0;
+    const upstream = await startHttp((req, res) => {
+      upstreamHits += 1;
+      req.resume();
+      req.on('end', () => res.end('{}'));
+    });
+
+    const proxy = await startProxy({ OLLAMA_TARGET: upstream, ENGRAM_API: engram });
+    const client = http.request({
+      host: '127.0.0.1',
+      port: proxy.port,
+      path: '/api/chat',
+      method: 'POST',
+      agent: false,
+    });
+    client.on('error', () => {});
+    client.end(JSON.stringify({ messages: [{ role: 'user', content: 'ping' }] }));
+
+    await waitUntil(() => recallStarted);
+    client.destroy();
+    await new Promise((r) => setTimeout(r, 600));
+
+    // The recall await used to finish after the hang-up and still send the
+    // request upstream, spending GPU time for an answer nobody could read.
+    expect(upstreamHits).toBe(0);
+    expect(proxy.child.exitCode).toBeNull();
+  });
+});
+
+describe('tool-call retry eligibility', () => {
+  const TOOLS = [{ type: 'function', function: { name: 'get_weather', parameters: {} } }];
+
+  it('does not retry a text answer that follows a tool result', async () => {
+    let hits = 0;
+    const upstream = await startHttp((req, res) => {
+      hits += 1;
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"message":{"role":"assistant","content":"the final answer"},"done":true}');
+      });
+    });
+    const proxy = await startProxy({
+      OLLAMA_TARGET: upstream,
+      ENGRAM_API: `http://127.0.0.1:${DEAD_PORT}`,
+    });
+
+    const reply = await post(
+      proxy.port,
+      '/api/chat',
+      JSON.stringify({
+        messages: [
+          { role: 'user', content: 'what is the weather?' },
+          { role: 'assistant', content: null, tool_calls: [{ function: { name: 'get_weather' } }] },
+          { role: 'tool', content: '{"temp":20}' },
+        ],
+        tools: TOOLS,
+      })
+    );
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('the final answer');
+    expect(hits).toBe(1);
+  });
+
+  it('does not retry when tool_choice is "none"', async () => {
+    let hits = 0;
+    const upstream = await startHttp((req, res) => {
+      hits += 1;
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"choices":[{"message":{"content":"plain answer"},"finish_reason":"stop"}]}');
+      });
+    });
+    const proxy = await startProxy({
+      OLLAMA_TARGET: upstream,
+      ENGRAM_API: `http://127.0.0.1:${DEAD_PORT}`,
+    });
+
+    const reply = await post(
+      proxy.port,
+      '/v1/chat/completions',
+      JSON.stringify({
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: TOOLS,
+        tool_choice: 'none',
+      })
+    );
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('plain answer');
+    expect(hits).toBe(1);
+  });
+
+  it('still retries when the user asks and tools are allowed', async () => {
+    let hits = 0;
+    const upstream = await startHttp((req, res) => {
+      hits += 1;
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          hits === 1
+            ? '{"message":{"role":"assistant","content":"I will answer in prose"},"done":true}'
+            : '{"message":{"role":"assistant","content":"tool result"},"done":true}'
+        );
+      });
+    });
+    const proxy = await startProxy({
+      OLLAMA_TARGET: upstream,
+      ENGRAM_API: `http://127.0.0.1:${DEAD_PORT}`,
+    });
+
+    const reply = await post(
+      proxy.port,
+      '/api/chat',
+      JSON.stringify({
+        messages: [{ role: 'user', content: 'use the tool' }],
+        tools: TOOLS,
+      })
+    );
+
+    expect(reply.status).toBe(200);
+    expect(reply.body).toContain('tool result');
+    expect(hits).toBe(2);
+  });
+});
+
+describe('remembering a retried exchange', () => {
+  it('stores the delivered response, never the retry instruction', async () => {
+    const memories: string[] = [];
+    const engram = await startHttp((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        if (req.url === '/api/recall') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"context":""}');
+          return;
+        }
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as { content?: string };
+        if (body.content) memories.push(body.content);
+        res.writeHead(200);
+        res.end('{}');
+      });
+    });
+
+    let hits = 0;
+    const upstream = await startHttp((req, res) => {
+      hits += 1;
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          hits === 1
+            ? '{"message":{"role":"assistant","content":"I will answer in prose"},"done":true}'
+            : '{"message":{"role":"assistant","content":"forced answer"},"done":true}'
+        );
+      });
+    });
+    const proxy = await startProxy({ OLLAMA_TARGET: upstream, ENGRAM_API: engram });
+
+    const reply = await post(
+      proxy.port,
+      '/api/chat',
+      JSON.stringify({
+        messages: [{ role: 'user', content: 'use the tool' }],
+        tools: [{ type: 'function', function: { name: 'get_weather', parameters: {} } }],
+      })
+    );
+
+    expect(reply.body).toContain('forced answer');
+    await waitUntil(() => memories.length > 0);
+
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toContain('User: use the tool');
+    expect(memories[0]).toContain('forced answer');
+    expect(memories[0]).not.toContain('I will answer in prose');
+    expect(memories[0]).not.toContain('You must call one of the provided tools');
   });
 });

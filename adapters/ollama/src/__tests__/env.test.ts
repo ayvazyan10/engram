@@ -119,6 +119,12 @@ describe('readProxyConfig', () => {
     expect(config.engramApi).toBe('http://localhost:4901');
   });
 
+  it('reads ENGRAM_API_KEY, with blank meaning unset', () => {
+    expect(readProxyConfig({ ENGRAM_API_KEY: 'secret' }).engramApiKey).toBe('secret');
+    expect(readProxyConfig({}).engramApiKey).toBeUndefined();
+    expect(readProxyConfig({ ENGRAM_API_KEY: '   ' }).engramApiKey).toBeUndefined();
+  });
+
   it('leaves tool retry on unless it is switched off explicitly', () => {
     expect(readProxyConfig({}).toolRetry).toBe(true);
     expect(readProxyConfig({ ENGRAM_TOOL_RETRY: '' }).toolRetry).toBe(true);

@@ -165,18 +165,31 @@ export function passthrough(
     'content-length': body.length.toString(),
   });
 
-  const proxyReq = protocolFor(target).request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode ?? 200, buildResponseHeaders(proxyRes.headers));
-    proxyRes.pipe(res);
-  });
-
-  proxyReq.on('error', () => {
+  const failClient = () => {
     if (!res.headersSent) {
-      res.writeHead(502);
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
       res.end('Bad Gateway');
     } else if (!res.writableEnded) {
       res.end();
     }
+  };
+
+  const proxyReq = protocolFor(target).request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode ?? 200, buildResponseHeaders(proxyRes.headers));
+    // Without this listener a mid-body reset on the upstream socket is an
+    // unhandled 'error' event, which takes the whole proxy process down.
+    proxyRes.on('error', failClient);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('error', failClient);
+  proxyReq.setTimeout(target.timeoutMs, () => {
+    proxyReq.destroy(new Error(`Upstream timed out after ${target.timeoutMs}ms`));
+  });
+
+  // Client went away — release the upstream instead of holding its socket.
+  res.on('close', () => {
+    if (!res.writableEnded) proxyReq.destroy();
   });
 
   proxyReq.write(body);

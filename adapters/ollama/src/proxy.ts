@@ -61,6 +61,7 @@ const PROXY_PORT = config.port;
 const LISTEN_HOST = config.listenHost;
 const OLLAMA_TARGET = config.ollamaTarget;
 const ENGRAM_API = config.engramApi;
+const ENGRAM_API_KEY = config.engramApiKey;
 const MAX_TOKENS = config.maxTokens;
 const MAX_BODY_BYTES = config.maxBodyBytes;
 const TOOL_RETRY = config.toolRetry;
@@ -84,15 +85,33 @@ interface ChatDispatch {
 
 // ─── Engram API ───────────────────────────────────────────────────────────────
 
+let engramFailureLogged = false;
+
+/** The first failed call is the one worth reporting; later ones are noise. */
+function logEngramFailure(status: number): void {
+  if (engramFailureLogged) return;
+  engramFailureLogged = true;
+  console.warn(`[Engram] Engram API returned HTTP ${status} — memory is not working`);
+}
+
+function engramHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (ENGRAM_API_KEY) headers['X-API-Key'] = ENGRAM_API_KEY;
+  return headers;
+}
+
 async function recallContext(query: string): Promise<string> {
   try {
     const response = await fetch(`${ENGRAM_API}/api/recall`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: engramHeaders(),
       body: JSON.stringify({ query, maxTokens: MAX_TOKENS, source: 'ollama' }),
       signal: AbortSignal.timeout(3000),
     });
-    if (!response.ok) return '';
+    if (!response.ok) {
+      logEngramFailure(response.status);
+      return '';
+    }
     const data = await response.json() as { context?: string };
     return data.context ?? '';
   } catch {
@@ -102,12 +121,13 @@ async function recallContext(query: string): Promise<string> {
 
 async function storeMemory(content: string, source: string = 'ollama'): Promise<void> {
   try {
-    await fetch(`${ENGRAM_API}/api/memory`, {
+    const response = await fetch(`${ENGRAM_API}/api/memory`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: engramHeaders(),
       body: JSON.stringify({ content, type: 'episodic', source }),
       signal: AbortSignal.timeout(5000),
     });
+    if (!response.ok) logEngramFailure(response.status);
   } catch {
     // fire-and-forget — never block the response
   }
@@ -195,6 +215,23 @@ async function withRecalledContext(
   return injectContext(body, context);
 }
 
+/**
+ * A retry is only warranted when the user just spoke and tools are allowed:
+ * a prose answer after a `tool` result is legitimate, and `tool_choice: "none"`
+ * forbids a tool call outright.
+ */
+function shouldRetryToolCall(body: Record<string, unknown>): boolean {
+  if (body['tool_choice'] === 'none') return false;
+  const messages = body['messages'];
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const last: unknown = messages[messages.length - 1];
+  return (
+    typeof last === 'object' &&
+    last !== null &&
+    (last as { role?: unknown }).role === 'user'
+  );
+}
+
 /** Buffer the response so a model that answered in prose can be re-asked once. */
 async function handleToolCall(d: ChatDispatch): Promise<void> {
   const parse = d.openai ? parseOpenAIResponse : parseOllamaResponse;
@@ -205,26 +242,30 @@ async function handleToolCall(d: ChatDispatch): Promise<void> {
   if (!first) { d.res.writeHead(502); d.res.end('Bad Gateway'); return; }
 
   const parsed = parse(first.body.toString());
+  const missedToolCall =
+    shouldRetryToolCall(d.body) &&
+    !parsed.hasToolCalls &&
+    parsed.finishReason !== 'tool_calls' &&
+    parsed.text;
 
-  // Model responded with text instead of a tool call — retry once
-  if (!parsed.hasToolCalls && parsed.finishReason !== 'tool_calls' && parsed.text) {
+  let retry: Awaited<ReturnType<typeof makeBufferedRequest>> | null = null;
+  if (missedToolCall) {
     console.info(`[Engram] Tool call missed — retrying with instruction`);
     const retryBuf = Buffer.from(JSON.stringify(buildRetryBody(d.body, parsed.text)));
-    const second = await makeBufferedRequest(target, d.url, d.method, d.headers, retryBuf)
+    retry = await makeBufferedRequest(target, d.url, d.method, d.headers, retryBuf)
       .catch(() => null);
-
-    if (second) {
-      d.res.writeHead(second.status, second.headers);
-      d.res.end(second.body);
-      rememberExchange(d.userQuery, parse(second.body.toString()).text, 'ollama-retry');
-      return;
-    }
   }
 
-  // Tool call succeeded — forward first response
-  d.res.writeHead(first.status, first.headers);
-  d.res.end(first.body);
-  rememberExchange(d.userQuery, parsed.text, 'ollama');
+  // Store and forward only the response the client actually receives. The
+  // synthetic retry instruction is never part of a remembered exchange.
+  const delivered = retry ?? first;
+  d.res.writeHead(delivered.status, delivered.headers);
+  d.res.end(delivered.body);
+  rememberExchange(
+    d.userQuery,
+    parse(delivered.body.toString()).text,
+    retry ? 'ollama-retry' : 'ollama'
+  );
 }
 
 /** Stream straight through, keeping a copy for auto-store. */
@@ -262,9 +303,16 @@ async function handleChatRequest(
 
   const openai = isOpenAIPath(url);
   const userQuery = extractUserQuery(validated.body);
+
+  // Registered before the recall await: a client that hangs up while recall is
+  // pending must not still have a request dispatched to Ollama.
+  let clientGone = false;
+  res.once('close', () => { clientGone = true; });
+
   const body = userQuery
     ? await withRecalledContext(validated.body, userQuery, openai)
     : validated.body;
+  if (clientGone) return;
 
   const dispatch: ChatDispatch = {
     res,
