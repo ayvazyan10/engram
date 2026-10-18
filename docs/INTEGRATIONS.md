@@ -34,8 +34,8 @@ On first launch the extension installs `@engram-ai-memory/mcp` to `~/.engram/mcp
 | Option | Description | Default |
 |---|---|---|
 | `db_path` | SQLite database path | `~/.engram/engram.db` |
-| `namespace_mode` | `none`, `filter`, or `isolated` | `none` |
-| `namespace` | Namespace used by filter/isolated mode | *(empty)* |
+| `namespace_mode` | `project`, `none`, `filter`, or `isolated` | `project` |
+| `namespace` | Namespace used by filter/isolated mode; overrides project detection | *(empty)* |
 
 **How the bootstrap launcher works:**
 
@@ -408,14 +408,17 @@ Input:
   importance  float    optional  — 0.0–1.0
   concept     string   optional  — for semantic memories: concept label
   sessionId   string   optional  — group related episodic memories
+  global      boolean  optional  — store for all projects (preferences, identity, working style); rejected in isolated mode
 
 Output:
   { id, type, importance, message }
 ```
 
+Use `global: true` for a memory that should be visible from every project; without it the memory belongs to the current project.
+
 **Example usage in Claude Code:**
 > "Remember that the user's name is Alex and they prefer concise answers."
-> → Claude calls `store_memory` with `type: "semantic"`, `concept: "user preferences"`
+> → Claude calls `store_memory` with `type: "semantic"`, `concept: "user preferences"`, `global: true`
 
 ---
 
@@ -1018,7 +1021,7 @@ const myPlugin: EngramPlugin = {
 ```typescript
 import { NeuralBrain } from '@engram-ai-memory/core';
 
-const brain = new NeuralBrain({ dbPath: './engram.db' });
+const brain = new NeuralBrain({ dbPath: '~/.engram/engram.db' });
 brain.registerPlugin(myPlugin);
 await brain.initialize();
 ```

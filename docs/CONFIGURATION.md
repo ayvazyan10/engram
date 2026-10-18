@@ -12,9 +12,9 @@ One exception to "environment variables only": the CLI keeps `~/.engram/config.j
 |---|---|---|
 | `PORT` | `4901` | HTTP server port |
 | `HOST` | `127.0.0.1` | Bind address. **Loopback only by default** — set `0.0.0.0` to accept connections from other machines, and read [Security](#security) before you do |
-| `ENGRAM_DB_PATH` | `{cwd}/engram.db` | SQLite database file path. A blank value counts as unset |
-| `ENGRAM_NAMESPACE_MODE` | `none` | `none` disables namespaces, `filter` enables optional scoping/overrides, `isolated` enforces one fixed namespace. A blank value counts as unset; any **other** unrecognised value aborts startup |
-| `ENGRAM_NAMESPACE` | *(none)* | Namespace value for `filter` or `isolated`; required by `isolated`, which aborts startup without it |
+| `ENGRAM_DB_PATH` | `~/.engram/engram.db` | SQLite database file path. Core, the MCP server, the hooks and the CLI all resolve it through the same `resolveDbPath`: a blank value means the default, and `~` / `~/x` are expanded. Use an absolute or `~/` path |
+| `ENGRAM_NAMESPACE_MODE` | `none` on the REST server | `none` disables namespaces, `filter` enables optional scoping/overrides, `isolated` enforces one fixed namespace. `engram start` passes `none` for the CLI's `project` mode, so the server and dashboard see every project. A blank value counts as unset; any **other** unrecognised value aborts startup |
+| `ENGRAM_NAMESPACE` | *(none)* | Namespace value for `filter` or `isolated`; required by `isolated`, which aborts startup without it, and overrides `project` detection |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Decay sweep interval in milliseconds (0 = disabled). Must be 0–2147483647; a finite value outside that range aborts startup |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived. Must be 0–1; a finite value outside that range aborts startup |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Path to persist the vector index for fast startup |
@@ -25,13 +25,28 @@ Security-related variables (`ENGRAM_API_KEY`, host and origin allowlists, rate l
 
 `NODE_ENV` is **not read by any Engram code**. It appears in `docker-compose.yml` and `ecosystem.config.cjs` only as a conventional marker; the Fastify log level is fixed at `warn`.
 
-Namespace behavior is opt-in:
+One database file is shared by default: `~/.engram/engram.db`. Core, the MCP server, the hooks and the CLI all use core's `resolveDbPath`, so a blank path means that default and `~` / `~/x` are expanded.
 
-- `none` (default): namespace inputs are ignored and new memories are stored in the shared pool.
+`ENGRAM_NAMESPACE_MODE` values:
+
+- `project` (default when unset): inside a git repository, scopes to the absolute git top-level path. It behaves like `filter`: reads return the project's own memories plus global (NULL namespace) memories. Outside a git repository it uses the shared pool (`none`). An explicit `ENGRAM_NAMESPACE` wins. `engram setup` writes `project`.
+- `none`: namespace inputs are ignored and new memories are stored in the shared pool.
 - `filter`: the configured namespace scopes normal reads and writes, while per-memory overrides and `crossNamespace` remain available.
 - `isolated`: `ENGRAM_NAMESPACE` is required; overrides and cross-namespace search are rejected.
 
-For backwards compatibility, an existing configuration that has `ENGRAM_NAMESPACE` but no `ENGRAM_NAMESPACE_MODE` is treated as `filter`. When both variables are absent, the mode is `none` and the shared-memory behavior is unchanged.
+The REST server and dashboard always run as `none`, so they see every project.
+
+Existing memories have a NULL namespace and stay global: every project can read them. A `filter` or `project` client can read other projects only with `crossNamespace: true`. It can never forget, update, tag or resolve another project's memories; its own and global memories it can. `store_memory` with `global: true` stores a memory for all projects — use it for preferences, identity and working style — and is rejected in `isolated` mode.
+
+**Namespaces are scoping, not security.** Anything that must stay secret belongs in a separate database file. To merge stray database files, export from one and import into the other. `engram export` reads through the running REST server, so start it on the stray file first, then restart it on the target:
+
+```bash
+engram export -f json > ~/.engram/engram-export.json
+engram import ~/.engram/engram-export.json --dry-run
+engram import ~/.engram/engram-export.json
+```
+
+`-f ndjson` is also available. `engram import` reads a JSON/NDJSON export file, or stdin when no path is given, and creates NEW records: ids and timestamps are not preserved, so re-running an import duplicates records. `--dry-run` previews without writing.
 
 Isolated mode also stores its vector cache in a namespace-specific file by appending a short namespace hash to `ENGRAM_INDEX_PATH`. This prevents one isolated process from loading another namespace's cached vectors.
 
@@ -55,8 +70,8 @@ ENGRAM_EMBEDDING_MODEL=Xenova/bge-small-en-v1.5 \
 | Variable | Default | Description |
 |---|---|---|
 | `ENGRAM_DB_PATH` | `~/.engram/engram.db` | SQLite database file path. **Not** the current directory: under a desktop host the cwd belongs to the app, so a database there is one nobody chose and nobody can find. A blank value counts as unset, and the resolved path is written back into the environment |
-| `ENGRAM_NAMESPACE` | *(none)* | Namespace for memory isolation |
-| `ENGRAM_NAMESPACE_MODE` | `none` (`filter` when `ENGRAM_NAMESPACE` is set) | Same three modes as the API server |
+| `ENGRAM_NAMESPACE` | *(none)* | Namespace for memory isolation; an explicit value wins over `project` detection |
+| `ENGRAM_NAMESPACE_MODE` | `project` | `project`, `none`, `filter` or `isolated` (see [Namespace behavior](#api-server-appsserver)) |
 | `ENGRAM_SOURCE` | `mcp-client` | Client identifier stamped on every stored memory (`claude-code`, `cursor`, `windsurf`, …) |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model (must match the API server if sharing a database) |
 | `ENGRAM_SYNC_URL`, `ENGRAM_SYNC_MODE`, `ENGRAM_SYNC_INTERVAL`, `ENGRAM_SYNC_ENCRYPTION_KEY` | *(see [Cloud Sync](#cloud-sync))* | The MCP server **validates** these strictly and refuses to start on a bad value, where the REST server does not |
@@ -72,7 +87,7 @@ The MCP server runs as a stdio process — it shares a database file with the RE
       "command": "node",
       "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
       "env": {
-        "ENGRAM_DB_PATH": "/path/to/neuralcore/packages/core/engram.db",
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
         "ENGRAM_SOURCE": "claude-code",
         "ENGRAM_NAMESPACE": "claude",
         "ENGRAM_EMBEDDING_MODEL": "Xenova/all-MiniLM-L6-v2"
@@ -253,7 +268,7 @@ A wrong passphrase is caught at sync time, not startup, and surfaces as `WRONG_P
 Default for local development. Zero configuration — the file is created automatically on first run.
 
 ```bash
-ENGRAM_DB_PATH=./engram.db
+ENGRAM_DB_PATH=~/.engram/engram.db
 ```
 
 **Pragmas applied automatically:**
@@ -514,7 +529,7 @@ const myPlugin: EngramPlugin = {
 ```typescript
 import { NeuralBrain } from '@engram-ai-memory/core';
 
-const brain = new NeuralBrain({ dbPath: './engram.db' });
+const brain = new NeuralBrain({ dbPath: '~/.engram/engram.db' });
 brain.registerPlugin(myPlugin);
 await brain.initialize();
 ```
@@ -583,7 +598,7 @@ Target: p99 < 100 ms. If you are exceeding this:
 | Check | Command |
 |---|---|
 | Index size | `GET /api/stats` -> `indexSize` |
-| DB size | `ls -lh packages/core/engram.db` |
+| DB size | `ls -lh ~/.engram/engram.db` |
 | Slow query log | Set `logger: { level: 'debug' }` in Fastify |
 
 **Tuning options:**

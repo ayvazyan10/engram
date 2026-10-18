@@ -9,6 +9,21 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Added
+
+- **`@engram-ai-memory/mcp`** — `ENGRAM_NAMESPACE_MODE` defaults to `project`: inside a git repository the stdio server and hooks scope to the absolute git top-level path and read that project's memories plus global ones; outside a repository they use the shared pool. An explicit `ENGRAM_NAMESPACE` wins, and `engram setup` writes `project`.
+- **`@engram-ai-memory/mcp`** — `store_memory` accepts `global: true` to store a memory for every project (preferences, identity, working style). It is rejected in `isolated` mode.
+- **`@engram-ai-memory/server`** — `GET /api/memory` accepts `namespace=<exact>` and `global=true`.
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/server`** — `memory_stats` and `GET /api/stats` report `dbPath` and `byNamespace`.
+
+### Changed
+
+- **All packages** — Every component resolves the database through core's `resolveDbPath`, defaulting to `~/.engram/engram.db`; a blank path means the default and `~` is expanded. The old working-directory default is gone, so core, the MCP server, the hooks and the CLI share one database by default.
+
+### Fixed
+
+- **`@engram-ai-memory/core`** — A `filter`/`project` client could forget, update, tag or resolve contradictions on another namespace's memories after finding them with `crossNamespace`. Mutations now resolve ids only within its own namespace plus global memories.
+
 ## [0.7.0] — 2026-09-04
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.7.0, `@engram-ai-memory/vis` 0.5.0, and the Claude Desktop extension bundle 0.7.0.

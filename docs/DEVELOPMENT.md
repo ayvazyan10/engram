@@ -76,12 +76,12 @@ The server needs to be running for the dashboard and all adapters to work.
 
 ```bash
 # Option A — run compiled dist (after build)
-ENGRAM_DB_PATH=./packages/core/engram.db \
+ENGRAM_DB_PATH=~/.engram/dev.db \
   node apps/server/dist/index.js
 
 # Option B — run with tsx (hot reload, no build step)
 cd apps/server
-ENGRAM_DB_PATH=../core/engram.db \
+ENGRAM_DB_PATH=~/.engram/dev.db \
   npx tsx src/index.ts
 ```
 
@@ -112,7 +112,7 @@ This loads 67 memories with 34 knowledge graph connections.
 ### Reset the database
 
 ```bash
-rm packages/core/engram.db
+rm ~/.engram/dev.db
 pnpm db:migrate
 # optionally re-seed
 cd packages/core && npx tsx scripts/demo.ts

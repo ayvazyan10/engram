@@ -34,7 +34,7 @@ Start the API server and dashboard for local development:
 
 ```bash
 # Terminal 1 — API server
-ENGRAM_DB_PATH=./packages/core/engram.db \
+ENGRAM_DB_PATH=~/.engram/dev.db \
   node apps/server/dist/index.js
 
 # Terminal 2 — Dashboard

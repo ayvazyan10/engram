@@ -377,9 +377,9 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `PORT` | `4901` | API server port |
 | `HOST` | `127.0.0.1` | Bind address — **loopback only by default** |
 | `ENGRAM_SOURCE` | `mcp-client` | Client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
-| `ENGRAM_DB_PATH` | `./engram.db` | SQLite database path |
-| `ENGRAM_NAMESPACE_MODE` | `none` | Namespace behavior: `none`, `filter`, or `isolated` |
-| `ENGRAM_NAMESPACE` | *(none)* | Namespace value used when mode is `filter` or `isolated` |
+| `ENGRAM_DB_PATH` | `~/.engram/engram.db` | SQLite database path. Blank means the default; `~` and `~/x` are expanded |
+| `ENGRAM_NAMESPACE_MODE` | `project` | Namespace behavior: `project`, `none`, `filter`, or `isolated` |
+| `ENGRAM_NAMESPACE` | *(none)* | Namespace value used when mode is `filter` or `isolated`; overrides `project` detection |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
@@ -400,7 +400,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_MAX_BODY_BYTES` | `10485760` | Ceiling on a proxied request body; over it the proxy answers `413`. |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 
-Namespaces are disabled by default. Set `ENGRAM_NAMESPACE_MODE=filter` for optional scoping, or `isolated` together with `ENGRAM_NAMESPACE` for a fixed boundary that rejects overrides and cross-namespace queries. Existing configurations that already contain `ENGRAM_NAMESPACE` continue in `filter` mode automatically.
+`project` is the default: inside a git repository the MCP server and hooks scope to the absolute git top-level path and read that project's memories plus global ones; outside a repository they use the shared pool. `filter` scopes to `ENGRAM_NAMESPACE`, and `isolated` together with `ENGRAM_NAMESPACE` is a fixed boundary that rejects overrides and cross-namespace queries. The REST server and dashboard always run as `none` and see every project. Existing memories have a NULL namespace and stay global.
 
 This is a summary. [docs/CONFIGURATION.md](docs/CONFIGURATION.md) has the full list, including everything under [Security](docs/CONFIGURATION.md#security). Note that `engram start` derives the server's environment from `~/.engram/config.json`, so shell variables it manages are overridden — see the [CLI section](docs/CONFIGURATION.md#cli-packagescli).
 
