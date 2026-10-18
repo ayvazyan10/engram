@@ -138,8 +138,9 @@ describe('the plate paint is scoped to the plate box', () => {
     for (const cls of ['.obs-label', '.obs-figure', '.obs-stat', '.obs-note']) {
       expect(block(cls), `${cls} is missing`).not.toBe('');
     }
-    // Register is width, not capitals — the reason Archivo is loaded at all.
-    expect(block('.obs-label')).toContain('font-stretch: 78%');
+    // No condensed, all-caps paragraphs: labels are set at normal width and
+    // in sentence case.
+    expect(block('.obs-label')).not.toContain('font-stretch');
     expect(rules).not.toContain('text-transform: uppercase');
   });
 });

@@ -30,6 +30,7 @@ export default function TemplateSwitcher() {
           style={{ ...segmentBase, ...segmentState(activeTemplate, true) }}
           onClick={() => setTemplate(next.id)}
           title={`Theme: ${activeTemplate.name} — switch to ${next.name}`}
+          aria-label={`Theme: ${activeTemplate.name}. Switch to ${next.name}`}
         >
           <Dot template={activeTemplate} active />
           <span className="ec-template-label">{activeTemplate.name}</span>

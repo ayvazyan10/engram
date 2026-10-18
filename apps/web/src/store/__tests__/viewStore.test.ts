@@ -81,11 +81,27 @@ describe('the plate registry', () => {
     expect(VIEWS.map((v) => v.dimension)).toEqual(['3D', '3D', '3D', '3D', '3D']);
   });
 
-  it('carries a real claim per plate — it is the text the chooser renders in full', () => {
+  it('carries a plain caption and a method per plate', () => {
     for (const view of VIEWS) {
-      expect(view.claim.length, view.id).toBeGreaterThan(60);
       expect(view.name.length, view.id).toBeGreaterThan(0);
+      // The caption is what the plate shows and how to read it: two lines
+      // at the strip's width, not a paragraph.
+      expect(view.caption.length, view.id).toBeGreaterThan(40);
+      expect(view.caption.length, view.id).toBeLessThanOrEqual(200);
+      expect(view.method.length, view.id).toBeGreaterThan(view.caption.length);
       expect(typeof view.Plate, view.id).toBe('function');
+    }
+  });
+
+  it('names the plates by the task they serve', () => {
+    expect(VIEWS.map((v) => v.name)).toEqual(['Links', 'Hotspots', 'Over time', 'Communities', 'Overview']);
+  });
+
+  /** The copy is shared by every store, so it may not state facts about one. */
+  it('asserts nothing about one particular store in its copy', () => {
+    for (const view of VIEWS) {
+      const copy = `${view.caption} ${view.method}`;
+      expect(copy, view.id).not.toMatch(/this store|the store has|five-day|\b\d+ memories\b|\b\d+ links\b/i);
     }
   });
 

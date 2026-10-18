@@ -4,7 +4,9 @@ import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 
-export default function SearchBar() {
+/** `large` is Home's version: the same field, front and centre — no strip
+ *  around it, a bigger target and type. */
+export default function SearchBar({ large = false }: { large?: boolean }) {
   const [input, setInput] = useState('');
   const [focused, setFocused] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -88,9 +90,9 @@ export default function SearchBar() {
   const iconStroke  = focused || hasQuery ? t.accent : t.textMuted;
 
   return (
-    <div style={{ ...styles.wrapper, background: t.panelBg, borderBottomColor: t.panelBorder }}>
+    <div style={large ? styles.wrapperLarge : { ...styles.wrapper, background: t.panelBg, borderBottomColor: t.panelBorder }}>
       {/* Input row */}
-      <div style={{ ...styles.container, background: t.inputBg, borderColor, boxShadow }}>
+      <div style={{ ...styles.container, ...(large ? styles.containerLarge : {}), background: t.inputBg, borderColor, boxShadow }}>
         {/* Search icon / spinner */}
         <div style={styles.iconWrap}>
           {loading ? (
@@ -107,7 +109,7 @@ export default function SearchBar() {
 
         <input
           ref={inputRef}
-          style={{ ...styles.input, color: t.textPrimary }}
+          style={{ ...styles.input, ...(large ? styles.inputLarge : {}), color: t.textPrimary }}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onFocus={() => setFocused(true)}
@@ -134,7 +136,7 @@ export default function SearchBar() {
         {/* Search button */}
         <button
           className="ec-primary"
-          style={{ ...styles.searchBtn, background: t.accentStrong, color: t.onAccent }}
+          style={{ ...styles.searchBtn, ...(large ? styles.searchBtnLarge : {}), background: t.accentStrong, color: t.onAccent }}
           onClick={handleSearch}
           disabled={loading}
           title="Search (Enter)"
@@ -184,6 +186,19 @@ const styles = {
   wrapper: {
     padding: `${SPACE.md} ${SPACE.lg} ${SPACE.sm}`,
     borderBottom: '1px solid',
+  },
+  wrapperLarge: {},
+  containerLarge: {
+    borderRadius: RADIUS.lg,
+    padding: '5px 5px 5px 12px',
+  },
+  inputLarge: {
+    fontSize: TYPE.lg,
+    padding: `${SPACE.sm} ${SPACE.xs}`,
+  },
+  searchBtnLarge: {
+    width: 36,
+    height: 36,
   },
   container: {
     display: 'flex',

@@ -6,6 +6,11 @@ import { useEffect, useState } from 'react';
  * responsive layout switch between AppLayout's fixed 3-column desktop shell
  * and its mobile tab-bar shell reads this).
  */
+/** Below this AppLayout switches to its one-pane shell, the plate chooser
+ *  moves out of the header onto the plate surface, and Home shows the
+ *  inspector in place of the cards. */
+export const COMPACT_QUERY = '(max-width: 900px)';
+
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState<boolean>(() =>
     typeof window !== 'undefined' && typeof window.matchMedia === 'function'

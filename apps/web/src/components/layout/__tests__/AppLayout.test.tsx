@@ -560,3 +560,24 @@ describe('AppLayout compact (mobile) layout', () => {
     await waitFor(() => expect(screen.getByTestId('plate')).toBeInTheDocument());
   });
 });
+
+describe('AppLayout Home', () => {
+  beforeEach(resetAll);
+
+  it('opens on Home: search and the recent memories, not a plate', async () => {
+    useDashboardStore.setState(useDashboardStore.getInitialState());
+    vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
+
+    render(<AppLayout />);
+    expect(await screen.findByRole('heading', { name: 'Recent memories' })).toBeInTheDocument();
+    expect(screen.queryByTestId('plate')).not.toBeInTheDocument();
+  });
+
+  it('opens on the first-run onboarding when the store is empty', async () => {
+    useDashboardStore.setState(useDashboardStore.getInitialState());
+    vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 0, memories: [] });
+
+    render(<AppLayout />);
+    expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
+  });
+});

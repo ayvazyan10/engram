@@ -135,9 +135,9 @@
   --font-note: 'Spectral', 'Iowan Old Style', Georgia, Cambria, serif;
 
   /* A 1.20 minor-third from 12px, plus one display step that breaks it.
-     Nothing is set below 11px; nothing is set in all caps. */
-  --t-label: 11px; /* field names, in a narrow cut */
-  --t-body: 12.5px;
+     Nothing is set below 12px; nothing is set in all caps. */
+  --t-label: 12px; /* field names */
+  --t-body: 13px;
   --t-figure: 15px; /* catalogue figures */
   --t-claim: 16px; /* the observer's note, in Spectral */
   --t-stat: 22px; /* the one figure a block is about */
@@ -238,12 +238,12 @@
  * plate ground.
  */
 
-/* Field names. Register is carried by WIDTH, not by capitals or tracking —
-   Archivo's wdth axis is the reason that family is loaded at all. */
+/* Field names. Register is carried by colour and weight, not by capitals,
+   tracking or a condensed cut — a narrow cut at this size was too hard to
+   read. */
 .obs-label {
   font-family: var(--font-instrument);
   font-size: var(--t-label);
-  font-stretch: 78%;
   font-weight: 500;
   letter-spacing: 0.01em;
   color: var(--ink-3);
@@ -438,12 +438,14 @@
   color: var(--ink);
 }
 
-/* `.obs-note` caps at 34ch, which is the measure for a marginal note beside a
-   figure. These are the only long-form sentences in the product and they get a
-   real one. */
+/* The plate's caption, as the caption strip above the box sets it. */
 .plate-pick-option-claim {
   margin: 0;
   max-width: 62ch;
+  font-family: var(--font-instrument);
+  font-size: var(--t-body);
+  line-height: var(--lead-body);
+  color: var(--ink-2);
 }
 
 /* One column below the point where 15rem of name plus 62ch of claim stops
@@ -453,6 +455,126 @@
     grid-template-columns: 1fr;
     gap: 5px;
   }
+}
+
+/* ─── The caption strip ─────────────────────────────────────────────────────
+ *
+ * One strip above every plate, drawn by the host (PlateSurface): the plate's
+ * caption in plain words, at most two lines, and a "?" that opens how the
+ * plate is built, dropped over the top of the box. It sits in normal flow, so the box
+ * below is measured without it and no plate draws under it.
+ */
+.ec-plate-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--plate);
+}
+
+.ec-plate-frame > .ec-plate {
+  flex: 1 1 auto;
+  height: auto;
+}
+
+.ec-plate-caption {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  padding: 8px 12px 8px 16px;
+  background: var(--margin);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-instrument);
+}
+
+.ec-plate-caption .plate-pick {
+  flex: 0 0 auto;
+}
+
+/* On a phone the chooser shares the strip: chooser and "?" on the first row,
+   the caption under them at full width. */
+.ec-plate-caption:has(.plate-pick) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.ec-plate-caption .plate-pick ~ .ec-plate-caption-text {
+  order: 3;
+  flex-basis: 100%;
+  -webkit-line-clamp: 3;
+}
+
+.ec-plate-caption .plate-pick ~ .ec-plate-help {
+  margin-left: auto;
+}
+
+.ec-plate-caption-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--t-body);
+  line-height: 1.4;
+  color: var(--ink-2);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.ec-plate-help {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  background: var(--plate);
+  color: var(--ink-2);
+  font-family: var(--font-instrument);
+  font-size: var(--t-body);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.ec-plate-help:hover,
+.ec-plate-help[aria-expanded='true'] {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+
+.ec-plate-help:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.ec-plate-method {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  top: 100%;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+  background: var(--margin);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-instrument);
+  font-size: var(--t-body);
+  line-height: var(--lead-body);
+  color: var(--ink-2);
+  animation: plate-pick-open var(--dur) var(--ease);
+}
+
+.ec-plate-method p {
+  margin: 0;
+  max-width: 72ch;
 }
 
 /* ─── The plate box's own two states ────────────────────────────────────────

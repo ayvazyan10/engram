@@ -188,9 +188,10 @@ export interface DemoProps {
 }
 
 /**
- * A plate module. `Plate` fills the box. There is no second slot — anything the
- * visualization needs to say (its key, its denominator, its controls) it draws
- * inside its own box, positioned however suits it.
+ * A plate module. `Plate` fills the box. Its `caption` and `method` are drawn
+ * by the host above the box; anything else the visualization needs to say (its
+ * key, its denominator, its controls) it draws inside its own box, positioned
+ * however suits it, and never on top of its own marks.
  *
  * Still named `DemoModule` because all five plates export it under that name;
  * `store/viewStore.ts` re-exports the type and holds the five.
@@ -203,10 +204,13 @@ export interface DemoModule {
   name: string;
   /** '2D' | '3D' | 'Hybrid'. */
   dimension: '2D' | '3D' | 'Hybrid';
-  /** One sentence naming the idea this plate is testing. It is rendered in
-   *  full by the plate chooser, which is where a reader decides between the
-   *  five, so make it a claim that could be wrong. */
-  claim: string;
+  /** What the plate shows and how to read it, in plain words, at most two
+   *  lines. Shown above the box and in the plate chooser. It must hold for any
+   *  store: never state a fact about one particular store's data. */
+  caption: string;
+  /** How the plate is built — the method behind the caption. Shown when the
+   *  reader opens the "?" beside the caption. Same rule: no store facts. */
+  method: string;
   Plate: ComponentType<DemoProps>;
 }
 

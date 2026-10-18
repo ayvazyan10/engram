@@ -1067,9 +1067,7 @@ function Ledger({
   const remainder = reading.columns.find((c) => c.community === -1);
   return (
     <aside className="cac-ledger" aria-label="Columns, by internal wiring">
-      <p className="obs-label cac-head">
-        Column · internal links, agree and contradict · members
-      </p>
+      <p className="obs-label cac-head">Links inside each column, and its memories</p>
       <ol className="cac-rows">
         {reading.columns.map((column) => {
           const agree = column.within - column.withinContradict;
@@ -1111,16 +1109,14 @@ function Ledger({
         })}
       </ol>
       <p className="cac-foot obs-label">
-        Bar length is the count, not the share: the longest is column{' '}
-        {(reading.columns.find((c) => c.within === reading.maxVane)?.slot ?? 0) + 1} at{' '}
-        {nf.format(reading.maxVane)} internal links.
+        Bar length is the number of links; the longest is column{' '}
+        {(reading.columns.find((c) => c.within === reading.maxVane)?.slot ?? 0) + 1} with{' '}
+        {nf.format(reading.maxVane)}.
         {remainder ? (
           <>
             {' '}
-            Columns of their own hold {nf.format(reading.covered)} of{' '}
-            {nf.format(reading.linked)} linked memories; column {remainder.slot + 1} is the
-            remainder, {remainder.communities} communities too small for a shaft each, so a few of
-            its arcs run between them rather than inside one.
+            Column {remainder.slot + 1} holds {remainder.communities} groups too small for a column
+            of their own.
           </>
         ) : null}
       </p>
@@ -1133,37 +1129,40 @@ function KeySheet({ data, reading }: { data: ObsData; reading: Reading }) {
   const { stats } = data;
   const rows: { label: string; value: string; note: string }[] = [
     {
-      label: 'Communities',
+      label: 'Groups',
       value: nf.format(reading.communityCount),
-      note: `Louvain on the links, modularity ${reading.modularity.toFixed(3)}`,
+      note: 'found from the links',
     },
     {
       label: 'Columns',
       value: nf.format(reading.columns.length),
       note:
         reading.remainderCommunities > 0
-          ? `one per community, plus one holding the ${reading.remainderCommunities} smallest`
-          : 'one per link community',
+          ? `one per group; the last holds the ${reading.remainderCommunities} smallest`
+          : 'one per group',
     },
     {
       label: 'On a column',
       value: `${nf.format(reading.linked)} of ${nf.format(data.nodes.length)}`,
-      note: `${nf.format(reading.unlinked)} have no renderable link — the floor ring outside`,
+      note: `${nf.format(reading.unlinked)} with no links lie on the outer ring`,
     },
     {
       label: 'Inside a column',
       value: `${nf.format(reading.within)} links · ${pct(reading.within, stats.linksDrawn)}%`,
-      note: `${pct(reading.withinContradict, reading.within)}% contradict — the vanes, outside the ring`,
+      note: `${pct(reading.withinContradict, reading.within)}% contradict`,
     },
     {
-      label: 'Crossing columns',
-      value: `${nf.format(reading.crossing)} links · ${nf.format(reading.bundles)} bundles`,
-      note: `${pct(reading.crossContradict, reading.crossing)}% contradict — the web inside the ring`,
+      label: 'Between columns',
+      value: `${nf.format(reading.crossing)} links`,
+      note: `${pct(reading.crossContradict, reading.crossing)}% contradict`,
     },
     {
       label: 'Drawn',
       value: `${nf.format(stats.linksDrawn)} of ${nf.format(stats.linksStored)}`,
-      note: `${nf.format(stats.linksToArchived)} point at archived memories and cannot be drawn`,
+      note:
+        stats.linksToArchived > 0
+          ? `${nf.format(stats.linksToArchived)} link to archived memories`
+          : 'every stored link',
     },
   ];
   return (
@@ -1180,12 +1179,14 @@ function KeySheet({ data, reading }: { data: ObsData; reading: Reading }) {
         ))}
       </dl>
       <p className="cac-key-foot obs-label">
-        Bead radius is retention, never colour —{' '}
+        Bead size is how fresh a memory is:{' '}
         {(['vivid', 'holding', 'fading', 'threshold'] as const)
           .map((band) => `${RETENTION_LABEL[band]} ${nf.format(stats.retention[band])}`)
           .join(' · ')}
-        . {nf.format(reading.doubled)} pairs carry both an agreement and a contradiction and draw as
-        two strands.
+        .
+        {reading.doubled > 0
+          ? ` ${nf.format(reading.doubled)} pairs both agree and contradict, drawn as two strands.`
+          : ''}
       </p>
     </div>
   );
@@ -1217,8 +1218,8 @@ function Readout({
         <p className="obs-label">Column {column.slot + 1}</p>
         <p className="cac-readout-title">
           {column.communities > 1
-            ? `${column.communities} small communities, ${column.members.length} memories`
-            : `${column.members.length} memories in one community`}
+            ? `${column.communities} small groups, ${column.members.length} memories`
+            : `${column.members.length} memories in one group`}
         </p>
         <dl className="cac-readout-rows">
           <div>
@@ -1279,7 +1280,7 @@ function Readout({
           <dd className="obs-figure">
             {column
               ? `Column ${slot + 1}, rank ${reading.rankOf[focus.index]! + 1} of ${column.members.length}`
-              : 'No renderable link — on the floor ring'}
+              : 'No links — on the outer ring'}
           </dd>
         </div>
         <div>
@@ -1554,7 +1555,7 @@ const SHEET_CSS = `
   border-left: 1px solid var(--rule);
 }
 .cac-key-rows { margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--gap-row); }
-.cac-key-row { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: baseline; }
+.cac-key-row { display: grid; grid-template-columns: 112px 1fr; gap: 10px; align-items: baseline; }
 .cac-key-row dd { margin: 0; display: flex; flex-direction: column; }
 .cac-key-row .obs-figure { font-size: var(--t-body); }
 .cac-key-note { font-size: var(--t-label); color: var(--ink-3); line-height: 1.3; }
@@ -1580,8 +1581,16 @@ const SHEET_CSS = `
 .cac-clear { margin-top: var(--gap-block); color: var(--ink-3); }
 .cac-clear:hover { color: var(--ink); }
 
+/* A narrow box: the key leaves the scene and stacks under it in flow, set
+   as two columns of figures, so it never sits on the ring. */
 @media (max-width: 700px) {
-  .cac-key { width: 100%; max-width: none; }
+  .cac-box { display: flex; flex-direction: column; }
+  .cac-canvas { position: relative; inset: auto; flex: 1 1 auto; min-height: 0; }
+  .cac-key { position: relative; flex: 0 0 auto; width: 100%; max-width: none; padding: 10px 16px 12px; }
+  .cac-key-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+  .cac-key-row { grid-template-columns: 1fr auto; }
+  .cac-key-note { display: none; }
+  .cac-key-foot { margin-top: 8px; }
   .cac-readout { width: 100%; max-width: none; }
 }
 `;
@@ -1590,11 +1599,11 @@ const SHEET_CSS = `
 
 export const axesAndChords: DemoModule = {
   id: 'axes-chords',
-  name: 'Communities as columns',
+  name: 'Communities',
   dimension: '3D',
-  claim:
-    'Nothing floats — each memory is pinned to the community its own links put it in and ranked ' +
-    'by degree inside it — and the store’s argument becomes visible: links that stay inside a ' +
-    'community mostly agree, while the few that cross columns are mostly contradictions.',
+  caption:
+    'Each column is a group of memories that link to each other, most-linked at the base. Links inside a group bow outward; links between groups cross the middle.',
+  method:
+    'Groups (communities) are found from the links alone, with the Louvain method. Every group large enough gets its own column, and the smallest share one last column. Inside a column, memories are ranked by how many links they have, the most-linked at the base. Links inside a column bow outward as vanes; links between columns run through the middle of the ring, bundled. Memories with no links lie on the floor ring outside. Bead size is how fresh a memory is (retention). Blue links agree, orange links contradict. Point at a column in the list to light it, or click to keep it lit.',
   Plate,
 };

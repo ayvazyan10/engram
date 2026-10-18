@@ -34,19 +34,14 @@ function placeDrawer(anchor: DOMRect): Placement {
 /**
  * The plate chooser — the app's primary navigation.
  *
- * The problem this solves is a typographic one. Each of the five plates ships
- * a one-sentence `claim`: the argument it makes about this store, written to
- * be read by a person deciding between them, and running to 200-400
- * characters. Five names and five sentences of that length do not fit in a
- * 48px header strip, and a `title` tooltip is not reading a claim — it is
- * hiding it from touch, truncating it everywhere else, and giving it no
- * measure.
+ * Each of the five plates ships a plain-language `caption`: what it shows
+ * and how to read it. A name and a caption do not fit five times in a 48px
+ * header strip, and a `title` tooltip hides them from touch, so the header
+ * carries the short form (which plate is up) and opening it drops the long
+ * form: five rows, each the plate's name against its caption.
  *
- * So the header carries the short form (which plate is up, and whether it is
- * 2D, 3D or hybrid) and opening it drops the long form: five rows, each the
- * plate's own name against its own claim set at 62 characters. Choosing is a
- * considered act here, not a tab flick, and the drawer is where the
- * consideration happens.
+ * On a compact viewport the chooser is not in the header at all — it sits in
+ * the caption strip on the plate surface (PlateSurface).
  *
  * Everything visible is the plate's own material — its ground, its ink, its
  * two faces (styles/plate.css, `.plate-pick-*`). That is the one deliberate
@@ -192,7 +187,7 @@ export default function PlateChooser() {
                 <span className="plate-pick-option-name">{view.name}</span>
                 <span className="obs-label">{view.dimension}</span>
               </span>
-              <p className="obs-note plate-pick-option-claim">{view.claim}</p>
+              <p className="plate-pick-option-claim">{view.caption}</p>
             </button>
           ))}
         </div>
