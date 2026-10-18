@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('node:fs', () => ({ mkdirSync: mocks.mkdir }));
 vi.mock('node:child_process', () => ({ execFileSync: mocks.git }));
-vi.mock('@engram-ai-memory/core', () => ({
+vi.mock('@engram-ai-memory/core', async (importOriginal) => ({
+  resolveDbPath: (await importOriginal<typeof import('@engram-ai-memory/core')>()).resolveDbPath,
   NeuralBrain: class {
     constructor(config: unknown) { mocks.construct(config); }
     initialize = mocks.initialize;
