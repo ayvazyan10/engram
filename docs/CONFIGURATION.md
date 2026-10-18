@@ -74,6 +74,7 @@ The MCP server runs as a stdio process — it shares a database file with the RE
       "args": ["/path/to/neuralcore/packages/mcp/dist/server.js"],
       "env": {
         "ENGRAM_DB_PATH": "/path/to/neuralcore/packages/core/engram.db",
+        "ENGRAM_SOURCE": "claude-code",
         "ENGRAM_NAMESPACE": "claude",
         "ENGRAM_EMBEDDING_MODEL": "Xenova/all-MiniLM-L6-v2"
       }
@@ -123,6 +124,7 @@ engram stats
 | `ENGRAM_PROXY_HOST` | `127.0.0.1` | Bind address. **Loopback only by default** — the proxy has no authentication, so a wider bind hands any peer on the network an open endpoint that drives your GPU. Set `0.0.0.0` to opt in; the banner says which mode is active |
 | `OLLAMA_TARGET` | `http://localhost:11434` | Real Ollama server URL. Parsed at startup — an unparseable URL exits non-zero |
 | `ENGRAM_API` | `http://localhost:4901` | Engram REST API base URL |
+| `ENGRAM_API_KEY` | *(none)* | Sent as `X-API-Key` to the Engram REST API when set |
 | `ENGRAM_MAX_TOKENS` | `1500` | Max tokens to inject per request |
 | `ENGRAM_MAX_BODY_BYTES` | `10485760` (10 MiB) | Ceiling on a buffered request body. Over the limit the proxy answers `413 Payload Too Large` and destroys the socket rather than draining a body it has already refused |
 | `ENGRAM_TOOL_RETRY` | `true` | Retry a failed tool call once with an instruction. Disabled only by the exact string `false` |

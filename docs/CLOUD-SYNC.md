@@ -43,9 +43,10 @@ The schema is created and migrated automatically on first connection — there's
   "mcpServers": {
     "engram": {
       "command": "npx",
-      "args": ["-y", "@engram-ai-memory/mcp@latest"],
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
       "env": {
         "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "claude-code",
         "ENGRAM_SYNC_URL": "postgres://user:pass@host/db?sslmode=require"
       }
     }

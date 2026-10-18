@@ -109,17 +109,16 @@ CLI            ──direct───────→ ┘
 ### One-command install
 
 ```bash
-# Install the CLI globally
+# Memory for your AI client — npx-based MCP config, no clone/build
+npx -y @engram-ai-memory/cli setup --npx
+
+# Optional: REST API + 3D dashboard on :4901 (the wizard clones and builds the server)
 npm i -g @engram-ai-memory/cli
-
-# Run the setup wizard — clones, builds, configures everything
 engram setup
-
-# Start the server (API + 3D dashboard on :4901)
 engram start
 ```
 
-That's it. Open http://localhost:4901 for the dashboard, `/docs` for Swagger UI.
+The first command is all an MCP client needs. With the server running, open http://localhost:4901 for the dashboard, `/docs` for Swagger UI.
 
 ### CLI commands
 
@@ -262,9 +261,10 @@ reads its own file — check its documentation and paste the same block there.
   "mcpServers": {
     "engram": {
       "command": "npx",
-      "args": ["-y", "@engram-ai-memory/mcp@latest"],
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
       "env": {
-        "ENGRAM_DB_PATH": "~/.engram/engram.db"
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "claude-code"
       }
     }
   }
@@ -280,9 +280,10 @@ If you installed via `engram setup`, you can point to the local build instead:
   "mcpServers": {
     "engram": {
       "command": "node",
-      "args": ["~/.engram/repo/packages/mcp/dist/server.js"],
+      "args": ["/home/you/.engram/repo/packages/mcp/dist/server.js"],
       "env": {
-        "ENGRAM_DB_PATH": "~/.engram/engram.db"
+        "ENGRAM_DB_PATH": "~/.engram/engram.db",
+        "ENGRAM_SOURCE": "claude-code"
       }
     }
   }

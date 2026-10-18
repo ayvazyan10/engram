@@ -43,7 +43,7 @@ one of them:
   "mcpServers": {
     "engram": {
       "command": "npx",
-      "args": ["-y", "@engram-ai-memory/mcp@latest"],
+      "args": ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
       "env": {
         "ENGRAM_DB_PATH": "~/.engram/engram.db",
         "ENGRAM_SOURCE": "claude-code"

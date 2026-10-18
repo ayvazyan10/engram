@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Node.js 22+ and npm. Works on macOS, Linux, and Windows."
 metadata:
   author: ayvazyan10
-  version: "0.1.3"
+  version: "0.7.0"
   homepage: https://engram.am
 ---
 
@@ -48,7 +48,7 @@ Session end    →  store_memory("session summary", importance=0.8)
 | Variable | Default | Description |
 |---|---|---|
 | `ENGRAM_DB_PATH` | `~/.engram/engram.db` | SQLite database path |
-| `ENGRAM_NAMESPACE` | *(global)* | Isolate memories per project |
+| `ENGRAM_NAMESPACE` | *(global)* | Namespace filter — alone it only filters memories; set `ENGRAM_NAMESPACE_MODE=isolated` to isolate them |
 | `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Local ONNX embedding model |
 
 ## Links
