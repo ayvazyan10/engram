@@ -26,7 +26,7 @@
 'use strict';
 
 const { execFileSync, spawn } = require('child_process');
-const { existsSync } = require('fs');
+const { existsSync, readFileSync } = require('fs');
 const path = require('path');
 const os = require('os');
 
@@ -130,9 +130,19 @@ function serverInvocation(installDir) {
   };
 }
 
+/** The version actually present in the install dir, not what a marker claims. */
+function installedVersion(installDir) {
+  try {
+    const pkgPath = path.join(installDir, 'node_modules', PACKAGE, 'package.json');
+    return JSON.parse(readFileSync(pkgPath, 'utf8')).version;
+  } catch {
+    return undefined;
+  }
+}
+
 function ensureInstalled(version, installDir) {
   const marker = path.join(installDir, `.installed-${version}`);
-  if (existsSync(marker)) return;
+  if (existsSync(marker) && installedVersion(installDir) === version) return;
 
   log(`Installing ${PACKAGE}@${version} to ${installDir} ...`);
 
@@ -187,6 +197,7 @@ module.exports = {
   npmInvocation,
   installArgs,
   serverInvocation,
+  installedVersion,
   ensureInstalled,
   startServer,
 };

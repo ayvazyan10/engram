@@ -32,8 +32,10 @@ const MIN_CONTENT_LENGTH = 10;
  * both advertise.
  */
 export function resolveDbPath(raw: string | undefined, home: string = os.homedir()): string {
-  if (raw && raw.trim().length > 0) return raw;
-  return path.join(home, '.engram', 'engram.db');
+  if (!raw || raw.trim().length === 0) return path.join(home, '.engram', 'engram.db');
+  if (raw === '~') return home;
+  if (raw.startsWith('~/')) return path.join(home, raw.slice(2));
+  return raw;
 }
 
 /**

@@ -33,6 +33,9 @@ const VERSION: string = (
 ).version;
 
 const defaultSource = process.env['ENGRAM_SOURCE'] || 'mcp-client';
+/** ENGRAM_SOURCE, else the connected client's own name from the initialize handshake. */
+const clientSource = (): string =>
+  process.env['ENGRAM_SOURCE'] || server.server.getClientVersion()?.name || 'mcp-client';
 // Shared with the `engram-store-session` entrypoint (store-session.ts): both
 // write into the same database and must agree on which namespace that is.
 const { namespaceMode, namespace } = resolveNamespaceSettings(process.env);
@@ -52,11 +55,15 @@ const { namespaceMode, namespace } = resolveNamespaceSettings(process.env);
  * `process.cwd()/engram.db`: under Claude Desktop the cwd belongs to the app,
  * so a database there is one nobody chose and nobody can find.
  *
- * A configured path is passed through byte-for-byte — only blank means unset.
+ * A configured path is used as given, except that a leading `~/` is expanded:
+ * a JSON client config has no shell to do it, and a literal `~` directory
+ * would be created under whatever cwd the client launched us in.
  */
 export function resolveDbPath(raw: string | undefined, home: string = os.homedir()): string {
-  if (raw && raw.trim().length > 0) return raw;
-  return path.join(home, '.engram', 'engram.db');
+  if (!raw || raw.trim().length === 0) return path.join(home, '.engram', 'engram.db');
+  if (raw === '~') return home;
+  if (raw.startsWith('~/')) return path.join(home, raw.slice(2));
+  return raw;
 }
 
 /**
@@ -141,7 +148,7 @@ server.tool(
   'store_memory',
   'Store information to persistent memory. Call AUTOMATICALLY for: user preferences, project decisions, tech stack, bug fixes, useful commands, corrections, workflow patterns. Do not ask — just store.',
   {
-    content: z.string().describe('The content to store as a memory'),
+    content: z.string().min(1).describe('The content to store as a memory'),
     type: z
       .enum(['episodic', 'semantic', 'procedural'])
       .optional()
@@ -168,7 +175,7 @@ server.tool(
     const result = await brain.store({
       content,
       type,
-      source: source ?? defaultSource,
+      source: source ?? clientSource(),
       tags,
       importance,
       concept,
@@ -298,7 +305,7 @@ server.tool(
         maxTokens,
         types,
         sources,
-        source: defaultSource,
+        source: clientSource(),
         crossNamespace,
       })) {
         if (chunk.phase === 'complete' && 'context' in chunk) {
@@ -337,7 +344,7 @@ server.tool(
       maxTokens,
       types,
       sources,
-      source: defaultSource,
+      source: clientSource(),
       crossNamespace,
     });
 
@@ -388,7 +395,7 @@ server.tool(
       content,
       tags,
       importance,
-      source: defaultSource,
+      source: clientSource(),
     });
     syncEngine?.notifyWrite();
 
@@ -944,6 +951,7 @@ server.tool(
     limit: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of reflections to return'),
     type: z.enum(['pattern', 'knowledge_gap', 'trend', 'contradiction_summary']).optional().describe('Filter by reflection type'),
   },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   async ({ limit, type }) => {
     await ensureInitialized();
     // Type filtering happens in SQL so LIMIT applies after it. Filtering the

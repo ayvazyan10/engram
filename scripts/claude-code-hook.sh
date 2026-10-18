@@ -22,7 +22,7 @@ TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 [ ! -f "$TRANSCRIPT_PATH" ] && exit 0
 
 SUMMARY=$(jq -r '
-  select(.type == "message" and .message.role == "assistant")
+  select(.type == "assistant")
   | .message.content
   | if type == "array" then map(select(.type == "text") | .text) | join(" ") else . end
 ' "$TRANSCRIPT_PATH" 2>/dev/null | tail -c 2000 | tr '\n' ' ' | sed 's/"/\\"/g')
@@ -53,6 +53,6 @@ ENGRAM_NAMESPACE_MODE="${ENGRAM_NAMESPACE_MODE:-$(config_value namespaceMode)}"
 [ -n "$ENGRAM_NAMESPACE" ] && export ENGRAM_NAMESPACE
 [ -n "$ENGRAM_NAMESPACE_MODE" ] && export ENGRAM_NAMESPACE_MODE
 
-npx -y @engram-ai-memory/mcp engram-store-session "Session summary: ${SUMMARY}" 2>/dev/null || true
+npx -y -p @engram-ai-memory/mcp engram-store-session "Session summary: ${SUMMARY}" 2>/dev/null || true
 
 exit 0

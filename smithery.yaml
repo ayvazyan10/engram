@@ -58,7 +58,7 @@ startCommand:
   commandFunction: |-
     (config) => ({
       command: "npx",
-      args: ["-y", "@engram-ai-memory/mcp@latest"],
+      args: ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
       env: {
         ...(config.dbPath       ? { ENGRAM_DB_PATH:         config.dbPath }       : {}),
         ENGRAM_NAMESPACE_MODE: config.namespaceMode || "none",

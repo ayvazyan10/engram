@@ -50,6 +50,11 @@ describe('resolveDbPath', () => {
     expect(resolveDbPath('/tmp/somewhere/engram.db')).toBe('/tmp/somewhere/engram.db');
   });
 
+  it('expands ~ and a leading ~/ to the home directory', () => {
+    expect(resolveDbPath('~', '/home/tester')).toBe('/home/tester');
+    expect(resolveDbPath('~/.engram/engram.db', '/home/tester')).toBe(path.join('/home/tester', '.engram', 'engram.db'));
+  });
+
   it('treats blank as unset — an empty string is a temp database that is deleted on close', () => {
     expect(resolveDbPath('', '/home/tester')).toBe(path.join('/home/tester', '.engram', 'engram.db'));
     expect(resolveDbPath('   ', '/home/tester')).toBe(path.join('/home/tester', '.engram', 'engram.db'));

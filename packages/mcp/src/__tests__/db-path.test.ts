@@ -75,6 +75,14 @@ describe('resolveDbPath', () => {
     expect(mod.resolveDbPath('/var/data/engram.db', home)).toBe('/var/data/engram.db');
   });
 
+  it('expands a leading ~/ to the home directory', () => {
+    expect(mod.resolveDbPath('~/.engram/engram.db', home)).toBe(documentedDefault);
+  });
+
+  it('expands a bare ~ to the home directory', () => {
+    expect(mod.resolveDbPath('~', home)).toBe(home);
+  });
+
   it('defaults to the real home directory when none is given', () => {
     expect(mod.resolveDbPath('')).toBe(path.join(os.homedir(), '.engram', 'engram.db'));
   });

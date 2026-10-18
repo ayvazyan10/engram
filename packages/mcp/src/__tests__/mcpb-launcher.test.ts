@@ -15,8 +15,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'fs';
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { fileURLToPath } from 'node:url';
+import os from 'os';
 import path from 'path';
 
 const require_ = createRequire(import.meta.url);
@@ -136,6 +137,29 @@ describe('serverInvocation', () => {
     expect(invocation.args).toEqual([
       path.join('/home/me/.engram/mcp', 'node_modules', '@engram-ai-memory/mcp', 'dist', 'server.js'),
     ]);
+  });
+});
+
+describe('installedVersion', () => {
+  it('reports the version actually installed in the directory', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'engram-mcpb-'));
+    try {
+      const pkgDir = path.join(dir, 'node_modules', '@engram-ai-memory', 'mcp');
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ version: '0.6.0' }));
+      expect(launcher.installedVersion(dir)).toBe('0.6.0');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports nothing when the package is not installed', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'engram-mcpb-'));
+    try {
+      expect(launcher.installedVersion(dir)).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
