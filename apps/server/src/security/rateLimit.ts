@@ -170,7 +170,7 @@ export function installRateLimit(app: FastifyInstance, config: RateLimitConfig):
   const check = createRateLimiter(config);
 
   app.addHook('onRequest', async (req, reply) => {
-    const pathname = pathnameOf(req.url);
+    const pathname = req.routeOptions.url ?? pathnameOf(req.url);
     if (!pathname.startsWith('/api/')) return;
 
     const client = req.ip || 'unknown';

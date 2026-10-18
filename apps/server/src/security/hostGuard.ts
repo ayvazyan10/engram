@@ -102,7 +102,7 @@ export function installHostGuard(app: FastifyInstance, policy: HostPolicy): void
   if (policy.disabled) return;
 
   app.addHook('onRequest', async (req, reply) => {
-    if (!pathnameOf(req.url).startsWith('/api/')) return;
+    if (!(req.routeOptions.url ?? pathnameOf(req.url)).startsWith('/api/')) return;
     if (isAllowedHost(req.headers.host, policy)) return;
 
     req.log.warn({ host: req.headers.host, url: req.url }, 'refused request with a non-allowlisted Host');

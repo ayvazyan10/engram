@@ -100,14 +100,11 @@ export const DEFAULT_CONTENT_SECURITY_POLICY = DEFAULT_CSP;
 /**
  * Attach the headers to every response.
  *
- * `onSend` rather than `onRequest` so the headers ride along with responses
- * produced by @fastify/static and by the SPA fallback as well as by route
- * handlers. Existing values are never overwritten: @fastify/swagger-ui can be
- * configured to set its own CSP, and a reverse proxy in front of this server
- * may have opinions of its own.
+ * Queue headers in onRequest so hijacked SSE replies can forward them too.
+ * Later handlers (including Swagger and static files) can still override them.
  */
 export function installSecurityHeaders(app: FastifyInstance, policy: SecurityHeaderPolicy): void {
-  app.addHook('onSend', async (_req, reply, payload) => {
+  app.addHook('onRequest', async (_req, reply) => {
     if (policy.csp !== null && !reply.hasHeader('content-security-policy')) {
       reply.header('Content-Security-Policy', policy.csp);
     }
@@ -129,6 +126,5 @@ export function installSecurityHeaders(app: FastifyInstance, policy: SecurityHea
         `max-age=${policy.hstsMaxAge}; includeSubDomains`
       );
     }
-    return payload;
   });
 }

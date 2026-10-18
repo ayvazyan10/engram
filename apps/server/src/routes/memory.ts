@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
-import { eq, isNull, desc, and, or } from 'drizzle-orm';
+import { eq, isNull, desc, and, or, getTableColumns } from 'drizzle-orm';
 import { brain, realtime, notifySyncWrite } from '../index.js';
 import { readEnvNumberOr } from '@engram-ai-memory/core';
 import { mapWithConcurrency } from '../lib/concurrency.js';
@@ -49,6 +49,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           source: { type: 'string' },
           sessionId: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
+          metadata: { type: 'object' },
           importance: { type: 'number', minimum: 0, maximum: 1 },
           concept: { type: 'string' },
           namespace: { type: 'string' },
@@ -59,7 +60,10 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       if (brain.getNamespaceMode() === 'isolated' && req.body.namespace && req.body.namespace !== brain.getNamespace()) {
         return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
       }
-      const result = await brain.store(req.body);
+      const { content, type, source, sessionId, tags, metadata, importance, concept, namespace } = req.body;
+      const result = await brain.store({
+        content, type, source, sessionId, tags, metadata, importance, concept, namespace,
+      });
       notifySyncWrite();
       // Broadcast the full record: the dashboard appends this straight into its
       // store, and a {id,type} stub left content undefined and crashed rendering.
@@ -198,8 +202,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         const ns = brain.getNamespace();
         if (ns) conditions.push(eq(schema.memories.namespace, ns));
 
+        const { embedding: _embedding, ...columns } = getTableColumns(schema.memories);
         const memories = await db
-          .select()
+          .select(columns)
           .from(schema.memories)
           .where(and(...conditions))
           .orderBy(desc(schema.memories.createdAt))

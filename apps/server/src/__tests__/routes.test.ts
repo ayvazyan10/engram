@@ -9,6 +9,8 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import path from 'path';
+import { getDb, schema } from '@engram-ai-memory/core';
+import { eq } from 'drizzle-orm';
 import os from 'os';
 import type { FastifyInstance } from 'fastify';
 import { cleanupTestDb } from '../test-helpers/cleanupTestDb.js';
@@ -76,6 +78,15 @@ describe('memory CRUD', () => {
     const res = await app.inject({ method: 'GET', url: `/api/memory/${id}` });
     expect(res.statusCode).toBe(200);
     expect(res.json().content).toContain('Fastify');
+  });
+
+  it('round-trips metadata through POST and GET', async () => {
+    const metadata = { origin: 'cli-import', nested: { enabled: true }, labels: ['one', 'two'], count: 2 };
+    const id = await storeMemory('Imported memory preserves its metadata', { metadata });
+
+    const res = await app.inject({ method: 'GET', url: `/api/memory/${id}` });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.json().metadata)).toEqual(metadata);
   });
 
   it('404s for an unknown id', async () => {
@@ -226,6 +237,8 @@ describe('analytics', () => {
   it('re-embeds on content edit so search follows the new text', async () => {
     const id = await storeMemory('The release train departs on Monday');
 
+    await getDb().update(schema.memories).set({ embeddingModel: 'old-model' })
+      .where(eq(schema.memories.id, id));
     const patch = await app.inject({
       method: 'PATCH',
       url: `/api/memory/${id}`,
@@ -233,6 +246,7 @@ describe('analytics', () => {
     });
     expect(patch.statusCode).toBe(200);
     expect(patch.json().content).toContain('Friday');
+    expect(patch.json().embeddingModel).toBe(brain.getEmbeddingModel());
 
     // The stored vector must describe the NEW text, not the old one.
     const res = await app.inject({
@@ -416,4 +430,55 @@ describe('CORS', () => {
     });
     expect(res.headers['access-control-allow-origin']).toBe('http://localhost:4902');
   });
+});
+
+
+describe('memory payload regressions', () => {
+  it('only forwards declared store fields', async () => {
+    const id = await storeMemory('Whitelisted store fields', {
+      eventAt: '2024-01-01T00:00:00Z', triggerPattern: { a: 1 }, actionPattern: { b: 2 },
+      sessionId: 'store-session', metadata: { kept: true }, tags: ['kept'], concept: 'kept',
+    });
+    const record = (await app.inject({ method: 'GET', url: `/api/memory/${id}` })).json();
+    expect(record.eventAt).not.toBe('2024-01-01T00:00:00.000Z');
+    expect(record.triggerPattern).toBeNull();
+    expect(record.actionPattern).toBeNull();
+    expect(record.sessionId).toBe('store-session');
+    expect(JSON.parse(record.metadata)).toEqual({ kept: true });
+    expect(JSON.parse(record.tags)).toEqual(['kept']);
+    expect(record.concept).toBe('kept');
+  });
+
+  it('omits only embedding from list rows', async () => {
+    const id = await storeMemory('List projection', { source: 'projection-test' });
+    const detail = (await app.inject({ method: 'GET', url: `/api/memory/${id}` })).json();
+    const { embedding, ...expected } = detail;
+    expect(embedding).toBeDefined();
+    const list = await app.inject({ method: 'GET', url: '/api/memory?source=projection-test' });
+    expect(list.json()).toEqual({ count: 1, memories: [expected] });
+  });
+
+  it('refuses edits to archived rows without changing the index or record', async () => {
+    const id = await storeMemory('Archived patch target');
+    await app.inject({ method: 'DELETE', url: `/api/memory/${id}` });
+    const before = (await app.inject({ method: 'GET', url: `/api/memory/${id}` })).json();
+    const patch = await app.inject({ method: 'PATCH', url: `/api/memory/${id}`,
+      payload: { content: 'Must never become searchable', importance: 0.9 } });
+    expect(patch.statusCode).toBe(404);
+    expect(brain.getVectorSearch().getIds().has(id)).toBe(false);
+    expect((await app.inject({ method: 'GET', url: `/api/memory/${id}` })).json()).toEqual(before);
+  });
+});
+
+it('keeps CORS and security headers on SSE replies', async () => {
+  const res = await app.inject({ method: 'GET', url: '/api/recall/stream?query=Fastify',
+    headers: { origin: 'http://localhost:5173' } });
+  expect(res.statusCode).toBe(200);
+  expect(res.headers['content-type']).toBe('text/event-stream');
+  expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+  expect(res.headers.vary).toContain('Origin');
+  expect(res.headers['x-content-type-options']).toBe('nosniff');
+  expect(res.headers['content-security-policy']).toContain("default-src 'self'");
+  expect(res.headers['referrer-policy']).toBe('no-referrer');
+  expect(res.body).toContain('event: complete');
 });

@@ -17,7 +17,6 @@
 /** Operations that must never overlap with themselves. */
 export type ExclusiveOperation =
   | 'consolidate'
-  | 'decay'
   | 'embeddings-backfill'
   | 'index-rebuild'
   | 'index-save'

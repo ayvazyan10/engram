@@ -18,6 +18,8 @@
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import path from 'path';
+import { createServer } from 'node:http';
+import { Namespace, type Socket } from 'socket.io';
 import os from 'os';
 import type { AddressInfo } from 'net';
 import type { FastifyInstance } from 'fastify';
@@ -228,4 +230,30 @@ describe('Socket.io handshake Origin allowlist', () => {
     await expect(waitForConnect(socket)).resolves.toBeUndefined();
     expect(socket.connected).toBe(true);
   });
+});
+
+
+describe('Socket.io token type validation without a listener', () => {
+  it.each([12345, true, {}, ['key'], { type: 'Buffer', data: [...Buffer.from(TEST_API_KEY)] }].map(token => [token]))(
+    'rejects non-string token %j through the registered middleware', async (token) => {
+      vi.resetModules();
+      process.env['ENGRAM_API_KEY'] = TEST_API_KEY;
+      process.env['ENGRAM_DECAY_INTERVAL'] = '0';
+      const use = vi.spyOn(Namespace.prototype, 'use');
+      const mod = await import('../index.ts');
+      const server = createServer();
+      try {
+        mod.setupRealtime(server);
+        const middleware = use.mock.calls[0]![0];
+        const next = vi.fn();
+        expect(() => middleware({ handshake: { auth: { token } } } as unknown as Socket, next))
+          .not.toThrow();
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/Unauthorized/) }));
+      } finally {
+        mod.io?.close();
+        use.mockRestore();
+        delete process.env['ENGRAM_API_KEY'];
+      }
+    }
+  );
 });

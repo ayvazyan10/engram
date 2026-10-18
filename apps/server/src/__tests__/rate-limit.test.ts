@@ -116,3 +116,12 @@ describe('the counter itself', () => {
     for (let i = 0; i < 50; i++) expect(check('global', 'a', 0).allowed).toBe(true);
   });
 });
+
+
+it('shares the rate budget across encoded and plain API paths', async () => {
+  const codes: number[] = [];
+  for (const url of ['/api/health', '/%61pi/health', '/api/health', '/%61pi/health', '/%61pi/health']) {
+    codes.push((await app.inject({ method: 'GET', url, remoteAddress: '127.0.0.2' })).statusCode);
+  }
+  expect(codes).toEqual([200, 200, 200, 200, 429]);
+});

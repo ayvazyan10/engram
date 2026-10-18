@@ -18,7 +18,7 @@
  * needs, so the key is rejected outright rather than validated.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import path from 'path';
 import os from 'os';
 import type { FastifyInstance } from 'fastify';
@@ -141,5 +141,66 @@ describe('PUT /api/decay/policy — accepted updates', () => {
     expect(res.json().archiveThreshold).toBe(0.2);
     expect(res.json().protectionRuleCount).toBe(5);
     await expectSweepStillWorks();
+  });
+});
+
+
+describe('decay and consolidation exclusivity', () => {
+  it.each(['/api/decay', '/api/consolidate'])(
+    'refuses %s while consolidation is running', async (url) => {
+      let release!: () => void;
+      let started!: () => void;
+      const entered = new Promise<void>((resolve) => { started = resolve; });
+      const pending = new Promise<[]>(resolve => { release = () => resolve([]); });
+      const consolidate = vi.spyOn(brain, 'consolidate').mockImplementation(() => {
+        started();
+        return pending;
+      });
+      const first = app.inject({ method: 'POST', url: '/api/consolidate', payload: {} }).then(r => r);
+      await entered;
+      try {
+        const second = await app.inject({ method: 'POST', url, payload: {} });
+        expect(second.statusCode).toBe(409);
+      } finally {
+        release();
+        await first;
+        consolidate.mockRestore();
+      }
+    }
+  );
+
+  it('shares the timer guard and reschedules or disables the interval after a policy update', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    let release!: () => void;
+    const result = { scannedCount: 0, archivedCount: 0, archivedIds: [], decayedCount: 0,
+      protectedCount: 0, consolidatedCount: 0, newSemanticIds: [], durationMs: 0 };
+    const sweep = vi.spyOn(brain, 'runDecaySweep').mockImplementation(() =>
+      new Promise(resolve => { release = () => resolve(result); }));
+    try {
+      expect((await putPolicy({ decayIntervalMs: 100 })).statusCode).toBe(200);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sweep).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sweep).toHaveBeenCalledTimes(1);
+      for (const url of ['/api/consolidate', '/api/decay']) {
+        expect((await app.inject({ method: 'POST', url, payload: {} })).statusCode).toBe(409);
+      }
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      sweep.mockResolvedValue(result);
+      await putPolicy({ decayIntervalMs: 250 });
+      await vi.advanceTimersByTimeAsync(249);
+      expect(sweep).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sweep).toHaveBeenCalledTimes(2);
+      await putPolicy({ decayIntervalMs: 0 });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sweep).toHaveBeenCalledTimes(2);
+    } finally {
+      release?.();
+      await putPolicy({ decayIntervalMs: 0 });
+      sweep.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

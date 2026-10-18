@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { DecayPolicyConfig } from '@engram-ai-memory/core';
-import { brain, VERSION, notifySyncWrite } from '../index.js';
-import { runExclusive } from '../lib/exclusive.js';
+import { brain, VERSION, notifySyncWrite, realtime } from '../index.js';
+import { runExclusive, OperationInProgressError } from '../lib/exclusive.js';
 
 /**
  * The subset of the policy that is safe to hand back over HTTP.
@@ -22,7 +22,35 @@ function serializePolicy(policy: DecayPolicyConfig) {
   };
 }
 
+/** Timer and manual routes share one guard: decay also runs consolidation. */
+async function runScheduledDecaySweep(): Promise<void> {
+  try {
+    const result = await runExclusive('consolidate', () => brain.runDecaySweep());
+    if (result.archivedCount > 0 || result.consolidatedCount > 0) {
+      console.info(
+        `Decay sweep: archived ${result.archivedCount}, decayed ${result.decayedCount}, consolidated ${result.consolidatedCount} (${result.durationMs}ms)`
+      );
+      realtime?.emit('memory:decayed', result);
+    }
+  } catch (err: unknown) {
+    if (err instanceof OperationInProgressError) return;
+    console.error('[engram] decay sweep failed, schedule continues:', err);
+  }
+}
+
 export const healthRoutes: FastifyPluginAsync = async (app) => {
+  let decayTimer: ReturnType<typeof setInterval> | undefined;
+  function rescheduleDecayTimer(): void {
+    clearInterval(decayTimer);
+    decayTimer = undefined;
+    const { decayIntervalMs } = brain.getDecayPolicy();
+    if (decayIntervalMs > 0) {
+      decayTimer = setInterval(() => void runScheduledDecaySweep(), decayIntervalMs);
+    }
+  }
+  app.addHook('onReady', async () => { rescheduleDecayTimer(); });
+  app.addHook('onClose', async () => { clearInterval(decayTimer); });
+
   app.get('/health', {
     schema: {
       tags: ['health'],
@@ -95,9 +123,8 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req) => {
       const { dryRun } = (req.body as { dryRun?: boolean }) ?? {};
-      // Single-flight, like the other whole-store passes. The scheduled sweep
-      // goes through brain.runDecaySweep() directly and is not affected.
-      const result = await runExclusive('decay', () => brain.runDecaySweep(dryRun ?? false));
+      // Decay includes consolidation, so all three entry points share a guard.
+      const result = await runExclusive('consolidate', () => brain.runDecaySweep(dryRun ?? false));
       if (!dryRun && (result.archivedCount > 0 || result.decayedCount > 0 || result.consolidatedCount > 0)) {
         notifySyncWrite();
       }
@@ -180,6 +207,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
     },
     handler: async (req, reply) => {
       const updates = req.body as Partial<DecayPolicyConfig>;
+      const previousInterval = brain.getDecayPolicy().decayIntervalMs;
       try {
         brain.updateDecayPolicy(updates);
       } catch (err: unknown) {
@@ -190,6 +218,7 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
         if (!message.startsWith('Invalid decay policy:')) throw err;
         return reply.code(400).send({ error: message });
       }
+      if (brain.getDecayPolicy().decayIntervalMs !== previousInterval) rescheduleDecayTimer();
       return { message: 'Decay policy updated', ...serializePolicy(brain.getDecayPolicy()) };
     },
   });

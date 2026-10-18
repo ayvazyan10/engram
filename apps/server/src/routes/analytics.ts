@@ -301,7 +301,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(schema.memories.id, id))
         .limit(1);
 
-      if (!existing || !brain.canAccessNamespace(existing.namespace)) {
+      if (!existing || existing.archivedAt !== null || !brain.canAccessNamespace(existing.namespace)) {
         reply.code(404);
         return { error: 'Memory not found' };
       }
@@ -326,6 +326,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         newVector = await embed(embeddableText);
         updates['embedding'] = packFP16(newVector);
         updates['embeddingDim'] = newVector.length;
+        updates['embeddingModel'] = brain.getEmbeddingModel();
       }
 
       await db

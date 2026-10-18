@@ -118,3 +118,26 @@ describe('accepted key transports are unchanged', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+
+describe('encoded route spellings', () => {
+  it.each(['/%61pi/memory', '/%61pi/stats', '/%64ocs/json', '/%64ocs/yaml'])(
+    'requires a key for %s', async (url) => {
+      expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
+      expect((await app.inject({ method: 'GET', url,
+        headers: { 'x-api-key': TEST_API_KEY } })).statusCode).toBe(200);
+    }
+  );
+
+  it('protects encoded writes and deletes', async () => {
+    const post = await app.inject({ method: 'POST', url: '/%61pi/memory',
+      payload: { content: 'unauthenticated write' } });
+    expect(post.statusCode).toBe(401);
+    const del = await app.inject({ method: 'DELETE', url: '/%61pi/memory/missing' });
+    expect(del.statusCode).toBe(401);
+  });
+
+  it('keeps encoded health probes open', async () => {
+    expect((await app.inject({ method: 'GET', url: '/%61pi/health?x=1' })).statusCode).toBe(200);
+  });
+});

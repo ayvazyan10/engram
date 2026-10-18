@@ -268,8 +268,8 @@ export function setupRealtime(server: HttpServer): Namespace {
   //   io('/neural', { auth: { token: 'my-api-key' } })
   if (API_KEY) {
     neuralNs.use((socket, next) => {
-      const token = socket.handshake.auth?.['token'] as string | undefined;
-      if (!token || !secretsMatch(token, API_KEY)) {
+      const token: unknown = socket.handshake.auth?.['token'];
+      if (typeof token !== 'string' || !secretsMatch(token, API_KEY)) {
         next(new Error('Unauthorized: invalid or missing API key'));
         return;
       }
@@ -342,11 +342,9 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   // a way to read arbitrary files.
   if (API_KEY) {
     app.addHook('onRequest', async (req, reply) => {
-      // Compare the PATH, not the raw request target. `req.url` carries the
-      // query string, so the exact-match exemption below missed
-      // `/api/health?x=1` — any probe with a cache-buster got a 401 — and a
-      // prefix test on the raw URL is just as fragile.
-      const pathname = pathnameOf(req.url);
+      // Match the router's canonical path, including percent-encoded requests.
+      // Unmatched requests still use the raw pathname for the API prefix guard.
+      const pathname = req.routeOptions.url ?? pathnameOf(req.url);
 
       // The OpenAPI document describes every route, parameter and body shape
       // on the server. The Swagger UI shell itself stays open (a browser
@@ -446,36 +444,6 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   return app;
 }
 
-/**
- * One tick of the auto-decay timer.
- *
- * Every failure path is contained here deliberately. The sweep runs against a
- * policy PUT /api/decay/policy can change at runtime, so a single bad policy
- * used to make it fail on every tick; and a synchronous throw escaping the
- * setInterval callback surfaces as a process-level uncaughtException, which
- * says nothing about which subsystem broke. Log it and leave the schedule
- * intact — the next tick picks up a corrected policy without a restart.
- */
-function runScheduledDecaySweep(neuralNs: Namespace): void {
-  try {
-    void brain
-      .runDecaySweep()
-      .then((result) => {
-        if (result.archivedCount > 0 || result.consolidatedCount > 0) {
-          console.info(
-            `Decay sweep: archived ${result.archivedCount}, decayed ${result.decayedCount}, consolidated ${result.consolidatedCount} (${result.durationMs}ms)`
-          );
-          neuralNs.emit('memory:decayed', result);
-        }
-      })
-      .catch((err: unknown) => {
-        console.error('[engram] decay sweep failed, schedule continues:', err);
-      });
-  } catch (err: unknown) {
-    console.error('[engram] decay sweep could not start, schedule continues:', err);
-  }
-}
-
 async function start() {
   // Initialize brain
   console.info('Initializing Engram brain...');
@@ -516,15 +484,8 @@ async function start() {
   console.info(`  Swagger:   http://${HOST}:${PORT}/docs`);
 
   // Attach Socket.io to Fastify's underlying HTTP server
-  const neuralNs = setupRealtime(app.server);
+  setupRealtime(app.server);
   console.info(`WebSocket: ws://${HOST}:${PORT}/neural`);
-
-  // ─── Auto-decay timer ────────────────────────────────────────────────────
-  const decayPolicy = brain.getDecayPolicy();
-  if (decayPolicy.decayIntervalMs > 0) {
-    setInterval(() => runScheduledDecaySweep(neuralNs), decayPolicy.decayIntervalMs);
-    console.info(`Auto-decay enabled: every ${Math.round(decayPolicy.decayIntervalMs / 1000)}s`);
-  }
 }
 
 // Graceful shutdown

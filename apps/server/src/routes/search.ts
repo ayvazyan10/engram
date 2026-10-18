@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { OutgoingHttpHeaders } from 'node:http';
 import { brain, realtime } from '../index.js';
 import type { MemoryType } from '@engram-ai-memory/core';
 import { strictQueryString } from '../lib/strictBody.js';
@@ -144,8 +145,10 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
       }
 
-      // Set SSE headers
+      // Take ownership of the stream while preserving headers queued by hooks.
+      reply.hijack();
       reply.raw.writeHead(200, {
+        ...reply.getHeaders() as OutgoingHttpHeaders,
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',

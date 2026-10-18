@@ -226,3 +226,8 @@ describe('isAllowedHost', () => {
     expect(isAllowedHost('engram.example.com.evil.test', configured)).toBe(false);
   });
 });
+
+
+it('refuses foreign Hosts on encoded API routes', async () => {
+  expect((await withHost('attacker.example', '/%61pi/memory')).statusCode).toBe(403);
+});
