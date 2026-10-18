@@ -115,7 +115,8 @@ export class ContextAssembler {
   constructor(
     private readonly vectorSearch: VectorSearch,
     private readonly graph: KnowledgeGraph,
-    private readonly namespace?: string
+    private readonly namespace?: string,
+    private readonly includeGlobal = false
   ) {}
 
   async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
@@ -140,7 +141,7 @@ export class ContextAssembler {
     // Step 2: Vector search (namespace-scoped when configured)
     const filtered = hasRecallFilters(options);
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
-    const vectorResults = this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace);
+    const vectorResults = this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
     const candidateIds = new Set(vectorResults.map((r) => r.id));
 
     // Step 3: Graph expansion
@@ -183,7 +184,8 @@ export class ContextAssembler {
         // type into the result — and rendered whole sections for them.
         if (types && !types.includes(record.type as MemoryType)) continue;
         // Apply namespace filter
-        if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
+        if (this.namespace && !crossNamespace && record.namespace !== this.namespace
+          && !(this.includeGlobal && record.namespace == null)) continue;
         records.push(record);
       }
     }
@@ -235,14 +237,16 @@ export class ContextAssembler {
     // later phase instead of last-write-wins; do not "fix" this to bump
     // updatedAt without that rule in place.
     const now = new Date().toISOString();
-    if (selected.length > 0) {
+    const accessed = selected.filter(({ record }) => !this.includeGlobal
+      || record.namespace === this.namespace || record.namespace == null);
+    if (accessed.length > 0) {
       await db
         .update(schema.memories)
         .set({
           accessCount: sql`${schema.memories.accessCount} + 1`,
           lastAccessedAt: now,
         })
-        .where(inArray(schema.memories.id, selected.map((s) => s.record.id)));
+        .where(inArray(schema.memories.id, accessed.map((s) => s.record.id)));
     }
 
     // Format context
@@ -333,7 +337,7 @@ export class ContextAssembler {
     // Step 2: Vector search — yield results immediately as Phase 1
     const filtered = hasRecallFilters(options);
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
-    const vectorResults = this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace);
+    const vectorResults = this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
 
     for (const vr of vectorResults) {
       if (totalChars >= maxChars || (filtered && allYielded.length >= topK)) break;
@@ -348,7 +352,8 @@ export class ContextAssembler {
       if (!matchesMemoryFilters(record, options)) continue;
       if (sources && record.source && !sources.includes(record.source)) continue;
       if (types && !types.includes(record.type as MemoryType)) continue;
-      if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
+      if (this.namespace && !crossNamespace && record.namespace !== this.namespace
+          && !(this.includeGlobal && record.namespace == null)) continue;
 
       const score = scoreMemory({
         similarity: vr.similarity,
@@ -403,7 +408,8 @@ export class ContextAssembler {
       // See recall(): expansion reaches memories the vector search never
       // filtered, so the type filter has to be re-applied here.
       if (types && !types.includes(record.type as MemoryType)) continue;
-      if (this.namespace && !crossNamespace && record.namespace !== this.namespace) continue;
+      if (this.namespace && !crossNamespace && record.namespace !== this.namespace
+          && !(this.includeGlobal && record.namespace == null)) continue;
 
       // Graph-expanded memories get a lower base similarity
       const similarity = 0.1;
@@ -442,14 +448,16 @@ export class ContextAssembler {
     // Deliberately does NOT set `updatedAt` — see the comment in recall();
     // access_count is intentionally excluded from last-write-wins sync.
     const now = new Date().toISOString();
-    if (allYielded.length > 0) {
+    const accessed = allYielded.filter(({ record }) => !this.includeGlobal
+      || record.namespace === this.namespace || record.namespace == null);
+    if (accessed.length > 0) {
       await db
         .update(schema.memories)
         .set({
           accessCount: sql`${schema.memories.accessCount} + 1`,
           lastAccessedAt: now,
         })
-        .where(inArray(schema.memories.id, allYielded.map((y) => y.record.id)));
+        .where(inArray(schema.memories.id, accessed.map((y) => y.record.id)));
     }
 
     // Log to context_assemblies

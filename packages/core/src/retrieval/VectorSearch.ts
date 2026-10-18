@@ -195,7 +195,8 @@ export class VectorSearch {
     threshold: number = 0.0,
     types?: Array<'episodic' | 'semantic' | 'procedural'>,
     namespace?: string | null,
-    crossNamespace?: boolean
+    crossNamespace?: boolean,
+    includeGlobal = false
   ): SearchResult[] {
     // A non-positive or non-finite topK asks for nothing, so nothing comes
     // back. `scores.slice(0, topK)` read a negative value as an offset from the
@@ -208,9 +209,10 @@ export class VectorSearch {
       ? this.entries.filter((e) => types.includes(e.type))
       : this.entries;
 
-    // Namespace filtering: only when namespace is set and crossNamespace is not true
-    if (namespace && !crossNamespace) {
-      candidates = candidates.filter((e) => e.namespace === namespace);
+    // Undefined means unscoped; explicit null selects only global entries.
+    if (namespace !== undefined && !crossNamespace) {
+      candidates = candidates.filter((e) => (e.namespace ?? null) === namespace
+        || (includeGlobal && e.namespace == null));
     }
 
     // Compute cosine similarities in a single pass

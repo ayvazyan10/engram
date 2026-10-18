@@ -161,6 +161,7 @@ describe('Namespace — two brains, one DB', () => {
     await brainA.initialize();
     await brainA.store({ content: 'Alpha memory about deployment workflows' });
     await brainA.store({ content: 'Alpha memory about CI pipelines' });
+    await brainA.store({ content: 'Global memory about deployment workflows', namespace: null });
     brainA.shutdown();
     closeDb();
 
@@ -176,22 +177,22 @@ describe('Namespace — two brains, one DB', () => {
     cleanupTestDb(dbPath);
   });
 
-  it('brain B only sees its own memories in stats', async () => {
+  it('brain B sees its own and global memories in stats', async () => {
     const stats = await brainB.stats();
-    expect(stats.total).toBe(1);
+    expect(stats.total).toBe(2);
     expect(stats.namespace).toBe('beta');
   });
 
-  it('brain B search only returns beta memories', async () => {
+  it('brain B search includes global memories but excludes alpha', async () => {
     const results = await brainB.search('deployment workflows');
-    // Should NOT find alpha's deployment memory
-    expect(results.length).toBe(0);
+    expect(results.length).toBe(1);
+    expect(results[0]!.namespace).toBeNull();
   });
 
   it('crossNamespace search returns memories from all namespaces', async () => {
     const results = await brainB.search('deployment workflows', { crossNamespace: true });
     // Should find alpha's deployment memory via cross-namespace
-    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.length).toBeGreaterThanOrEqual(2);
   });
 
   it('decay sweep only affects the active namespace', async () => {
