@@ -3,10 +3,12 @@ import { useMemoryStore } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
 import { useServerStats } from '../../lib/serverStats.js';
+import { projectLabel } from '../../lib/projects.js';
 import { COMPACT_QUERY, useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { GLYPH, RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import SearchBar from '../ui/SearchBar.js';
 import MemoryCard from '../ui/MemoryCard.js';
+import ProjectPicker from '../ui/ProjectPicker.js';
 import NeuronInspector from '../ui/NeuronInspector.js';
 import Onboarding from './Onboarding.js';
 import WhatAiKnows from './WhatAiKnows.js';
@@ -29,7 +31,7 @@ interface Props {
  */
 export default function HomeView({ loading, error, onRetry, onLoadMore, loadingMore, onStore }: Props) {
   const t = useTemplateStore((s) => s.activeTemplate);
-  const { records, searchResults, searchQuery, isSearching } = useMemoryStore();
+  const { records, searchResults, searchQuery, isSearching, projectFilter } = useMemoryStore();
   const { selectedNeuronId, selectNeuron } = useNeuralStore();
   const stats = useServerStats();
   const isCompact = useMediaQuery(COMPACT_QUERY);
@@ -38,7 +40,8 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
    *  context block an AI would be handed for the same words. */
   const [lens, setLens] = useState<'memories' | 'ai'>('memories');
 
-  const empty = !loading && !error && records.length === 0 && !searchQuery;
+  // An empty filtered list is not an empty store: no onboarding for it.
+  const empty = !loading && !error && records.length === 0 && !searchQuery && projectFilter === undefined;
   useEffect(() => {
     if (empty) setOnboarding(true);
   }, [empty]);
@@ -52,7 +55,18 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
   }
 
   const list = searchQuery ? searchResults : records;
-  const total = stats?.total ?? records.length;
+  // A filtered list counts against its own bucket, not the whole store.
+  const buckets = stats?.byNamespace ?? [];
+  const known = buckets.map((b) => b.namespace);
+  const total =
+    projectFilter === undefined
+      ? (stats?.total ?? records.length)
+      : (buckets.find((b) => b.namespace === projectFilter)?.count ?? records.length);
+  // Cards name their project once the store has any (a store of global
+  // memories alone gets no extra label), except in a list filtered to one
+  // project, where every card would repeat the picker. Search spans every
+  // project, so its results keep the label.
+  const showProject = known.some((ns) => ns !== null) && (projectFilter === undefined || Boolean(searchQuery));
   const more = !searchQuery && total > records.length;
   const inspecting = Boolean(selectedNeuronId);
 
@@ -72,7 +86,8 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
         <div style={s.column}>
           <SearchBar large placeholder={lens === 'ai' ? 'What might your AI be asked?' : undefined} />
 
-          <div role="tablist" aria-label="Show" style={{ ...trackStyle(t), alignSelf: 'flex-start' }}>
+          <div style={s.lensRow}>
+          <div role="tablist" aria-label="Show" style={trackStyle(t)}>
             {LENSES.map((l) => (
               <button
                 key={l.id}
@@ -86,6 +101,10 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
                 {l.label}
               </button>
             ))}
+          </div>
+          {/* The picker scopes the recent list only: search spans every
+              project, so it steps aside while a search is up. */}
+          {lens === 'memories' && !searchQuery && <ProjectPicker />}
           </div>
 
           {lens === 'ai' ? (
@@ -139,6 +158,7 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
                   record={record}
                   selected={record.id === selectedNeuronId}
                   onSelect={(id) => selectNeuron(id === selectedNeuronId ? null : id)}
+                  project={showProject ? projectLabel(record.namespace, known) : undefined}
                 />
               ))}
             </div>
@@ -184,6 +204,7 @@ const s = {
     flexDirection: 'column' as const,
     gap: SPACE.lg,
   },
+  lensRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.sm, minWidth: 0 },
   heading: { display: 'flex', alignItems: 'baseline', gap: SPACE.sm, marginTop: SPACE.sm },
   title: { margin: 0, fontSize: TYPE.xl, fontWeight: WEIGHT.semibold, letterSpacing: '-0.01em' },
   count: { fontSize: TYPE.sm },

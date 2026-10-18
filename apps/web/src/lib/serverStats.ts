@@ -27,6 +27,11 @@ export interface ServerStats {
   total: number;
   byType: Record<string, number>;
   bySource: Record<string, number>;
+  /** Memories per project; `namespace: null` is the global bucket. Empty
+   *  from a server older than per-project scoping. */
+  byNamespace: { namespace: string | null; count: number }[];
+  /** The database file the server reads, when it says. */
+  dbPath: string | null;
 }
 
 const POLL_INTERVAL_MS = 15000;
@@ -52,6 +57,8 @@ export async function refreshServerStats(): Promise<void> {
       total: typeof res.total === 'number' ? res.total : sum(byType),
       byType,
       bySource,
+      byNamespace: Array.isArray(res.byNamespace) ? res.byNamespace : [],
+      dbPath: typeof res.dbPath === 'string' ? res.dbPath : null,
     };
     for (const listener of listeners) listener();
   } catch {

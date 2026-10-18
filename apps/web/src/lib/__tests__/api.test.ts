@@ -177,6 +177,19 @@ describe('lib/api endpoint coverage', () => {
     expect(String(url)).not.toContain('type=');
   });
 
+  it('listMemories() asks for one project by path, the global memories by global=true, and neither for all', async () => {
+    vi.mocked(fetch).mockImplementation(async () => jsonResponse(200, { count: 0, memories: [] }));
+    await api.listMemories({ namespace: '/home/me/code/api' });
+    await api.listMemories({ namespace: null });
+    await api.listMemories({ namespace: undefined });
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(urls[0]).toContain('namespace=%2Fhome%2Fme%2Fcode%2Fapi');
+    expect(urls[0]).not.toContain('global=');
+    expect(urls[1]).toContain('global=true');
+    expect(urls[1]).not.toContain('namespace=');
+    expect(urls[2]).not.toMatch(/namespace=|global=/);
+  });
+
   it('recall() POSTs the query and maxTokens', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { context: '', memories: [], latencyMs: 1 }));
     await api.recall('hello', 500);

@@ -37,7 +37,7 @@ const ReflectionView = lazy(() => import('../views/ReflectionView.js'));
 
 export default function AppLayout() {
   const { neurons, setNeurons, reconcileNeurons, setConnections, setContradictionPairs } = useNeuralStore();
-  const { setRecords, appendRecords, storeChanges } = useMemoryStore();
+  const { setRecords, appendRecords, storeChanges, projectFilter, setProjectFilter } = useMemoryStore();
   const viewMode = useDashboardStore((s) => s.viewMode);
   const t = useTemplateStore((s) => s.activeTemplate);
   const [loading, setLoading] = useState(true);
@@ -78,26 +78,39 @@ export default function AppLayout() {
   const loadMemories = useCallback(() => {
     setLoading(true);
     setLoadError(null);
-    api.listMemories({ limit: PAGE_SIZE })
-      .then((res) => setRecords(parseMemories(res.memories)))
+    api.listMemories({ limit: PAGE_SIZE, namespace: projectFilter })
+      .then((res) => {
+        // A quick second pick must not be overwritten by the first's reply.
+        if (useMemoryStore.getState().projectFilter === projectFilter) setRecords(parseMemories(res.memories));
+      })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 401) return;
         setLoadError(err instanceof Error ? err.message : 'Could not reach Engram API');
       })
       .finally(() => setLoading(false));
-  }, [setRecords]);
+  }, [setRecords, projectFilter]);
 
+  // Fires again whenever Home's project picker changes the filter.
   useEffect(() => {
     loadMemories();
   }, [loadMemories]);
+
+  // The filter is Home's: the other views read the same records and have no
+  // picker to say they are filtered, so leaving Home lists everything again.
+  useEffect(() => {
+    if (viewMode !== 'home') setProjectFilter(undefined);
+  }, [viewMode, setProjectFilter]);
 
   /** The next page of the list, from the server's own limit/offset. The
    *  offset is what is loaded: socket arrivals are the newest rows, so they
    *  already account for the shift they caused at the top. */
   const loadMore = useCallback(() => {
     setLoadingMore(true);
-    api.listMemories({ limit: PAGE_SIZE, offset: useMemoryStore.getState().records.length })
-      .then((res) => appendRecords(parseMemories(res.memories)))
+    const { records, projectFilter: namespace } = useMemoryStore.getState();
+    api.listMemories({ limit: PAGE_SIZE, offset: records.length, namespace })
+      .then((res) => {
+        if (useMemoryStore.getState().projectFilter === namespace) appendRecords(parseMemories(res.memories));
+      })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 401) return;
         setLoadError(err instanceof Error ? err.message : 'Could not reach Engram API');

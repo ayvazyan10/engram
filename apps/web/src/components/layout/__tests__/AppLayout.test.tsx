@@ -149,7 +149,7 @@ function edgeResponse(overrides: Partial<EdgeSummary> = {}): EdgeSummary {
 }
 
 function resetAll() {
-  useMemoryStore.setState({ records: [], loadedCount: 0 });
+  useMemoryStore.setState({ records: [], loadedCount: 0, projectFilter: undefined });
   useNeuralStore.setState({
     neurons: [], connections: [], contradictionPairs: [], contradictionIds: new Set(),
     selectedNeuronId: null, hoveredNeuronId: null, isConnected: false,
@@ -223,6 +223,23 @@ describe('AppLayout effect wiring (W12)', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(getGraphLayout).toHaveBeenCalledTimes(1);
     vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
+  });
+
+  it('reloads the list for the project Home picks, and lists every memory again on leaving Home', async () => {
+    useDashboardStore.setState({ viewMode: 'home' });
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
+
+    render(<AppLayout />);
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalledTimes(1));
+
+    act(() => useMemoryStore.getState().setProjectFilter('/code/api'));
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalledTimes(2));
+    expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, namespace: '/code/api' });
+
+    act(() => useDashboardStore.setState({ viewMode: 'timeline' }));
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalledTimes(3));
+    expect(useMemoryStore.getState().projectFilter).toBeUndefined();
+    expect(vi.mocked(api.listMemories).mock.calls[2]![0]?.namespace).toBeUndefined();
   });
 
   it('asks the server for a fresh census when a memory arrives instead of waiting for the poll', async () => {

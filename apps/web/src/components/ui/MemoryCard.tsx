@@ -28,10 +28,14 @@ export default function MemoryCard({
   record,
   selected,
   onSelect,
+  project,
 }: {
   record: MemoryRecord;
   selected: boolean;
   onSelect: (id: string) => void;
+  /** The project's name on screen. Left out when the store has no projects,
+   *  so a store of global memories only gets no extra label. */
+  project?: string;
 }) {
   const t = useTemplateStore((s) => s.activeTemplate);
   const tags = parseTags(record.tags);
@@ -57,6 +61,21 @@ export default function MemoryCard({
       <p style={{ ...s.content, color: t.textPrimary }}>{toPlainText(record.content)}</p>
       <div style={{ ...s.meta, color: t.textMuted }}>
         <TypeTag type={record.type} />
+        {project && (
+          <span
+            style={{ ...s.project, color: t.textSecondary }}
+            title={record.namespace ?? 'Global: shared by every project'}
+          >
+            <svg viewBox="0 0 16 16" fill="none" style={s.projectIcon} aria-hidden="true">
+              {record.namespace == null ? (
+                <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 0c-1.7 1.6-2.5 3.6-2.5 6s.8 4.4 2.5 6m0-12c1.7 1.6 2.5 3.6 2.5 6s-.8 4.4-2.5 6M2.3 6h11.4M2.3 10h11.4" stroke="currentColor" strokeWidth="1.2" />
+              ) : (
+                <path d="M2 4.5A1.5 1.5 0 013.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0114 6v5.5a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5v-7z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+              )}
+            </svg>
+            <span style={s.ellipsis}>{project}</span>
+          </span>
+        )}
         {record.source && <span style={s.source}>{record.source}</span>}
         <span className="ec-tabular" style={s.date} title={formatDateTime(record.createdAt)}>
           {formatRelative(record.createdAt)}
@@ -110,6 +129,16 @@ const s = {
     minWidth: 0,
     fontSize: TYPE.sm,
   },
+  project: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: SPACE['2xs'],
+    minWidth: 0,
+    maxWidth: '45%',
+    flexShrink: 1,
+  },
+  projectIcon: { width: 12, height: 12, flexShrink: 0, opacity: 0.8 },
+  ellipsis: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
   source: {
     minWidth: 0,
     overflow: 'hidden',

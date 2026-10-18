@@ -27,9 +27,11 @@ export default function StatusBar() {
   // what we actually know.
   const census = stats?.total ?? null;
   const countLabel = census !== null ? `${census} memories` : `${loadedCount} loaded`;
+  // The database file rides along in the tooltip: it tells apart two stores
+  // that would otherwise look the same, without a word of chrome on screen.
   const countTitle =
     census !== null
-      ? `${census} stored memories`
+      ? `${census} stored memories${stats?.dbPath ? ` in ${stats.dbPath}` : ''}`
       : `${loadedCount} memories loaded — the server's total is not in yet`;
 
   return (

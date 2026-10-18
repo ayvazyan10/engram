@@ -8,6 +8,8 @@ import { GLYPH, RADIUS, SPACE, STATUS, TYPE, TYPE_COLORS, WEIGHT, withAlpha } fr
 import { parseTagLabel } from '../../lib/tagLabel.js';
 import { memoryRowText, toPlainText } from '../../lib/plainText.js';
 import { formatDateTime } from '../../lib/dates.js';
+import { useServerStats } from '../../lib/serverStats.js';
+import { projectLabel } from '../../lib/projects.js';
 import ConfirmDialog from './ConfirmDialog.js';
 import MemoryEditForm from './MemoryEditForm.js';
 import { TypeTag } from './DataMark.js';
@@ -45,6 +47,7 @@ export default function NeuronInspector() {
   const { selectedNeuronId, selectNeuron, contradictionPairs, removeNeuron, setContradictionPairs } = useNeuralStore();
   const { records, removeRecord, updateRecordTags, updateRecord } = useMemoryStore();
   const t = useTemplateStore((s) => s.activeTemplate);
+  const known = useServerStats()?.byNamespace.map((b) => b.namespace) ?? [];
   const [conns, setConns] = useState<GraphConn[]>([]);
   // A failed neighbourhood fetch used to make the section vanish, which read
   // as "no connections". It is said instead.
@@ -352,6 +355,18 @@ export default function NeuronInspector() {
             onRemoveTag={handleRemoveTag}
           />
 
+          {/* Project — only once the store has any: a store of global
+              memories alone would read "Global" on every one. The full path
+              is printed, not tucked in a tooltip, so touch can read it. */}
+          {known.some((ns) => ns !== null) && (
+            <Section label="Project" t={t}>
+              <div style={{ ...styles.projectName, color: t.textPrimary }}>{projectLabel(memory.namespace, known)}</div>
+              <div className="ec-wrap-anywhere" style={{ ...styles.meta, color: t.textMuted }}>
+                {memory.namespace ?? 'Shared by every project'}
+              </div>
+            </Section>
+          )}
+
           {/* Date */}
           <Section label="Stored" t={t}>
             <div className="ec-tabular" style={{ ...styles.meta, color: t.textMuted }}>{formatDateTime(memory.createdAt)}</div>
@@ -639,6 +654,7 @@ const styles = {
   sectionLabel: { fontSize: TYPE.sm, fontWeight: WEIGHT.medium, letterSpacing: '0.01em', lineHeight: 1.3 },
   conceptChip: { display: 'inline-block', fontSize: TYPE.base, fontWeight: WEIGHT.medium, padding: `${SPACE['3xs']} ${SPACE.sm}`, borderRadius: RADIUS.sm, width: 'fit-content', maxWidth: '100%', lineHeight: 1.45 },
   content: { fontSize: TYPE.base, lineHeight: 1.6 },
+  projectName: { fontSize: TYPE.base, fontWeight: WEIGHT.medium },
   showAllBtn: {
     alignSelf: 'flex-start',
     marginTop: SPACE['2xs'],

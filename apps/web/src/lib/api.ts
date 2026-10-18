@@ -137,11 +137,17 @@ export const api = {
       total: number;
       byType: Record<string, number>;
       bySource: Record<string, number>;
+      byNamespace?: { namespace: string | null; count: number }[];
+      dbPath?: string;
     }>('/stats'),
 
-  listMemories: (params?: { type?: string; limit?: number; offset?: number }) => {
+  /** `namespace`: a path lists one project, `null` the global memories, and
+   *  leaving it out lists every memory. */
+  listMemories: (params?: { type?: string; namespace?: string | null; limit?: number; offset?: number }) => {
     const q = new URLSearchParams();
     if (params?.type) q.set('type', params.type);
+    if (typeof params?.namespace === 'string') q.set('namespace', params.namespace);
+    if (params?.namespace === null) q.set('global', 'true');
     if (params?.limit) q.set('limit', String(params.limit));
     if (params?.offset) q.set('offset', String(params.offset));
     return request<{ count: number; memories: unknown[] }>(`/memory?${q}`);

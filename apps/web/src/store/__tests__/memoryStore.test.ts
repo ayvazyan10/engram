@@ -64,3 +64,27 @@ describe('memoryStore addRecord (F1)', () => {
     expect(loadedCount).toBe(2);
   });
 });
+
+describe('memoryStore addRecord under a project filter', () => {
+  beforeEach(() => {
+    useMemoryStore.setState({ records: [], loadedCount: 0, storeChanges: 0, projectFilter: undefined });
+  });
+
+  it('keeps an arrival from another project out of a filtered list, but still counts the store change', () => {
+    useMemoryStore.setState({ projectFilter: '/code/api' });
+    useMemoryStore.getState().addRecord(makeRecord({ id: 'web', namespace: '/code/web' }));
+    useMemoryStore.getState().addRecord(makeRecord({ id: 'global', namespace: null }));
+    useMemoryStore.getState().addRecord(makeRecord({ id: 'api', namespace: '/code/api' }));
+    const { records, storeChanges } = useMemoryStore.getState();
+    expect(records.map((r) => r.id)).toEqual(['api']);
+    expect(storeChanges).toBe(3);
+  });
+
+  it('lets a global arrival (null or no namespace) into the Global list', () => {
+    useMemoryStore.setState({ projectFilter: null });
+    useMemoryStore.getState().addRecord(makeRecord({ id: 'a' }));
+    useMemoryStore.getState().addRecord(makeRecord({ id: 'b', namespace: null }));
+    useMemoryStore.getState().addRecord(makeRecord({ id: 'c', namespace: '/code/api' }));
+    expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['b', 'a']);
+  });
+});

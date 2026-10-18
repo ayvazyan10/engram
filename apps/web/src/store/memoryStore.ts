@@ -10,7 +10,14 @@ export interface MemoryRecord {
   concept: string | null;
   tags: string;
   createdAt: string;
+  /** The project this memory belongs to: an absolute git-root path, or null
+   *  (or absent, from an older server) for a global memory. */
+  namespace?: string | null;
 }
+
+/** Which memories Home lists: `undefined` is every one, `null` the global
+ *  ones, a path one project's. The same three meanings `namespace` has. */
+export type ProjectFilter = string | null | undefined;
 
 interface MemoryState {
   records: MemoryRecord[];
@@ -44,7 +51,10 @@ interface MemoryState {
    * through the list does not refetch them and the cold load fetches once.
    */
   storeChanges: number;
+  /** Drives the list's query (AppLayout reloads when it changes). */
+  projectFilter: ProjectFilter;
 
+  setProjectFilter: (filter: ProjectFilter) => void;
   setRecords: (records: MemoryRecord[]) => void;
   setSearchResults: (results: MemoryRecord[]) => void;
   setSearchQuery: (query: string) => void;
@@ -75,7 +85,9 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   recallLatencyMs: null,
   highlightedIds: new Set(),
   storeChanges: 0,
+  projectFilter: undefined,
 
+  setProjectFilter: (filter) => set({ projectFilter: filter }),
   setRecords: (records) => set({ records, loadedCount: records.length }),
   setSearchResults: (results) => set({ searchResults: results }),
   setSearchQuery: (query) => set({ searchQuery: query }),
@@ -100,6 +112,12 @@ export const useMemoryStore = create<MemoryState>((set) => ({
         const records = [...state.records];
         records[index] = record;
         return { records };
+      }
+      // A memory from another project still changes the store, but it does
+      // not join a list filtered to one project.
+      const filter = state.projectFilter;
+      if (filter !== undefined && (record.namespace ?? null) !== filter) {
+        return { storeChanges: state.storeChanges + 1 };
       }
       return {
         records: [record, ...state.records],

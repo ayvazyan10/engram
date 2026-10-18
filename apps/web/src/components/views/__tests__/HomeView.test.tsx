@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import HomeView from '../HomeView.js';
 import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js';
 import { useNeuralStore } from '../../../store/neuralStore.js';
 import { resetServerStats } from '../../../lib/serverStats.js';
+import { api } from '../../../lib/api.js';
 
 vi.mock('../../../lib/api.js', () => ({
   api: {
@@ -43,6 +44,7 @@ describe('HomeView', () => {
       searchResults: [],
       searchQuery: '',
       isSearching: false,
+      projectFilter: undefined,
     });
   });
 
@@ -181,5 +183,98 @@ describe('HomeView: what does my AI know?', () => {
     expect(document.querySelector('pre')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Store a memory' }));
     expect(onStore).toHaveBeenCalled();
+  });
+});
+
+describe('HomeView: projects', () => {
+  const API = '/home/me/code/api';
+  const WEB = '/home/me/code/web';
+  const MIXED = {
+    total: 16,
+    byType: {},
+    bySource: {},
+    byNamespace: [
+      { namespace: null, count: 3 },
+      { namespace: API, count: 5 },
+      { namespace: WEB, count: 8 },
+    ],
+  };
+
+  beforeEach(() => {
+    resetServerStats();
+    useNeuralStore.setState({ selectedNeuronId: null });
+    useMemoryStore.setState({
+      records: [record(), record({ id: 'mem-2', content: 'Fixed the flaky deploy.', namespace: API })],
+      searchResults: [],
+      searchQuery: '',
+      isSearching: false,
+      projectFilter: undefined,
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(api.stats).mockResolvedValue({ total: 2, byType: {}, bySource: {} });
+  });
+
+  it('names each card\'s project, with the full path on hover, and Global for the rest', async () => {
+    vi.mocked(api.stats).mockResolvedValue(MIXED);
+    renderHome();
+    const projectCard = screen.getByText('Fixed the flaky deploy.').closest('button')!;
+    expect(await within(projectCard).findByText('api')).toBeInTheDocument();
+    expect(within(projectCard).getByTitle(API)).toBeInTheDocument();
+    const globalCard = screen.getByText(/prefers pnpm over npm/).closest('button')!;
+    expect(within(globalCard).getByText('Global')).toBeInTheDocument();
+  });
+
+  it('shows the project and its path in the inspector', async () => {
+    vi.mocked(api.stats).mockResolvedValue(MIXED);
+    renderHome();
+    fireEvent.click(screen.getByText('Fixed the flaky deploy.').closest('button')!);
+    const inspector = screen.getByRole('complementary', { name: 'Memory details' });
+    expect(await within(inspector).findByText('Project')).toBeInTheDocument();
+    expect(within(inspector).getByText(API)).toBeInTheDocument();
+  });
+
+  it('offers All, Global, then each project by count, and picking one sets the filter', async () => {
+    vi.mocked(api.stats).mockResolvedValue(MIXED);
+    renderHome();
+    fireEvent.click(await screen.findByRole('button', { name: 'Project: All projects' }));
+    const options = within(screen.getByRole('group', { name: 'Show memories from' })).getAllByRole('button');
+    expect(options.map((o) => o.textContent)).toEqual([
+      'All projects16',
+      'Global3Shared by every project',
+      `web8${WEB}`,
+      `api5${API}`,
+    ]);
+    expect(options[0]).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(options[3]!);
+    expect(useMemoryStore.getState().projectFilter).toBe(API);
+    expect(screen.getByRole('button', { name: 'Project: api' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Project: api' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Global/ }));
+    expect(useMemoryStore.getState().projectFilter).toBeNull();
+  });
+
+  it('counts a filtered list against its own project', async () => {
+    vi.mocked(api.stats).mockResolvedValue(MIXED);
+    useMemoryStore.setState({ projectFilter: API });
+    renderHome();
+    expect(await screen.findByText('2 of 5')).toBeInTheDocument();
+    // Every card is in the one project the picker names: no label repeats it.
+    const card = screen.getByText('Fixed the flaky deploy.').closest('button')!;
+    expect(within(card).queryByText('api')).not.toBeInTheDocument();
+  });
+
+  it('adds nothing when the store holds global memories only', async () => {
+    vi.mocked(api.stats).mockResolvedValue({ ...MIXED, total: 2, byNamespace: [{ namespace: null, count: 2 }] });
+    useMemoryStore.setState({ records: [record()] });
+    renderHome();
+    // Let the census land before asserting that it changed nothing.
+    await act(async () => {});
+    expect(api.stats).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /^Project:/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Global')).not.toBeInTheDocument();
   });
 });
