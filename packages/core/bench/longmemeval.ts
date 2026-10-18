@@ -34,6 +34,7 @@ interface Result {
   dataset: { source: string; file: string; path: string };
   model: string;
   topK: number;
+  sample: { perType: number } | { limit: number } | 'full';
   counts: { total: number; abstention: number; eligible: number; evaluated: number };
   overall: Recall;
   byType: Record<string, Recall & { count: number }>;
@@ -43,15 +44,27 @@ interface Result {
 
 function options() {
   const { values } = parseArgs({
-    options: { limit: { type: 'string' }, data: { type: 'string' }, out: { type: 'string' } },
+    options: {
+      limit: { type: 'string' },
+      'per-type': { type: 'string' },
+      data: { type: 'string' },
+      out: { type: 'string' },
+    },
     allowPositionals: false,
   });
   const limit = values.limit === undefined ? Infinity : Number(values.limit);
   if (values.limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     throw new Error('--limit must be a positive integer');
   }
+  const perType = values['per-type'] === undefined ? undefined : Number(values['per-type']);
+  if (perType !== undefined && (!Number.isSafeInteger(perType) || perType < 1)) {
+    throw new Error('--per-type must be a positive integer');
+  }
+  if (values.limit !== undefined && perType !== undefined) {
+    throw new Error('--limit and --per-type cannot be combined');
+  }
   if (!values.data) throw new Error('--data <longmemeval_s_cleaned.json> is required (see docs/BENCHMARKS.md)');
-  return { limit, data: values.data, out: values.out };
+  return { limit, perType, data: values.data, out: values.out };
 }
 
 async function storeHaystack(brain: NeuralBrain, question: Question): Promise<void> {
@@ -162,7 +175,15 @@ async function main(): Promise<void> {
   const args = options();
   const questions = JSON.parse(await readFile(args.data, 'utf8')) as Question[];
   const eligible = questions.filter(question => !question.question_id.endsWith('_abs'));
-  const selected = eligible.slice(0, args.limit);
+  const perTypeLimit = args.perType;
+  const perTypeCounts = new Map<string, number>();
+  const selected = perTypeLimit === undefined
+    ? eligible.slice(0, args.limit)
+    : eligible.filter(question => {
+        const count = perTypeCounts.get(question.question_type) ?? 0;
+        perTypeCounts.set(question.question_type, count + 1);
+        return count < perTypeLimit;
+      });
   if (selected.length === 0) throw new Error('No non-abstention questions to evaluate');
   // Configure the same Transformers module used by core; never fetch a model.
   const { env } = await import('@xenova/transformers');
@@ -180,6 +201,9 @@ async function main(): Promise<void> {
     dataset: { source: 'xiaowu0162/longmemeval-cleaned', file: 'longmemeval_s_cleaned.json', path: args.data },
     model: MODEL,
     topK: TOP_K,
+    sample: args.perType !== undefined
+      ? { perType: args.perType }
+      : args.limit === Infinity ? 'full' : { limit: args.limit },
     counts: {
       total: questions.length,
       abstention: questions.length - eligible.length,
