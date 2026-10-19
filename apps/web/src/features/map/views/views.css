@@ -51,8 +51,8 @@
   .v3-region span { display: none; }
   .v3-time { left: 16px; right: 16px; bottom: 16px; }
   .v3-card { left: 16px; right: 16px; bottom: 16px; width: auto; max-width: none; max-height: 46%; }
-  .v3-landscape .v3-card { bottom: 164px; max-height: calc(100% - 240px); }
-  .v3-landscape .v3-legend { bottom: 164px; }
+  .v3-landscape .v3-card { bottom: 196px; max-height: calc(100% - 272px); }
+  .v3-landscape .v3-legend { bottom: 196px; }
 }
 /* Keep the prototype's quiet night vignette behind the readable overlays. */
 .v3-sky .v3-canvas::after {

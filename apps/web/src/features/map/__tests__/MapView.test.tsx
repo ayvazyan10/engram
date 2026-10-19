@@ -290,12 +290,12 @@ describe('MapView keyboard', () => {
 });
 
 describe('view switcher', () => {
-  it('pushes the view route, preserves the memory param, and shows only installed views', async () => {
+  it('pushes the view route, preserves the memory param, and lists every view', async () => {
     ready();
     useRouteStore.setState({ route: { name: 'map', sub: null, params: { m: 'a' } } });
     render(<MapView {...props} />);
     const views = within(screen.getByRole('group', { name: 'View' }));
-    expect(views.getAllByRole('button').map((b) => b.textContent)).toEqual(['Map', 'Sky', 'Landscape']);
+    expect(views.getAllByRole('button').map((b) => b.textContent)).toEqual(['Map', 'Sky', 'Landscape', 'River', 'Pulse']);
     fireEvent.click(views.getByRole('button', { name: 'Sky' }));
     expect(await screen.findByText('Sky scene')).toBeInTheDocument();
     expect(window.location.hash).toBe('#/?m=a&view=sky');
@@ -327,9 +327,9 @@ describe('view switcher', () => {
     });
     expect(screen.getByRole('slider')).toBeInTheDocument();
   });
-  it('falls back to Map for an uninstalled view', () => {
+  it('falls back to Map for an unknown view', () => {
     ready();
-    useRouteStore.setState({ route: { name: 'map', sub: null, params: { view: 'river' } } });
+    useRouteStore.setState({ route: { name: 'map', sub: null, params: { view: 'crystal' } } });
     render(<MapView {...props} />);
     expect(screen.getByRole('application')).toBeInTheDocument();
     expect(within(screen.getByRole('group', { name: 'View' })).getByRole('button', { name: 'Map' })).toHaveAttribute('aria-pressed', 'true');

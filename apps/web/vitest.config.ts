@@ -25,6 +25,7 @@ export default defineConfig({
         'src/features/map/views/LandscapeView.tsx',
         'src/features/map/views/threeStage.ts',
         'src/features/map/views/shaders.ts',
+        'src/features/map/views/RiverCanvas.tsx', // Canvas/brush painting; data layout is tested in river.ts.
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
     },

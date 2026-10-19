@@ -27,10 +27,11 @@ interface Props {
   onCommands: () => void;
 }
 
-// The orchestrator adds River and Pulse here after merging their view modules.
 const VIEWS = [
   { id: 'sky', label: 'Sky', load: () => import('./views/SkyView.js') },
   { id: 'landscape', label: 'Landscape', load: () => import('./views/LandscapeView.js') },
+  { id: 'river', label: 'River', load: () => import('./views/RiverView.js') },
+  { id: 'pulse', label: 'Pulse', load: () => import('./views/PulseView.js') },
 ].map((view) => ({ ...view, Component: lazy(view.load) }));
 
 const ARROWS: Record<string, Direction> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
