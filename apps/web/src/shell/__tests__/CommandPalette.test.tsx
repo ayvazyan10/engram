@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
-import CommandPalette from '../CommandPalette.js';
+import CommandPalette, { matchCommand } from '../CommandPalette.js';
 import { parseHash, useRouteStore } from '../routeStore.js';
 import { useTheme } from '../theme.js';
 import { useToasts } from '../Toasts.js';
@@ -61,6 +61,16 @@ describe('CommandPalette', () => {
 
     fireEvent.change(input, { target: { value: 'zzzzqqq' } });
     expect(screen.getByText('No command matches.')).toBeInTheDocument();
+  });
+
+  it('ranks the command that is named by the words first', () => {
+    render(<Host />);
+    const input = open();
+    fireEvent.change(input, { target: { value: 'dark' } });
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Dark mode']);
+    fireEvent.change(input, { target: { value: 'set' } });
+    expect(screen.getAllByRole('option')[0]).toHaveTextContent('Settings');
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
   });
 
   it('goes where a destination says, closes, and hands focus back', () => {
@@ -144,5 +154,17 @@ describe('CommandPalette', () => {
     expect(screen.getByRole('option', { name: /Show all projects/ })).toHaveTextContent('Current');
     fireEvent.click(screen.getByRole('option', { name: /Show api/ }));
     expect(useMemoryStore.getState().projectFilter).toBe('/code/api');
+  });
+});
+
+describe('matchCommand', () => {
+  it('needs every word, and ranks a name prefix over a name match over a keyword match', () => {
+    expect(matchCommand('Dark mode', '')).toBe(1);
+    expect(matchCommand('Dark mode', 'dark')).toBe(1);
+    expect(matchCommand('Match system colours', 'colours')).toBe(0.8);
+    expect(matchCommand('Light mode', 'theme', ['theme'])).toBe(0.5);
+    expect(matchCommand('Plates (old 3D views)', 'dark', ['3d', 'graph'])).toBe(0);
+    expect(matchCommand('Insights: reflections', 'insights refl')).toBe(1);
+    expect(matchCommand('Insights: reflections', 'insights numbers')).toBe(0);
   });
 });

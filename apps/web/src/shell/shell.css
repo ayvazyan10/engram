@@ -890,7 +890,14 @@ button.at-scope:hover,
   }
 
   .at-page {
-    padding: var(--s-2) var(--s-4) var(--s-10);
+    padding: var(--s-7) var(--s-4) var(--s-10);
+  }
+
+  /* The switch sits at the bar's right edge here: open towards the left. */
+  .at-scope-pop {
+    left: auto;
+    right: 0;
+    transform-origin: top right;
   }
 
   .at-display {

@@ -57,7 +57,7 @@ export default function SettingsView() {
       {version && (
         <section className="at-section" aria-labelledby="set-about">
           <h2 id="set-about">About</h2>
-          <p className="at-data">Engram server {version}</p>
+          <p className="at-data">Engram server v{version}</p>
         </section>
       )}
     </div>

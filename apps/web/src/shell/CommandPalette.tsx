@@ -44,6 +44,21 @@ const MODES: { mode: ColourMode; label: string; icon: IconName; done: string }[]
 ];
 
 /**
+ * Plain word matching: cmdk's default fuzzy score ranked "Plates (old 3D
+ * views)" above "Dark mode" for "dark". Every typed word must appear; a
+ * command whose name starts with the first word ranks first, then one whose
+ * name holds it, then one that matches by keyword only.
+ */
+export function matchCommand(value: string, search: string, keywords: string[] = []): number {
+  const name = value.toLowerCase();
+  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = `${name} ${keywords.join(' ').toLowerCase()}`;
+  if (words.length === 0) return 1;
+  if (!words.every((w) => hay.includes(w))) return 0;
+  return name.startsWith(words[0]!) ? 1 : name.includes(words[0]!) ? 0.8 : 0.5;
+}
+
+/**
  * ⌘K: every destination, the main actions, colour mode and project scope,
  * filtered as you type. A modal: focus stays inside, Escape or a click on the
  * scrim closes, and focus goes back where it was.
@@ -94,7 +109,7 @@ export default function CommandPalette({ open, onClose, onSearch, onStore }: Pro
           if (event.key === 'Tab') event.preventDefault();
         }}
       >
-        <Command label="Commands" loop>
+        <Command label="Commands" loop filter={matchCommand}>
           <div className="at-pal-q">
             <Icon name="search" size={20} />
             <Command.Input ref={inputRef} placeholder="Type a command or search" />
