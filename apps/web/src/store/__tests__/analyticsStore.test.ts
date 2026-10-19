@@ -34,7 +34,7 @@ describe('analyticsStore', () => {
   });
 
   it('clearing the error with setError(null) does not clobber a loading state set just before it', () => {
-    // AnalyticsView's fetch effect does exactly this on every run —
+    // The analytics fetch effect clears stale errors before each request —
     // setLoading(true) immediately followed by setError(null) to clear a
     // stale error before a new fetch starts. setError forcing loading back
     // to false made the loading state unreachable: "Loading analytics…"

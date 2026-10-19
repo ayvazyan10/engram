@@ -4,8 +4,7 @@ import { useMediaQuery } from '../useMediaQuery.js';
 
 /**
  * jsdom doesn't implement matchMedia — a fake MediaQueryList stands in,
- * matching how AppLayout's V3 desktop/compact split
- * (`useMediaQuery('(max-width: 900px)')`) actually gets its answer.
+ * allowing viewport changes to be exercised without a browser.
  */
 function fakeMatchMedia(initialMatches: boolean) {
   let matches = initialMatches;

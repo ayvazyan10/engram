@@ -1,9 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import StoreMemoryModal from '../StoreMemoryModal.js';
 import { api } from '../../../lib/api.js';
 
 vi.mock('../../../lib/api.js', () => ({ api: { storeMemory: vi.fn() } }));
+
+let sheet: HTMLStyleElement;
+beforeEach(() => {
+  sheet = document.createElement('style');
+  sheet.textContent = readFileSync(join(__dirname, '../ui.css'), 'utf-8') + readFileSync(join(__dirname, '../../../styles/global.css'), 'utf-8');
+  document.head.append(sheet);
+});
+afterEach(() => sheet.remove());
 
 describe('StoreMemoryModal drag-select close bug (W7)', () => {
   it('does not close when a text selection drag starts inside the modal and the mouseup lands on the overlay', () => {
@@ -105,7 +115,7 @@ describe('StoreMemoryModal fields (M5, M9)', () => {
       screen.getByLabelText(/tags/i),
       screen.getByPlaceholderText(/what do you want to remember/i),
     ]) {
-      expect((field as HTMLElement).style.fontFamily).toBe('inherit');
+      expect(getComputedStyle(field).fontFamily).toBe('inherit');
     }
   });
 
@@ -113,11 +123,10 @@ describe('StoreMemoryModal fields (M5, M9)', () => {
     render(<StoreMemoryModal onClose={vi.fn()} onStored={vi.fn()} />);
     const select = screen.getByLabelText(/type/i);
     expect(select.className).toContain('ec-select');
-    // The caret is painted by that class — an inline `background` shorthand
-    // here would reset its background-image and silently erase it, so the
-    // surface colour has to come through the longhand.
-    expect(select.getAttribute('style')).toContain('background-color');
-    expect(select.style.backgroundImage).toBe('');
+    // The field colour must preserve the shared select caret image.
+    expect(getComputedStyle(select).backgroundColor).toBe('var(--raised)');
+    expect(getComputedStyle(select).backgroundImage).toContain('linear-gradient');
+
   });
 });
 

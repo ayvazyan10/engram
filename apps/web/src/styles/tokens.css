@@ -81,41 +81,7 @@
   --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* ── Legacy names, read by the views F2–F6 have not replaced yet ──────── */
-  --ec-font-sans: var(--font);
-  --ec-font-mono: var(--font-mono);
-  --ec-space-3xs: 2px;
-  --ec-space-2xs: 4px;
-  --ec-space-xs: 6px;
-  --ec-space-sm: 8px;
-  --ec-space-md: 12px;
-  --ec-space-lg: 16px;
-  --ec-space-xl: 20px;
-  --ec-space-2xl: 28px;
-  --ec-space-3xl: 40px;
-  --ec-radius-tight: 4px;
-  --ec-radius-sm: 6px;
-  --ec-radius-md: 8px;
-  --ec-radius-lg: 10px;
-  --ec-radius-xl: 14px;
-  --ec-radius-pill: 999px;
-  --ec-duration-fast: var(--dur-hover);
-  --ec-duration-normal: calc(200ms * var(--motion));
-  --ec-ease-out: var(--ease-out);
-  /* First paint of the template mirror; useThemeVars keeps it live. */
-  --ec-accent: var(--ink);
-  --ec-accent-strong: var(--ink);
-  --ec-on-accent: var(--on-ink);
-  --ec-focus: var(--focus);
-  --ec-hover-overlay: var(--wash);
-  --ec-active-overlay: var(--wash-2);
-  --ec-text-primary: var(--ink);
-  --ec-text-secondary: var(--ink-2);
-  --ec-text-muted: var(--ink-3);
-  --ec-panel-border: var(--rule);
-  --ec-panel-bg: var(--surface);
-  --ec-card-bg: var(--raised);
-  --ec-input-bg: var(--raised);
+
 }
 
 @media (prefers-color-scheme: dark) {

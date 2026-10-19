@@ -5,8 +5,7 @@ import { join } from 'node:path';
 /**
  * The scrollbar, the switcher-label breakpoint and the numeral utility are
  * CSS-only findings (L4, M12, M13) — there is no component to render that
- * would prove them. These assert the stylesheet itself, the same way
- * typeColorsSingleSource.test.ts asserts the source tree.
+ * would prove them. These assert the stylesheet itself.
  */
 const css = readFileSync(join(__dirname, '../global.css'), 'utf-8');
 /** Declarations only — the comments deliberately quote the old values. */
@@ -19,14 +18,14 @@ describe('global.css scrollbars (L4)', () => {
     expect(rule).not.toMatch(/width:\s*4px/);
   });
 
-  it('no longer hardcodes the slate thumb that stayed slate in every template', () => {
+  it('no longer hardcodes the slate thumb that stayed slate in both colour modes', () => {
     expect(rules).not.toContain('#1e293b');
     expect(rules).not.toContain('#334155');
   });
 
-  it('tints the thumb from the live template accent variable', () => {
+  it('tints the thumb from the Atlas ink variable', () => {
     const rule = css.match(/::-webkit-scrollbar-thumb\s*\{[^}]*\}/)?.[0] ?? '';
-    expect(rule).toContain('--ec-accent');
+    expect(rule).toContain('--ink');
   });
 
   it('gives Firefox, which has no ::-webkit-scrollbar, the same treatment', () => {

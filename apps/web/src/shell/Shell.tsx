@@ -20,12 +20,10 @@ import ReviewView from '../features/review/ReviewView.js';
 import { useReviewCount } from '../features/review/queues.js';
 import { useNeuralStore } from '../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../store/memoryStore.js';
-import { useTemplateStore } from '../store/templateStore.js';
 import { useAuthStore } from '../store/authStore.js';
 import { api, ApiError } from '../lib/api.js';
 import { refreshServerStats } from '../lib/serverStats.js';
 import { useWebSocket, asMemoryRecord } from '../hooks/useWebSocket.js';
-import { useThemeVars } from '../hooks/useThemeVars.js';
 import './shell.css';
 
 // recharts is the bulk of Insights' weight: fetched only when it opens.
@@ -58,7 +56,6 @@ export default function Shell() {
   const route = useRouteStore((s) => s.route);
   const navigate = useRouteStore((s) => s.navigate);
   const reviewCount = useReviewCount();
-  const t = useTemplateStore((s) => s.activeTemplate);
   const locked = useAuthStore((s) => s.locked);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -66,7 +63,6 @@ export default function Shell() {
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
-  useThemeVars(t);
   useWebSocket();
 
   // A 401 is the unlock gate's (lib/api.ts locks on every 401); anything else

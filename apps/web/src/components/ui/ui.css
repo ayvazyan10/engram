@@ -1,0 +1,139 @@
+/* Shared Atlas dialogs and recovery surfaces. */
+.ui-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-4);
+  background: var(--scrim);
+  backdrop-filter: blur(4px);
+}
+
+.ui-modal,
+.ui-unlock {
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sheet);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.ui-modal { overflow: hidden; }
+
+.ui-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--rule);
+}
+
+.ui-modal-title { font-size: 15px; font-weight: 640; }
+
+.ui-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.ui-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  padding: var(--s-5);
+  overflow-y: auto;
+}
+
+.ui-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-5);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-primary,
+.ui-secondary {
+  min-height: 34px;
+  padding: var(--s-1) var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ui-primary { background: var(--ink); color: var(--on-ink); }
+.ui-secondary { background: var(--raised); border-color: var(--rule); color: var(--ink); }
+
+.ui-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+  /* Keep the native select's CSS caret image. */
+  background-color: var(--raised);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.ui-input.ec-select { padding-right: 28px; }
+.ui-textarea { min-height: 96px; font-size: 14.5px; line-height: 1.55; resize: vertical; }
+.ui-form-row { display: flex; gap: var(--s-3); }
+.ui-field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s-1); }
+.ui-label { font-size: 13px; font-weight: 600; color: var(--ink-3); }
+.ui-importance { color: var(--ink-2); }
+.ui-range { width: 100%; min-height: 34px; accent-color: var(--ink); }
+
+.ui-form-error {
+  padding: var(--s-2) var(--s-3);
+  border-left: 3px solid var(--fault);
+  border-radius: var(--r-control);
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ui-unlock-overlay { z-index: 2000; backdrop-filter: blur(6px); }
+.ui-unlock { width: 380px; align-items: center; padding: var(--s-7) var(--s-7) var(--s-5); overflow-y: auto; }
+.ui-unlock-icon { flex: none; width: 30px; height: 30px; margin-bottom: var(--s-2); }
+.ui-unlock-title, .ui-error-title { font-size: 18px; font-weight: 640; letter-spacing: -0.01em; text-align: center; }
+.ui-unlock-subtitle { margin: var(--s-2) 0 var(--s-5); color: var(--ink-2); font-size: 14px; line-height: 1.55; text-align: center; }
+.ui-unlock-actions { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-4); width: 100%; }
+.ui-unlock-submit { flex: 1; }
+
+.ui-error-boundary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  gap: var(--s-2);
+  padding: var(--s-5);
+  background: var(--paper);
+  color: var(--ink);
+  text-align: center;
+}
+
+.ui-error-icon { font-size: 28px; line-height: 1; color: var(--fault); }
+.ui-error-message { max-width: 440px; color: var(--ink-2); font-size: 14px; line-height: 1.5; }
+.ui-retry { margin-top: var(--s-2); }

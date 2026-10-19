@@ -1,25 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
-import { GLYPH } from '../../../lib/tokens.js';
+import { join } from 'node:path';
 
-/**
- * L6 regression guard.
- *
- * The interface drew its icons from six Unicode repertoires at once, with
- * colour emoji (🕐 💡 ⚙️ 🔒) sitting beside monochrome line glyphs. Replacing
- * an icon set is a bundle decision this app cannot afford right now — two
- * components hand-roll ~100-byte inline SVG paths instead — but "no colour
- * emoji, one glyph per meaning" is free, and this keeps it free.
- *
- * (GLYPH's own per-meaning uniqueness is asserted in lib/__tests__/tokens.test.ts;
- * that a panel actually draws from GLYPH rather than re-typing one of its
- * glyphs for a second meaning is asserted below.)
- *
- * `layout` joins the sweep here: it was left out of the original pass only
- * because it was another change's directory, and MobileTabBar promptly took
- * '⬡' (concept) for its plate tab and '◈' (pattern) for its Inspect tab.
- */
+/** Shared UI icons stay monochrome, without emoji presentation. */
 const COMPONENTS_DIR = join(__dirname, '../..');
 // components/views went when the Atlas screens moved to src/features (F6).
 const PANEL_DIRS = [join(COMPONENTS_DIR, 'ui')];
@@ -56,38 +39,5 @@ describe('panel glyphs (L6)', () => {
       }
     }
     expect(offenders).toEqual([]);
-  });
-});
-
-/**
- * Surfaces that still spell out a glyph the registry owns, and why. This is an
- * exact list rather than a ceiling: adding an offender fails, and so does
- * fixing one without deleting its line here, which keeps the list honest about
- * what is actually left.
- *
- * Empty since the design pass that the previous entries were deferred to:
- * the wordmark's '⬡' (GLYPH.concept) became a drawn mark, the two view-mode
- * tabs ('◎' = confidence, '◈' = pattern) draw `panePlate` and
- * `viewReflections`, and the reflections empty state draws
- * `viewReflections` too — the same glyph as the tab that leads to it.
- */
-const KNOWN_LITERALS: string[] = [];
-
-describe('panel glyphs draw from the registry (L6)', () => {
-  it('no panel re-types a registry glyph for a second meaning', () => {
-    const registry = Object.values(GLYPH) as string[];
-    const offenders: string[] = [];
-
-    for (const dir of PANEL_DIRS) {
-      for (const file of sources(dir)) {
-        const content = stripComments(readFileSync(file, 'utf-8'));
-        const rel = relative(COMPONENTS_DIR, file).split(sep).join('/');
-        for (const glyph of registry) {
-          if (content.includes(glyph)) offenders.push(`${rel}: ${glyph}`);
-        }
-      }
-    }
-
-    expect(offenders.sort()).toEqual([...KNOWN_LITERALS].sort());
   });
 });

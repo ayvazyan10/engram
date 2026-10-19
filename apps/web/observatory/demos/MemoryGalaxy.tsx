@@ -4,9 +4,8 @@
  * ─── The warning this slot was written under ───────────────────────────────
  *
  * The app once shipped a view called Galaxy and the owner had it deleted:
- * it arranged memories on a spiral that encoded nothing (see
- * apps/web/src/store/viewStore.ts, "Galaxy encoded nothing at all in
- * position"). So every spatial channel here is a measurement, and each is
+ * it arranged memories on a spiral whose position encoded nothing.
+ * So every spatial channel here is a measurement, and each is
  * named on the plate:
  *
  *   angle      which link community a memory belongs to (Louvain on the

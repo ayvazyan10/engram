@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { api } from '../../lib/api.js';
 import type { MemoryRecord } from '../../store/memoryStore.js';
-import { useTemplateStore } from '../../store/templateStore.js';
-import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import ModalShell from './ModalShell.js';
+import './ui.css';
 
 interface Props {
   onClose: () => void;
@@ -23,7 +22,6 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
   const [tagsInput, setTagsInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const t = useTemplateStore((s) => s.activeTemplate);
 
   async function handleSave() {
     if (!content.trim()) return;
@@ -57,15 +55,6 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
     }
   }
 
-  // Inputs used to hardcode `outline: 'none'` with nothing standing in for
-  // it (V2) — that's simply gone now. The global :focus-visible rule
-  // (styles/global.css) supplies the ring; an inline `outline: 'none'` here
-  // would out-specificity that rule and silently defeat it again.
-  //
-  // `backgroundColor`, not the `background` shorthand: the shorthand would
-  // reset the select's caret background-image from the .ec-select rule (M5).
-  const fieldStyle = { backgroundColor: t.inputBg, borderColor: t.panelBorder, color: t.textPrimary };
-
   return (
     <ModalShell
       title="Store Memory"
@@ -73,18 +62,13 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
       footer={
         <>
           <button
-            className="ec-hover-tint"
-            style={{ ...styles.cancelBtn, borderColor: t.panelBorder, color: t.textSecondary }}
+            className="ec-hover-tint ui-secondary"
             onClick={onClose}
           >
             Cancel
           </button>
-          {/* One filled button per surface, and it is flat: the template's
-              accentStrong, the shade that keeps its label at 4.5:1. The
-              diagonal accent gradient and the glow it used to wear are gone. */}
           <button
-            className="ec-primary"
-            style={{ ...styles.saveBtn, background: t.accentStrong, color: t.onAccent }}
+            className="ec-primary ui-primary"
             onClick={handleSave}
             disabled={saving || !content.trim()}
           >
@@ -95,7 +79,7 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
     >
       <textarea
         aria-label="What do you want to remember?"
-        style={{ ...styles.textarea, ...fieldStyle }}
+        className="ui-input ui-textarea"
         value={content}
         onChange={(e) => setContent(e.target.value)}
         // Cmd/Ctrl+Enter stores, as in most compose boxes; a plain Enter
@@ -111,13 +95,12 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
         autoFocus
       />
 
-      <div style={styles.row}>
-        <div style={styles.field}>
-          <label htmlFor="store-memory-type" style={{ ...styles.label, color: t.textMuted }}>Type</label>
+      <div className="ui-form-row">
+        <div className="ui-field">
+          <label htmlFor="store-memory-type" className="ui-label">Type</label>
           <select
             id="store-memory-type"
-            className="ec-select"
-            style={{ ...styles.select, ...fieldStyle }}
+            className="ec-select ui-input"
             value={type}
             onChange={(e) => setType(e.target.value as typeof type)}
           >
@@ -126,66 +109,31 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
             <option value="procedural">Procedural</option>
           </select>
         </div>
-        <div style={styles.field}>
-          <label htmlFor="store-memory-importance" style={{ ...styles.label, color: t.textMuted }}>
-            Importance <span className="ec-tabular" style={{ color: t.textSecondary }}>{Math.round(importance * 100)}%</span>
+        <div className="ui-field">
+          <label htmlFor="store-memory-importance" className="ui-label">
+            Importance <span className="ec-tabular ui-importance">{Math.round(importance * 100)}%</span>
           </label>
           <input
             id="store-memory-importance"
             type="range" min="0" max="1" step={IMPORTANCE_STEP}
             value={importance}
             onChange={(e) => setImportance(parseFloat(e.target.value))}
-            style={{ ...styles.range, accentColor: t.accent }}
+            className="ui-range"
           />
         </div>
       </div>
 
-      <div style={styles.field}>
-        <label htmlFor="store-memory-concept" style={{ ...styles.label, color: t.textMuted }}>Concept (optional)</label>
-        <input id="store-memory-concept" style={{ ...styles.input, ...fieldStyle }} value={concept} onChange={(e) => setConcept(e.target.value)} placeholder="e.g. TypeScript, User Preference" />
+      <div className="ui-field">
+        <label htmlFor="store-memory-concept" className="ui-label">Concept (optional)</label>
+        <input id="store-memory-concept" className="ui-input" value={concept} onChange={(e) => setConcept(e.target.value)} placeholder="e.g. TypeScript, User Preference" />
       </div>
 
-      <div style={styles.field}>
-        <label htmlFor="store-memory-tags" style={{ ...styles.label, color: t.textMuted }}>Tags (comma-separated)</label>
-        <input id="store-memory-tags" style={{ ...styles.input, ...fieldStyle }} value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} placeholder="e.g. important, project:alpha" />
+      <div className="ui-field">
+        <label htmlFor="store-memory-tags" className="ui-label">Tags (comma-separated)</label>
+        <input id="store-memory-tags" className="ui-input" value={tagsInput} onChange={(e) => setTagsInput(e.target.value)} placeholder="e.g. important, project:alpha" />
       </div>
 
-      {error && <div style={{ ...styles.error, color: STATUS.danger, background: withAlpha(STATUS.danger, 0.1) }}>{error}</div>}
+      {error && <div className="ui-form-error">{error}</div>}
     </ModalShell>
   );
 }
-
-const styles = {
-  textarea: {
-    width: '100%', border: '1px solid', borderRadius: RADIUS.sm,
-    padding: `${SPACE.sm} ${SPACE.md}`, fontSize: TYPE.base, resize: 'vertical' as const,
-    fontFamily: 'inherit', lineHeight: 1.5, minHeight: 96,
-  },
-  row: { display: 'flex', gap: SPACE.md },
-  field: { flex: 1, display: 'flex', flexDirection: 'column' as const, gap: SPACE['2xs'], minWidth: 0 },
-  // Sentence case: a field label names the field, it does not announce it.
-  label: { fontSize: TYPE.xs, fontWeight: WEIGHT.medium, letterSpacing: '0.01em' },
-  select: {
-    border: '1px solid', borderRadius: RADIUS.sm,
-    padding: `${SPACE.xs} ${SPACE.sm}`, fontSize: TYPE.sm, minHeight: 30,
-    // M5: a select does not inherit font-family, so this one rendered in the
-    // UA default while the textarea beside it was the body face.
-    fontFamily: 'inherit',
-  },
-  input: {
-    border: '1px solid', borderRadius: RADIUS.sm,
-    padding: `${SPACE.xs} ${SPACE.sm}`, fontSize: TYPE.sm, minHeight: 30,
-    fontFamily: 'inherit',
-    minWidth: 0,
-  },
-  range: { width: '100%', minHeight: 30 },
-  error: { fontSize: TYPE.sm, padding: `${SPACE.xs} ${SPACE.md}`, borderRadius: RADIUS.sm, lineHeight: 1.45 },
-  cancelBtn: {
-    padding: `${SPACE.xs} ${SPACE.lg}`, background: 'transparent', border: '1px solid', borderRadius: RADIUS.sm,
-    fontSize: TYPE.sm, fontWeight: WEIGHT.medium, fontFamily: 'inherit', minHeight: 30,
-  },
-  saveBtn: {
-    padding: `${SPACE.xs} ${SPACE.xl}`, border: 'none', borderRadius: RADIUS.sm,
-    fontSize: TYPE.sm, fontWeight: WEIGHT.semibold, fontFamily: 'inherit', minHeight: 30,
-  },
-} as const;

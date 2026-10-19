@@ -232,7 +232,7 @@ describe('Shell map loading', () => {
 
 /**
  * Escape is the host's. Several components used to want it — the search
- * field, the modal, and the old plates with their own window listeners — and
+ * field, the modal, and other surfaces with their own window listeners — and
  * one of those listeners quietly wiped the reader's selection every time the
  * search field was cleared.
  */
