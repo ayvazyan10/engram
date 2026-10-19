@@ -20,6 +20,7 @@ export default defineConfig({
         'src/test/**',
         'src/main.tsx',
         'src/features/map/MapCanvas.tsx',
+        'src/features/map/views/RiverCanvas.tsx', // Canvas/brush painting; data layout is tested in river.ts.
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
     },
