@@ -4,7 +4,7 @@
  * entirely (`grep -rn ":hover" src/` returned one hit before this file).
  */
 
-/* The faces are declared in fonts.css (self-hosted IBM Plex Sans) and
+/* The faces are declared in fonts.css (self-hosted Archivo) and
  * imported from main.tsx ahead of this file — never via @import here, which
  * is render-blocking and invisible to the preloader until this stylesheet
  * has itself been fetched and parsed. */
@@ -19,10 +19,10 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #020817;
-  color: #e2e8f0;
-  font-family: var(--ec-font-sans);
-  font-size: 13px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -30,7 +30,7 @@ html, body, #root {
 }
 
 /* Form controls do not inherit the body face; every one of them opts back in
- * here so no field can compute to Arial beside Plex text (M5). */
+ * here so no field can compute to Arial beside Archivo text (M5). */
 button, input, textarea, select {
   font-family: inherit;
   font-size: inherit;
@@ -281,91 +281,4 @@ select:focus-visible,
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* ─── Responsive header (V3) ─────────────────────────────────────────────── */
-
-.ec-header {
-  flex-wrap: nowrap;
-}
-
-/* The header is one row at every width. Labels always show — an unlabeled
- * glyph is not navigation — so it is the ICONS that go first, below 860px.
- *
- * Below 640px the remaining chrome shrinks to its marks: the wordmark, the
- * version badge, the theme name and the "Live" word go; the theme's own dot
- * (named by its aria-label) and the status dot stay. Below 480px the brand
- * mark goes too, so the five labeled tabs fit. If they still do not, their
- * track scrolls sideways rather than wrapping into a second row. */
-@media (max-width: 860px) {
-  .ec-switcher-icon {
-    display: none;
-  }
-}
-
-.ec-tabs {
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.ec-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-@media (max-width: 640px) {
-  /* SPACE.xs / SPACE.md / SPACE.sm from lib/tokens.ts. */
-  .ec-tabs > button {
-    padding-left: 6px !important;
-    padding-right: 6px !important;
-  }
-
-  .ec-header {
-    padding-left: 12px !important;
-    padding-right: 12px !important;
-    gap: 8px !important;
-  }
-
-  .ec-logo-badge,
-  .ec-logo-text,
-  .ec-template-label,
-  .ec-live-label {
-    display: none;
-  }
-}
-
-@media (max-width: 480px) {
-  .ec-logo {
-    display: none !important;
-  }
-}
-
-/* ─── Responsive side panels (V3) ────────────────────────────────────────────
- * Below 900px AppLayout switches the sidebar/canvas/inspector from a fixed
- * 3-column row to a single-pane-plus-tab-bar layout (see AppLayout.tsx /
- * MobileTabBar.tsx) — these classes style that tab bar and its panes. */
-
-.ec-mobile-tabbar {
-  display: flex;
-  flex-shrink: 0;
-  border-top: 1px solid;
-}
-
-.ec-mobile-tab {
-  position: relative;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 8px 4px 9px;
-  background: transparent;
-  border: none;
-  font-family: inherit;
-}
-
-.ec-mobile-pane {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
 }

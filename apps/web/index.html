@@ -3,31 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Engram — AI Brain Visualization</title>
-    <meta name="description" content="Universal AI Brain — visualize and interact with persistent memory" />
+    <title>Engram</title>
+    <meta name="description" content="Engram: the map of what your AI remembers" />
     <!--
-      IBM Plex Sans is self-hosted (src/styles/fonts.css; files under
-      /public/fonts). This dashboard is served by the Engram API process on
-      the owner's own machine, often with no route to the public internet, so
-      the Google Fonts <link> that used to sit here was a coin toss: the face
-      arrived late, or never. Only the latin regular is preloaded — it carries
-      nearly every glyph on the first paint. The medium and semibold weights
-      and the other scripts load on demand through their unicode-range.
-      `crossorigin` is required on a font preload even when same-origin, or
-      the browser fetches it twice.
-    -->
-    <link rel="preload" href="/fonts/ibm-plex-sans-400-latin.woff2" as="font" type="font/woff2" crossorigin />
-    <!--
-      Archivo is preloaded alongside it because the plate — the app's primary
-      surface — is set in it end to end, and it is one variable file rather
-      than a weight per cut. Spectral is not: it sets the plate claims only,
-      which are chrome the reader reaches for rather than the first paint.
+      Archivo is self-hosted (src/styles/fonts.css): this dashboard is served
+      by the Engram process on the owner's machine, often offline. Only the
+      upright file is preloaded; it carries nearly every first-paint glyph.
+      `crossorigin` is required on a font preload even when same-origin.
     -->
     <link rel="preload" href="/fonts/archivo-latin-wght-wdth.woff2" as="font" type="font/woff2" crossorigin />
-    <!-- Pre-paint background so there's no flash-of-white before global.css
-         (imported from main.tsx) finishes loading. -->
+    <!--
+      The reader's colour mode is applied before the first paint
+      (public/theme-init.js, blocking on purpose; it is a few bytes).
+    -->
+    <script src="/theme-init.js"></script>
     <style>
-      html, body, #root { background: #020817; }
+      html, body, #root { background: #EAF0EC; }
+      @media (prefers-color-scheme: dark) {
+        html:not([data-theme="light"]), html:not([data-theme="light"]) body, html:not([data-theme="light"]) #root { background: #0F1A1C; }
+      }
+      html[data-theme="dark"], html[data-theme="dark"] body, html[data-theme="dark"] #root { background: #0F1A1C; }
     </style>
   </head>
   <body>

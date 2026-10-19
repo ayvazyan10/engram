@@ -1,18 +1,77 @@
 /**
- * Static design tokens — spacing, radius, type scale, motion. Template
- * colour tokens (accent, surfaces, text) are also mirrored here as CSS
- * custom properties so real `:hover` / `:focus-visible` rules in global.css
- * can reference them; `useThemeVars` (src/hooks/useThemeVars.ts) keeps the
- * `--ec-*` colour variables in sync with the active template on every
- * template switch. The values below are just the initial paint (Neural) so
- * there's no flash of unstyled interaction state before that effect runs.
+ * Atlas design tokens: the one source for colour, type, space, radius and
+ * motion. Light is the default on :root; dark applies when the system asks for
+ * it (unless the reader picked Light) or when the reader picked Dark. The
+ * reader's choice is the `data-theme` attribute that shell/theme.ts sets.
  */
 :root {
-  /* Type */
-  --ec-font-sans: 'IBM Plex Sans', -apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  --ec-font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+  color-scheme: light;
 
-  /* Spacing */
+  /* Colour: survey paper and spruce ink. Selection is ink, never a type hue. */
+  --paper: #EAF0EC;
+  --surface: #F7FAF8;
+  --raised: #FFFFFF;
+  --ink: #0F2A26;
+  --ink-2: #3F5A54;
+  --ink-3: #56706A;
+  --rule: #B7C9C0;
+  --contour: #8FAB9E;
+  --sem: #1F5ED9;
+  --epi: #AD36A7;
+  --pro: #00977C;
+  --fault: #DF500C;
+  --wash: rgba(15, 42, 38, 0.06);
+  --wash-2: rgba(15, 42, 38, 0.11);
+  --scrim: rgba(234, 240, 236, 0.82);
+  --focus: #1F5ED9;
+  --on-ink: #F7FAF8;
+  --shadow: 0 1px 1px rgba(15, 42, 38, 0.06), 0 6px 18px rgba(15, 42, 38, 0.10);
+
+  /* Density terrain, one hue, low to high ground. */
+  --terrain-1: #EAF0EC;
+  --terrain-2: #D5E1DA;
+  --terrain-3: #BFD2C8;
+  --terrain-4: #AAC4B7;
+  --terrain-5: #94B5A5;
+  --terrain-6: #7FA693;
+  --hill: rgba(15, 42, 38, 0.10);
+
+  /* Type: Archivo, one family; the width axis does a second face's work. */
+  --font: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  /* Space: a 4px base. */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 28px;
+  --s-8: 32px;
+  --s-9: 36px;
+  --s-10: 40px;
+  --s-11: 44px;
+  --s-12: 48px;
+
+  /* Radius grows with how far a surface floats. */
+  --r-mark: 2px;
+  --r-control: 6px;
+  --r-float: 10px;
+  --r-sheet: 14px;
+
+  /* Motion. --motion is 1, or 0 under reduced motion; durations multiply it. */
+  --motion: 1;
+  --dur-hover: calc(120ms * var(--motion));
+  --dur-in: calc(260ms * var(--motion));
+  --dur-out: calc(180ms * var(--motion));
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ── Legacy names, read by the views F2–F6 have not replaced yet ──────── */
+  --ec-font-sans: var(--font);
+  --ec-font-mono: var(--font-mono);
   --ec-space-3xs: 2px;
   --ec-space-2xs: 4px;
   --ec-space-xs: 6px;
@@ -22,32 +81,93 @@
   --ec-space-xl: 20px;
   --ec-space-2xl: 28px;
   --ec-space-3xl: 40px;
-
-  /* Radius */
   --ec-radius-tight: 4px;
   --ec-radius-sm: 6px;
   --ec-radius-md: 8px;
   --ec-radius-lg: 10px;
   --ec-radius-xl: 14px;
   --ec-radius-pill: 999px;
+  --ec-duration-fast: var(--dur-hover);
+  --ec-duration-normal: calc(200ms * var(--motion));
+  --ec-ease-out: var(--ease-out);
+  /* First paint of the template mirror; useThemeVars keeps it live. */
+  --ec-accent: var(--ink);
+  --ec-accent-strong: var(--ink);
+  --ec-on-accent: var(--on-ink);
+  --ec-focus: var(--focus);
+  --ec-hover-overlay: var(--wash);
+  --ec-active-overlay: var(--wash-2);
+  --ec-text-primary: var(--ink);
+  --ec-text-secondary: var(--ink-2);
+  --ec-text-muted: var(--ink-3);
+  --ec-panel-border: var(--rule);
+  --ec-panel-bg: var(--surface);
+  --ec-card-bg: var(--raised);
+  --ec-input-bg: var(--raised);
+}
 
-  /* Motion */
-  --ec-duration-fast: 120ms;
-  --ec-duration-normal: 200ms;
-  --ec-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #0F1A1C;
+    --surface: #15232A;
+    --raised: #1B2C33;
+    --ink: #DCE7E2;
+    --ink-2: #9DB3AC;
+    --ink-3: #83998F;
+    --rule: #26393B;
+    --contour: #34504F;
+    --sem: #447BE4;
+    --epi: #BF56B9;
+    --pro: #05A388;
+    --fault: #E86518;
+    --wash: rgba(220, 231, 226, 0.06);
+    --wash-2: rgba(220, 231, 226, 0.11);
+    --scrim: rgba(15, 26, 28, 0.8);
+    --focus: #7FA6F0;
+    --on-ink: #0F1A1C;
+    --shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 8px 22px rgba(0, 0, 0, 0.35);
+    --terrain-1: #0F1A1C;
+    --terrain-2: #152424;
+    --terrain-3: #1B2E2D;
+    --terrain-4: #203935;
+    --terrain-5: #26433E;
+    --terrain-6: #2C4D46;
+    --hill: rgba(0, 0, 0, 0.35);
+  }
+}
 
-  /* Template colour mirror — kept live by useThemeVars() */
-  --ec-accent: #6366f1;
-  --ec-accent-strong: #4f46e5;
-  --ec-on-accent: #ffffff;
-  --ec-focus: #6366f1;
-  --ec-hover-overlay: rgba(255, 255, 255, 0.06);
-  --ec-active-overlay: rgba(0, 0, 0, 0.18);
-  --ec-text-primary: #e2e8f0;
-  --ec-text-secondary: #94a3b8;
-  --ec-text-muted: #7b8ca3;
-  --ec-panel-border: #152b52;
-  --ec-panel-bg: #060e1e;
-  --ec-card-bg: #0a1628;
-  --ec-input-bg: #07101f;
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #0F1A1C;
+  --surface: #15232A;
+  --raised: #1B2C33;
+  --ink: #DCE7E2;
+  --ink-2: #9DB3AC;
+  --ink-3: #83998F;
+  --rule: #26393B;
+  --contour: #34504F;
+  --sem: #447BE4;
+  --epi: #BF56B9;
+  --pro: #05A388;
+  --fault: #E86518;
+  --wash: rgba(220, 231, 226, 0.06);
+  --wash-2: rgba(220, 231, 226, 0.11);
+  --scrim: rgba(15, 26, 28, 0.8);
+  --focus: #7FA6F0;
+  --on-ink: #0F1A1C;
+  --shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 8px 22px rgba(0, 0, 0, 0.35);
+  --terrain-1: #0F1A1C;
+  --terrain-2: #152424;
+  --terrain-3: #1B2E2D;
+  --terrain-4: #203935;
+  --terrain-5: #26433E;
+  --terrain-6: #2C4D46;
+  --hill: rgba(0, 0, 0, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion: 0;
+  }
 }
