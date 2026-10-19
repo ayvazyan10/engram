@@ -1188,3 +1188,26 @@ p.mp-more {
   /* On Map the scope is at the search field's left, unlike the shell bar. */
   .mp-field .at-scope-pop { left: 0; right: auto; }
 }
+
+/* View navigation stays above the map tools; extra views scroll inside the control. */
+.mp-view-switch.mp-lens {
+  position: absolute;
+  top: 12px;
+  left: 20px;
+  bottom: auto;
+  z-index: 8;
+  max-width: calc(100% - 440px);
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+.mp-view-switch button { flex: none; white-space: nowrap; }
+.mp-top { top: 66px; }
+.mp-alternate { position: absolute; inset: 0 400px 0 0; min-width: 0; }
+.mp-view-loading { margin: 80px 20px; color: var(--ink-2); }
+@media (max-width: 720px) {
+  .mp-view-switch.mp-lens { left: 12px; right: 12px; max-width: calc(100% - 24px); width: max-content; }
+  .mp-field { top: 62px; }
+  .mp-alternate { right: 0; }
+  /* The 3D view needs its vertical scene and scrubber on a phone. */
+  .mp-view:not([data-view="map"]) > .mp-sheet { display: none; }
+}

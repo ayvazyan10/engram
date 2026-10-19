@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useMemoryStore } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
@@ -8,6 +8,7 @@ import { loadPolicy } from '../memory/MemorySheet.js';
 import SearchBar from './SearchBar.js';
 import MapSheet from './MapSheet.js';
 import MapCanvas, { type MapCanvasHandle } from './MapCanvas.js';
+import { toHash, useRouteStore } from '../../shell/routeStore.js';
 import { LensBar, Legend, TimeScrubber, ZoomControls } from './MapControls.js';
 import { loadFaults, loadMap, useMapStore } from './mapStore.js';
 import { describeNode, faultLines, honesty, pickable, regionName, spanDays, type LensState } from './lenses.js';
@@ -26,6 +27,12 @@ interface Props {
   onCommands: () => void;
 }
 
+// The orchestrator adds River and Pulse here after merging their view modules.
+const VIEWS = [
+  { id: 'sky', label: 'Sky', load: () => import('./views/SkyView.js') },
+  { id: 'landscape', label: 'Landscape', load: () => import('./views/LandscapeView.js') },
+].map((view) => ({ ...view, Component: lazy(view.load) }));
+
 const ARROWS: Record<string, Direction> = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
 /** The server's default archive threshold, used until its policy arrives. */
 const DEFAULT_THRESHOLD = 0.05;
@@ -43,6 +50,15 @@ const NO_AREA: Rect = { left: 0, top: 0, right: 0, bottom: 0 };
  * and a live region says where it is.
  */
 export default function MapView({ onCommands, ...sheet }: Props) {
+  const route = useRouteStore((s) => s.route);
+  const active = VIEWS.find((view) => view.id === route.params.view);
+  const isMap = !active;
+  const changeView = (id: string) => {
+    const params = { ...route.params };
+    if (id === 'map') delete params.view;
+    else params.view = id;
+    useRouteStore.getState().navigate(toHash({ ...route, params }));
+  };
   const { status, error, model, payload, lens, cutDays, regionId, focusId, hoverId, names, arrivals, faults, faultError } = useMapStore();
   const { setLens, setCut, setRegion, setFocus, setHover } = useMapStore.getState();
   const { searchQuery, searchResults, weakerResults, projectFilter, hiddenIds } = useMemoryStore();
@@ -101,7 +117,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
     const fieldEl = view.querySelector('.mp-field');
     if (fieldEl) observer.observe(fieldEl);
     return () => observer.disconnect();
-  }, [phone, timeLens]);
+  }, [phone, timeLens, isMap]);
 
   const hits = useMemo(
     () => (searchQuery ? new Set([...searchResults, ...weakerResults].map((r) => r.id)) : null),
@@ -234,9 +250,15 @@ export default function MapView({ onCommands, ...sheet }: Props) {
             }. Each joins two memories that contradict each other.`;
 
   return (
-    <div ref={viewRef} className="mp-view" data-lens={lens}>
+    <div ref={viewRef} className="mp-view" data-lens={lens} data-view={active?.id ?? 'map'}>
       <h1 className="at-sr">Memory map</h1>
-      {ready ? (
+      <div className="mp-view-switch mp-lens" role="group" aria-label="View">
+        <button type="button" aria-pressed={isMap} onClick={() => changeView('map')}>Map</button>
+        {VIEWS.map((view) => <button key={view.id} type="button" aria-pressed={active === view} onClick={() => changeView(view.id)}>{view.label}</button>)}
+      </div>
+      {active && payload ? (
+        <div className="mp-alternate"><Suspense fallback={<p className="mp-view-loading">Loading…</p>}><active.Component payload={payload} /></Suspense></div>
+      ) : ready ? (
         <div
           className="mp-map"
           role="application"
@@ -314,12 +336,12 @@ export default function MapView({ onCommands, ...sheet }: Props) {
         <Ground status={status} error={error} scoped={projectFilter !== undefined} onRetry={() => void loadMap(projectFilter)} />
       )}
 
-      <div className="mp-top">
+      {isMap && <div className="mp-top">
         <SearchBar onCommands={onCommands} />
         {ready && <LensBar lens={lens} onLens={setLens} />}
-      </div>
+      </div>}
 
-      {ready && payload && (
+      {isMap && ready && payload && (
         <>
           {lens === 'time' ? (
             <TimeScrubber created={model.created} now={now} span={spanDays(model.created, now)} cut={cutDays} onCut={setCut} />

@@ -1,6 +1,7 @@
 import { useImperativeHandle } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { useRouteStore } from '../../../shell/routeStore.js';
 import MapView from '../MapView.js';
 import { useMapStore } from '../mapStore.js';
 import { buildModel } from '../lib/model.js';
@@ -13,6 +14,8 @@ import { NOW, node, payload } from './payload.js';
 
 /** The canvas is drawing only (and jsdom cannot draw): a stand-in records
  *  what MapView hands it and answers its camera calls. */
+vi.mock('../views/SkyView.js', () => ({ default: () => <div>Sky scene</div> }));
+vi.mock('../views/LandscapeView.js', () => ({ default: () => <div>Landscape scene</div> }));
 const camera = { zoomBy: vi.fn(), fit: vi.fn(), reveal: vi.fn(), showRegion: vi.fn() };
 let drawn: Record<string, unknown> = {};
 vi.mock('../MapCanvas.js', () => ({
@@ -61,6 +64,8 @@ beforeEach(() => {
   // The fixture's dates are relative to NOW; the Time lens counts from the clock.
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
+  window.history.replaceState(null, '', '#/');
+  useRouteStore.setState({ route: { name: 'map', sub: null, params: {} } });
   drawn = {};
   Object.values(camera).forEach((f) => f.mockReset());
   resetServerStats();
@@ -281,5 +286,52 @@ describe('MapView keyboard', () => {
     render(<MapView {...props} />);
     fireEvent.keyDown(map(), { key: 'ArrowDown' });
     expect(useMapStore.getState().focusId).not.toBe('c');
+  });
+});
+
+describe('view switcher', () => {
+  it('pushes the view route, preserves the memory param, and shows only installed views', async () => {
+    ready();
+    useRouteStore.setState({ route: { name: 'map', sub: null, params: { m: 'a' } } });
+    render(<MapView {...props} />);
+    const views = within(screen.getByRole('group', { name: 'View' }));
+    expect(views.getAllByRole('button').map((b) => b.textContent)).toEqual(['Map', 'Sky', 'Landscape']);
+    fireEvent.click(views.getByRole('button', { name: 'Sky' }));
+    expect(await screen.findByText('Sky scene')).toBeInTheDocument();
+    expect(window.location.hash).toBe('#/?m=a&view=sky');
+    expect(views.getByRole('button', { name: 'Sky' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('group', { name: 'Lens' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Legend' })).not.toBeInTheDocument();
+    expect(document.querySelector('.mp-field')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Zoom' })).not.toBeInTheDocument();
+    fireEvent.click(views.getByRole('button', { name: 'Map' }));
+    expect(window.location.hash).toBe('#/?m=a');
+    expect(screen.getByRole('group', { name: 'Lens' })).toBeInTheDocument();
+  });
+  it('loads a direct landscape link and follows history hash changes', async () => {
+    ready();
+    useMapStore.setState({ lens: 'time' });
+    window.history.replaceState(null, '', '#/?view=landscape');
+    useRouteStore.setState({ route: { name: 'map', sub: null, params: { view: 'landscape' } } });
+    render(<MapView {...props} />);
+    expect(await screen.findByText('Landscape scene')).toBeInTheDocument();
+    expect(screen.queryByRole('slider')).not.toBeInTheDocument();
+    act(() => {
+      window.history.replaceState(null, '', '#/?view=sky');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(await screen.findByText('Sky scene')).toBeInTheDocument();
+    act(() => {
+      window.history.replaceState(null, '', '#/');
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(screen.getByRole('slider')).toBeInTheDocument();
+  });
+  it('falls back to Map for an uninstalled view', () => {
+    ready();
+    useRouteStore.setState({ route: { name: 'map', sub: null, params: { view: 'river' } } });
+    render(<MapView {...props} />);
+    expect(screen.getByRole('application')).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'View' })).getByRole('button', { name: 'Map' })).toHaveAttribute('aria-pressed', 'true');
   });
 });

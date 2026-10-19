@@ -1,0 +1,64 @@
+.v3-view { position: absolute; inset: 0; overflow: hidden; color: var(--ink); background: var(--paper); }
+.v3-sky { --ink: #dce7e2; --ink-2: #9db3ac; --ink-3: #9aafa5; --paper: #070d10; --surface: #15232a; --rule: #26393b; --on-ink: #070d10; --sem: #447be4; --epi: #bf56b9; --pro: #05a388; }
+.v3-canvas, .v3-labels { position: absolute; inset: 0; }
+.v3-canvas { touch-action: none; }
+.v3-canvas canvas { display: block; }
+.v3-labels { pointer-events: none; overflow: hidden; }
+.v3-heading { position: absolute; top: 76px; left: 24px; right: 24px; max-width: 440px; pointer-events: none; }
+.v3-heading small { text-transform: uppercase; letter-spacing: 0.18em; color: var(--ink-3); font-size: 11px; }
+.v3-heading h2 { margin: 6px 0 8px; font-size: 32px; font-weight: 300; font-stretch: 125%; line-height: 1.05; }
+.v3-heading p { font-size: 14px; line-height: 1.45; color: var(--ink-2); margin: 0; }
+.v3-panel { box-sizing: border-box; padding: 10px 14px; background: color-mix(in srgb, var(--surface) 90%, transparent); border: 1px solid var(--rule); border-radius: var(--r-float); box-shadow: var(--shadow); backdrop-filter: blur(8px); font-size: 12px; line-height: 1.45; }
+.v3-legend { position: absolute; bottom: 18px; left: 24px; max-width: min(320px, calc(100% - 48px)); color: var(--ink-2); }
+.v3-legend summary { cursor: pointer; text-transform: uppercase; font-size: 11px; letter-spacing: 0.14em; }
+.v3-legend ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 5px; }
+.v3-types { display: flex; flex-wrap: wrap; gap: 10px; }
+.v3-types span:nth-child(1) { color: var(--sem); }
+.v3-types span:nth-child(2) { color: var(--epi); }
+.v3-types span:nth-child(3) { color: var(--pro); }
+.v3-region { color: var(--ink-3); font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em; white-space: nowrap; text-shadow: 0 0 6px #070d10; }
+.v3-region span { opacity: 0.7; margin-left: 6px; letter-spacing: 0.04em; }
+.v3-region.on { color: var(--ink); }
+.v3-tip { position: absolute; z-index: 3; width: 276px; max-width: calc(100% - 16px); pointer-events: none; }
+.v3-tip small, .v3-card small { display: block; color: var(--ink-3); }
+.v3-card { position: absolute; right: 20px; bottom: 20px; width: 300px; max-width: calc(100% - 40px); max-height: calc(100% - 90px); overflow-y: auto; z-index: 4; padding: 16px 18px; }
+.v3-card h3, .v3-tip h3 { margin: 6px 20px 10px 0; font-size: 17px; line-height: 1.3; font-weight: 500; overflow-wrap: anywhere; }
+.v3-card dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0 0 14px; }
+.v3-card dt { color: var(--ink-3); }
+.v3-card dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.v3-close { position: absolute; top: 4px; right: 5px; min-width: 36px; min-height: 36px; border: 0; background: transparent; color: var(--ink); font-size: 22px; cursor: pointer; }
+.v3-time { position: absolute; bottom: 18px; right: 20px; width: min(430px, calc(100% - 390px)); }
+.v3-time-row { display: flex; gap: 14px; align-items: center; justify-content: space-between; font-variant-numeric: tabular-nums; }
+.v3-time-row b { white-space: nowrap; font-size: 18px; font-weight: 500; }
+.v3-time-row small { display: block; color: var(--ink-3); font-size: 11px; }
+.v3-time-row span { text-align: right; color: var(--ink-2); font-size: 12px; }
+.v3-time input { display: block; box-sizing: border-box; width: 100%; margin: 10px 0 4px; accent-color: var(--ink); }
+.v3-stops { display: flex; justify-content: space-between; }
+.v3-stops button { min-height: 30px; border: 0; border-radius: 5px; background: transparent; color: var(--ink-2); font: inherit; cursor: pointer; }
+.v3-stops button[aria-pressed="true"] { background: var(--ink); color: var(--on-ink); }
+.v3-landscape .v3-card { bottom: 168px; }
+.v3-empty { position: absolute; inset: 45% 20px auto; text-align: center; color: var(--ink-2); }
+@media (max-width: 1100px) {
+  .v3-landscape .v3-legend { bottom: 166px; }
+  .v3-time { left: 20px; width: auto; }
+}
+@media (max-width: 720px) {
+  .v3-heading { left: 16px; right: 16px; top: 68px; }
+  .v3-heading h2 { font-size: 26px; }
+  .v3-heading p { font-size: 13px; }
+  .v3-legend { left: 16px; bottom: 16px; max-width: calc(100% - 32px); }
+  .v3-region { font-size: 9px; letter-spacing: 0.1em; }
+  .v3-region span { display: none; }
+  .v3-time { left: 16px; right: 16px; bottom: 16px; }
+  .v3-card { left: 16px; right: 16px; bottom: 16px; width: auto; max-width: none; max-height: 46%; }
+  .v3-landscape .v3-card { bottom: 164px; max-height: calc(100% - 240px); }
+  .v3-landscape .v3-legend { bottom: 164px; }
+}
+/* Keep the prototype's quiet night vignette behind the readable overlays. */
+.v3-sky .v3-canvas::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 45%, transparent 55%, rgba(3, 7, 9, 0.75) 100%);
+}

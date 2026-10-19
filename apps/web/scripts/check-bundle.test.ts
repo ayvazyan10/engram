@@ -24,6 +24,7 @@ function build(entry = 'export{}', chart = 'export{}') {
   mkdirSync(join(dir, 'assets'));
   writeFileSync(join(dir, 'index.html'), '<script type="module" src="/assets/index-a.js"></script><link rel="modulepreload" href="/assets/vendor-a.js">');
   for (const [name, text] of Object.entries({ 'index-a': entry, 'vendor-a': 'export{}', 'charts-a': chart,
+    'SkyView-a': 'import"./three-a.js";import"./vendor-a.js";', 'LandscapeView-a': 'import"./three-a.js";', 'three-a': 'export{}',
     'InsightsView-a': 'import"./charts-a.js";import"./vendor-a.js";' })) writeFileSync(join(dir, 'assets', `${name}.js`), text);
   return dir;
 }
@@ -36,7 +37,7 @@ async function check(dir: string) {
 it('counts initial preloads and the lazy charts dependency, excluding shared JS', async () => {
   const rows = await check(build('import"./vendor-a.js";import("./InsightsView-a.js")'));
   expect(process.exitCode).toBe(0);
-  expect(rows).toMatchObject([{ Bundle: 'Initial JS', Files: 2, Result: 'PASS' }, { Files: 2, Result: 'PASS' }]);
+  expect(rows).toMatchObject([{ Bundle: 'Initial JS', Files: 2, Result: 'PASS' }, { Files: 2, Result: 'PASS' }, { Bundle: 'Lazy 3D views (Sky, Landscape)', Files: 3, Result: 'PASS' }]);
 });
 it('fails when the combined initial gzip exceeds 200 KB', async () => {
   const rows = await check(build(randomBytes(220_000).toString('hex')));
@@ -55,4 +56,22 @@ it('rejects missing Insights outputs', async () => {
   const dir = build();
   rmSync(join(dir, 'assets', 'InsightsView-a.js'));
   await expect(check(dir)).rejects.toThrow('Missing initial JS or InsightsView');
+});
+
+it('fails when the shared 3D dependency exceeds 220 KB', async () => {
+  const dir = build();
+  writeFileSync(join(dir, 'assets', 'three-a.js'), randomBytes(230_000).toString('hex'));
+  const rows = await check(dir);
+  expect(rows[2]).toMatchObject({ Result: 'FAIL' });
+  expect(process.exitCode).toBe(1);
+});
+it('rejects three.js in the initial graph, including inlined engine code', async () => {
+  await expect(check(build('import"./three-a.js"'))).rejects.toThrow('must stay lazy');
+  vi.resetModules();
+  await expect(check(build('window.__THREE__="170"'))).rejects.toThrow('must stay lazy');
+});
+it('rejects missing 3D view outputs', async () => {
+  const dir = build();
+  rmSync(join(dir, 'assets', 'LandscapeView-a.js'));
+  await expect(check(dir)).rejects.toThrow('Missing SkyView or LandscapeView');
 });
