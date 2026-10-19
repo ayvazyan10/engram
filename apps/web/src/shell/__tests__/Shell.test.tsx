@@ -6,6 +6,7 @@ import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useRouteStore, parseHash } from '../routeStore.js';
 import { useAuthStore } from '../../store/authStore.js';
+import { useReviewStore } from '../../features/review/queues.js';
 import { useViewStore, VIEWS, DEFAULT_VIEW_ID } from '../../store/viewStore.js';
 import { api } from '../../lib/api.js';
 import type { LayoutResponse, EdgeSummary } from '../../lib/api.js';
@@ -60,6 +61,9 @@ vi.mock('../../lib/api.js', () => ({
     // NeuronInspector fetches the selected memory's neighbourhood, and these
     // tests select memories.
     getGraph: vi.fn().mockResolvedValue({ node: null, connections: [], neighbors: [] }),
+    // The Review badge and screen.
+    getReviewSummary: vi.fn(),
+    getReviewQueue: vi.fn(),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -174,6 +178,9 @@ function resetAll() {
   getGraphLayout.mockResolvedValue(layoutResponse(['a']));
   getGraphEdges.mockResolvedValue(edgeResponse());
   getDecayPolicy.mockResolvedValue({ halfLifeDays: 7, archiveThreshold: 0.05 });
+  useReviewStore.setState({ scope: undefined, summary: null, summaryLoading: false, summaryFailed: false, queues: {}, cleared: 0 });
+  vi.mocked(api.getReviewSummary).mockResolvedValue({ contradictions: 0, duplicates: 0, fading: 0, secrets: 0, fingerprint: 'f' });
+  vi.mocked(api.getReviewQueue).mockResolvedValue({ total: 0, items: [] });
 }
 
 describe('Shell effect wiring (W12)', () => {
@@ -628,18 +635,24 @@ describe('Shell routes', () => {
     expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
   });
 
-  it('says what Review will hold, with the contradictions counted so far, and badges the rail', async () => {
-    vi.mocked(api.getContradictions).mockResolvedValue({
-      count: 2,
-      contradictions: [
-        { source: { id: 'a' }, target: { id: 'b' }, confidence: 0.9 },
-        { source: { id: 'c' }, target: { id: 'd' }, confidence: 0.8 },
-      ],
+  it('mounts Review with the scope switch, and badges the rail with what the Review summary counts', async () => {
+    vi.mocked(api.getReviewSummary).mockResolvedValue({ contradictions: 2, duplicates: 1, fading: 0, secrets: 0, fingerprint: 'f' });
+    vi.mocked(api.stats).mockResolvedValue({
+      total: 3,
+      byType: {},
+      bySource: {},
+      byNamespace: [{ namespace: null, count: 1 }, { namespace: '/code/api', count: 2 }],
     } as never);
+    const memory = (id: string) => ({ id, type: 'semantic' as const, content: `Note ${id}`, concept: null, summary: null, importance: 0.5, createdAt: '2026-10-01T10:00:00.000Z' });
+    const pair = (n: number) => ({ kind: 'pair' as const, a: memory(`a${n}`), b: memory(`b${n}`), edgeId: `e${n}`, strength: 0.9, sharedWordRatio: 0.5 });
+    vi.mocked(api.getReviewQueue).mockResolvedValue({ total: 2, items: [pair(1), pair(2)] });
     render(<Shell />);
     act(() => go('/review'));
-    expect(await screen.findByText('2 contradictions found so far.')).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^Review\W+2 waiting$/ })).toHaveLength(2);
+    expect(await screen.findByRole('heading', { name: 'Review', level: 1 })).toBeInTheDocument();
+    expect(await screen.findAllByRole('link', { name: /^Review\W+3 waiting$/ })).toHaveLength(2);
+    expect(await screen.findByRole('button', { name: 'Project: All projects' })).toBeInTheDocument();
+    vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
+    expect(api.getReviewQueue).toHaveBeenCalledWith('contradictions', { namespace: undefined, limit: 50, offset: 0 });
   });
 
   it('shows the Insights tabs, and says Insights count every project instead of offering a scope', async () => {

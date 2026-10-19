@@ -16,6 +16,8 @@ import UnlockGate from '../components/ui/UnlockGate.js';
 import HomeView from '../components/views/HomeView.js';
 import Onboarding from '../components/views/Onboarding.js';
 import SettingsView from '../features/settings/SettingsView.js';
+import ReviewView from '../features/review/ReviewView.js';
+import { useReviewCount } from '../features/review/queues.js';
 import { useNeuralStore } from '../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../store/memoryStore.js';
 import { sceneLayout, type SceneNodeInput } from '../store/viewStore.js';
@@ -63,7 +65,7 @@ export default function Shell() {
   const { setRecords, appendRecords, storeChanges, projectFilter } = useMemoryStore();
   const route = useRouteStore((s) => s.route);
   const navigate = useRouteStore((s) => s.navigate);
-  const reviewCount = useNeuralStore((s) => s.contradictionPairs.length);
+  const reviewCount = useReviewCount();
   const t = useTemplateStore((s) => s.activeTemplate);
   const locked = useAuthStore((s) => s.locked);
   const isCompact = useMediaQuery(COMPACT_QUERY);
@@ -280,7 +282,7 @@ export default function Shell() {
               </nav>
             </>
           ) : (
-            route.name !== 'settings' && route.name !== 'welcome' && route.name !== 'review' && <ScopeSwitch />
+            route.name !== 'settings' && route.name !== 'welcome' && <ScopeSwitch />
           )}
           <button type="button" className="at-cmd" onClick={() => setPaletteOpen(true)} aria-keyshortcuts="Control+K Meta+K">
             <span className="at-cmd-keys" aria-hidden="true">
@@ -322,9 +324,7 @@ export default function Shell() {
               <SettingsView />
             </div>
           ) : route.name === 'review' ? (
-            <div className="at-scroll">
-              <ReviewSoon count={reviewCount} />
-            </div>
+            <ReviewView />
           ) : (
             <Suspense fallback={<p className="at-wait">Loading…</p>}>
               {route.name === 'timeline' && <TimelineView {...viewProps} />}
@@ -351,20 +351,6 @@ export default function Shell() {
       )}
 
       {locked && <UnlockGate />}
-    </div>
-  );
-}
-
-/** Review until F5 builds the queues: what will be here, and the count so far. */
-function ReviewSoon({ count }: { count: number }) {
-  return (
-    <div className="at-page">
-      <h1 className="at-display">Review</h1>
-      <p className="at-lede">
-        Contradictions, near-duplicates, fading memories and leaked secrets will queue here, to settle one pair at a time,
-        with an undo for every action.
-      </p>
-      {count > 0 && <p className="at-data">{count.toLocaleString('en-US')} contradictions found so far.</p>}
     </div>
   );
 }

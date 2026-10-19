@@ -127,6 +127,60 @@ export interface EdgeSummary {
   }>;
 }
 
+/** Atlas Review (GET /api/review/*). Secret spans arrive already replaced
+ *  with `[REDACTED]`; a finding carries only a masked preview. */
+export type ReviewQueue = 'contradictions' | 'duplicates' | 'fading' | 'secrets';
+
+export interface ReviewMemory {
+  id: string;
+  type: 'episodic' | 'semantic' | 'procedural';
+  content: string;
+  concept: string | null;
+  summary: string | null;
+  importance: number;
+  createdAt: string;
+}
+
+export interface ReviewPair {
+  kind: 'pair';
+  a: ReviewMemory;
+  b: ReviewMemory;
+  edgeId: string;
+  strength: number;
+  sharedWordRatio: number;
+}
+
+export interface SecretFinding {
+  rule: string;
+  field: 'content' | 'concept' | 'summary';
+  start: number;
+  end: number;
+  length: number;
+  preview: string;
+}
+
+export interface ReviewSingle {
+  kind: 'single';
+  memory: ReviewMemory;
+  retention: number;
+  reason: 'fading-but-important' | 'possible-secret';
+  findings?: SecretFinding[];
+}
+
+export type ReviewItem = ReviewPair | ReviewSingle;
+
+export type ReviewSummary = Record<ReviewQueue, number> & { fingerprint: string };
+
+/** `namespace`: a path is one project, `null` the global memories, and
+ *  leaving it out is every memory — the same as listMemories. */
+function scopeQuery(namespace: string | null | undefined, extra: Record<string, string> = {}): string {
+  const q = new URLSearchParams(extra);
+  if (typeof namespace === 'string') q.set('namespace', namespace);
+  if (namespace === null) q.set('global', 'true');
+  const text = q.toString();
+  return text ? `?${text}` : '';
+}
+
 export const api = {
   // The header's version badge reads `version` from here: it is the running
   // server's, which is the number a release actually carries.
@@ -307,5 +361,27 @@ export const api = {
     request<{ archived: number; total: number }>('/memory/bulk/archive', {
       method: 'POST',
       body: JSON.stringify({ ids }),
+    }),
+
+  // Review
+  getReviewSummary: (namespace?: string | null) =>
+    request<ReviewSummary>(`/review/summary${scopeQuery(namespace)}`),
+
+  getReviewQueue: (queue: ReviewQueue, params: { namespace?: string | null; limit?: number; offset?: number } = {}) =>
+    request<{ total: number; items: ReviewItem[] }>(
+      `/review/${queue}${scopeQuery(params.namespace, { limit: String(params.limit ?? 50), offset: String(params.offset ?? 0) })}`
+    ),
+
+  /** Drops an item from its queue on this device. Contradictions are not
+   *  dismissed: "not a contradiction" is resolveContradiction(keep_both). */
+  dismissReview: (queue: Exclude<ReviewQueue, 'contradictions'>, ids: string[]) =>
+    request<void>('/review/dismiss', { method: 'POST', body: JSON.stringify({ queue, ids }) }),
+
+  /** Replaces the memory's detected secrets with [REDACTED] on the server.
+   *  No text comes back, only how many spans changed. */
+  redactMemory: (id: string, rules?: string[]) =>
+    request<{ id: string; redacted: number }>(`/memory/${id}/redact`, {
+      method: 'POST',
+      body: JSON.stringify(rules ? { rules } : {}),
     }),
 };
