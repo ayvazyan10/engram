@@ -36,6 +36,7 @@ vi.mock('../../lib/api.js', () => ({
     storeMemory: vi.fn(),
     search: vi.fn(),
     recall: vi.fn(),
+    explainRecall: vi.fn(),
     getMap: vi.fn(),
     getGraphEdges: vi.fn(),
     getDecayPolicy: vi.fn(),
@@ -443,10 +444,11 @@ describe('Shell routes', () => {
 
   it('takes a search on to Recall with its words, where the exact text opens its memories', async () => {
     vi.mocked(api.search).mockResolvedValue({ count: 0, results: [] });
-    vi.mocked(api.recall).mockResolvedValue({
+    vi.mocked(api.explainRecall).mockResolvedValue({
       context: '## Knowledge\n• [aaaaaaaa · 2026-10-19] Sync encryption is optional.',
-      memories: [{ id: 'aaaaaaaa-1111' }],
-      latencyMs: 4,
+      items: [{ id: 'aaaaaaaa-1111', rank: 1, position: 1, offset: 13, section: 'knowledge', type: 'semantic', source: null,
+        via: 'vector', similarity: 0.9, score: 0.9, chars: 28, tokens: 7, included: true }],
+      candidates: 1, budget: { maxTokens: 2000, usedTokens: 7 }, latencyMs: 4,
     });
     render(<Shell />);
     const input = await screen.findByLabelText(/search memories/i);
@@ -458,9 +460,11 @@ describe('Shell routes', () => {
     act(() => go(link.getAttribute('href')!));
     expect(useRouteStore.getState().route).toMatchObject({ name: 'recall', params: { q: 'is sync encrypted' } });
     expect(document.title).toBe('Recall — Engram');
-    expect(api.recall).toHaveBeenCalledWith('is sync encrypted', 2000);
+    expect(api.explainRecall).toHaveBeenCalledWith('is sync encrypted', 2000, undefined);
+    expect(api.recall).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Exact' }));
 
-    fireEvent.click(await screen.findByRole('button', { name: '[aaaaaaaa · 2026-10-19]' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open memory aaaaaaaa-1111' }));
     expect(useNeuralStore.getState().selectedNeuronId).toBe('aaaaaaaa-1111');
   });
 

@@ -136,6 +136,32 @@ export interface MapPayload {
   regions: MapRegion[];
 }
 
+/** Read-only recall plan. Offsets count UTF-16 units; omitted items have no span. */
+export interface RecallItem {
+  id: string;
+  rank: number;
+  position: number | null;
+  offset: number | null;
+  section: 'knowledge' | 'patterns' | 'events';
+  type: MapNode['type'];
+  source: string | null;
+  via: 'vector' | 'graph';
+  similarity: number;
+  score: number;
+  chars: number;
+  tokens: number;
+  included: boolean;
+  reason?: 'over_budget';
+}
+
+export interface RecallExplanation {
+  context: string;
+  latencyMs: number;
+  budget: { maxTokens: number; usedTokens: number };
+  candidates: number;
+  items: RecallItem[];
+}
+
 /** GET /api/graph/edges — the edge set plus the counts the scene key needs to
  *  state what is on screen and what is not. */
 export interface EdgeSummary {
@@ -262,6 +288,12 @@ export const api = {
     request<{ context: string; memories: unknown[]; latencyMs: number }>('/recall', {
       method: 'POST',
       body: JSON.stringify({ query, maxTokens }),
+    }),
+
+  explainRecall: (query: string, maxTokens = 2000, namespace?: string | null) =>
+    request<RecallExplanation>('/recall/explain', {
+      method: 'POST',
+      body: JSON.stringify({ query, maxTokens, namespace: namespace ?? undefined, global: namespace === null ? true : undefined }),
     }),
 
   /** `threshold` is the server's cosine floor (0.3 when left out). */

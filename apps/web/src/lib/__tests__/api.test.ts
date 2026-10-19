@@ -198,6 +198,19 @@ describe('lib/api endpoint coverage', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ query: 'hello', maxTokens: 500 });
   });
 
+  it('explainRecall() only POSTs to the read-only endpoint, preserving each scope', async () => {
+    const answer = { context: '', items: [], candidates: 0, latencyMs: 1, budget: { maxTokens: 500, usedTokens: 0 } };
+    vi.mocked(fetch).mockImplementation(async () => jsonResponse(200, answer));
+    expect(await api.explainRecall('hello', 500, '/project')).toEqual(answer);
+    await api.explainRecall('hello', 500, null);
+    await api.explainRecall('hello');
+    expect(vi.mocked(fetch).mock.calls.map(([url, init]) => [url, init?.method, JSON.parse(init?.body as string)])).toEqual([
+      ['/api/recall/explain', 'POST', { query: 'hello', maxTokens: 500, namespace: '/project' }],
+      ['/api/recall/explain', 'POST', { query: 'hello', maxTokens: 500, global: true }],
+      ['/api/recall/explain', 'POST', { query: 'hello', maxTokens: 2000 }],
+    ]);
+  });
+
   it('search() POSTs the query, topK, and types', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { count: 0, results: [] }));
     await api.search('hello', 5, ['semantic']);
