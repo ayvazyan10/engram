@@ -115,19 +115,22 @@ describe('TimelineView', () => {
 
   it('pages older memories beneath the first page, pinned to its newest instant', async () => {
     const first = page(PAGE_SIZE);
+    // Keep a full API page for pagination, but render only the anchor and
+    // boundary rows: the intervening rows do not contribute to this assertion.
+    useMemoryStore.setState({ hiddenIds: new Set(first.slice(1, -1).map((r) => r.id)) });
     vi.mocked(api.listMemories)
       .mockResolvedValueOnce({ count: PAGE_SIZE, memories: first })
-      .mockResolvedValueOnce({ count: 1, memories: [...first.slice(-1), ...page(1, Date.parse('2026-10-01T00:00:00.000Z'), 'old')] });
+      .mockResolvedValueOnce({ count: 2, memories: [...first.slice(-1), ...page(1, Date.parse('2026-10-01T00:00:00.000Z'), 'old')] });
     render(<TimelineView />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
-    await screen.findByRole('button', { name: /memory old0/ });
-    expect(api.listMemories).toHaveBeenLastCalledWith({
+    await waitFor(() => expect(api.listMemories).toHaveBeenNthCalledWith(2, {
       limit: PAGE_SIZE,
       offset: PAGE_SIZE,
       before: '2026-10-19T12:00:00.001Z',
       namespace: undefined,
-    });
+    }));
+    expect(screen.getByRole('button', { name: /memory old0/ })).toBeInTheDocument();
     // The repeated row from the page boundary is listed once.
     expect(screen.getAllByRole('button', { name: new RegExp(`memory ${first.at(-1)!.id}\\b`) })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Load older' })).not.toBeInTheDocument();
