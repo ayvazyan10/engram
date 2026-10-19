@@ -236,3 +236,107 @@ describe('Review API', () => {
     expect(tiersFor('POST', '/api/review/dismiss')).toEqual(['global']);
   });
 });
+
+
+describe('bulk contradiction resolution', () => {
+  const url = '/api/contradictions/bulk/resolve';
+
+  it('resolves pairs through core with all automatic strategies', async () => {
+    const strategies = ['keep_both', 'keep_newest', 'keep_oldest', 'keep_important'];
+    const items = strategies.map((strategy, i) => {
+      memory(`source${i}`, { importance: 0.9 });
+      memory(`target${i}`, { importance: 0.5, createdAt: now });
+      edge(`edge${i}`, `source${i}`, `target${i}`, { relationship: 'contradicts' });
+      return { sourceId: `source${i}`, targetId: `target${i}`, strategy };
+    });
+    const response = await post(url, { items });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ results: items.map(() => ({ ok: true })), summary: { total: 4, resolved: 4, failed: 0 } });
+    expect(await brain.getContradictions()).toEqual([]);
+    const archived = getDb().select().from(schema.memories).all().filter((m) => m.archivedAt).map((m) => m.id).sort();
+    expect(archived).toEqual(['source1', 'target2', 'target3']);
+    expect(getDb().select().from(schema.memoryConnections).all().every((e) => e.deletedAt)).toBe(true);
+  });
+
+  it('returns ordered partial failures, continues, and sanitizes internal errors', async () => {
+    memory('a'); memory('b'); memory('archived', { archivedAt: now });
+    edge('ab', 'a', 'b', { relationship: 'contradicts' });
+    vi.spyOn(brain, 'resolveContradiction').mockRejectedValueOnce(new Error('private database details'));
+    const response = await post(url, { items: [
+      { sourceId: 'a', targetId: 'b', strategy: 'keep_both' },
+      { sourceId: 'missing', targetId: 'b', strategy: 'keep_both' },
+      { sourceId: 'a', targetId: 'b', strategy: 'manual' },
+      { sourceId: 'a', targetId: 'archived', strategy: 'keep_newest' },
+      { sourceId: 'a', targetId: 'b', strategy: 'keep_both' },
+    ] });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ results: [
+      { ok: false, error: 'Failed to resolve contradiction' },
+      { ok: false, error: 'Memory not found' },
+      { ok: false, error: 'Contradiction not resolved' },
+      { ok: false, error: 'Contradiction not resolved' },
+      { ok: true },
+    ], summary: { total: 5, resolved: 1, failed: 4 } });
+    expect(response.body).not.toContain('private database details');
+    expect(await brain.getContradictions()).toEqual([]);
+  });
+
+  it('enforces core namespace visibility on both ends without changing hidden pairs', async () => {
+    memory('own1', { namespace: 'alpha' }); memory('own2', { namespace: 'alpha' });
+    memory('hidden', { namespace: 'beta' }); memory('global');
+    edge('own', 'own1', 'own2', { relationship: 'contradicts' });
+    edge('foreign', 'own1', 'hidden', { relationship: 'contradicts' });
+    edge('global-edge', 'own1', 'global', { relationship: 'contradicts' });
+    const configured = brain as unknown as { activeNamespace: string; namespaceMode: string };
+    const original = { activeNamespace: configured.activeNamespace, namespaceMode: configured.namespaceMode };
+    Object.assign(configured, { activeNamespace: 'alpha', namespaceMode: 'isolated' });
+    try {
+      const response = await post(url, { items: [
+        { sourceId: 'own1', targetId: 'hidden', strategy: 'keep_newest' },
+        { sourceId: 'hidden', targetId: 'own1', strategy: 'keep_oldest' },
+        { sourceId: 'own1', targetId: 'global', strategy: 'keep_both' },
+        { sourceId: 'own1', targetId: 'own2', strategy: 'keep_both' },
+      ] });
+      expect(response.json()).toEqual({ results: [
+        { ok: false, error: 'Memory not found' }, { ok: false, error: 'Memory not found' },
+        { ok: false, error: 'Memory not found' }, { ok: true },
+      ], summary: { total: 4, resolved: 1, failed: 3 } });
+      const db = getDb();
+      expect(db.select().from(schema.memories).all().every((m) => !m.archivedAt)).toBe(true);
+      expect(db.select().from(schema.memoryConnections).where(eq(schema.memoryConnections.id, 'foreign')).get()!.deletedAt).toBeNull();
+      Object.assign(configured, { namespaceMode: 'filter' });
+      expect((await post(url, { items: [{ sourceId: 'own1', targetId: 'global', strategy: 'keep_both' }] })).json().results).toEqual([{ ok: true }]);
+    } finally { Object.assign(configured, original); }
+  });
+
+  it('validates the entire request before writes, rejects 501 items and accepts 500', async () => {
+    memory('a'); memory('b'); edge('ab', 'a', 'b', { relationship: 'contradicts' });
+    const item = { sourceId: 'a', targetId: 'b', strategy: 'keep_both' };
+    for (const payload of [
+      { items: Array.from({ length: 501 }, () => item) }, { items: [] }, { items: item }, {},
+      { items: [item, { ...item, strategy: 'invalid' }] },
+      { items: [{ edgeId: 'ab', strategy: 'keep_both' }] },
+      { items: [{ ...item, sourceId: '' }] },
+    ]) expect((await post(url, payload)).statusCode).toBe(400);
+    expect(await brain.getContradictions()).toHaveLength(1);
+    const response = await post(url, { items: Array.from({ length: 500 }, () => item) });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().summary).toEqual({ total: 500, resolved: 500, failed: 0 });
+    expect(response.json().results).toHaveLength(500);
+  });
+
+  it('uses the existing API authentication and bounded bulk write rate tier', async () => {
+    const payload = { items: [{ sourceId: 'a', targetId: 'b', strategy: 'keep_both' }] };
+    expect((await app.inject({ method: 'POST', url, payload })).statusCode).toBe(401);
+    expect(tiersFor('POST', url)).toEqual(['heavy', 'global']);
+    vi.stubEnv('ENGRAM_RATE_LIMIT_HEAVY_MAX', '1');
+    await app.close();
+    app = await buildApp();
+    try {
+      expect((await post(url, payload)).statusCode).toBe(200);
+      const response = await post(url, payload);
+      expect(response.statusCode).toBe(429);
+      expect(response.headers['retry-after']).toBeDefined();
+    } finally { vi.stubEnv('ENGRAM_RATE_LIMIT_HEAVY_MAX', '300'); }
+  });
+});

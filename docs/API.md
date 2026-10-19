@@ -57,7 +57,7 @@ Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback
 | Tier | Default limit | Applies to |
 |---|---|---|
 | `global` | 1000 / 60s | Every `/api/*` request |
-| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, `GET /api/recall/stream`, and `POST /api/memory/:id/redact`. `GET /api/memory` is a plain list and stays global-only |
+| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `/api/contradictions/bulk/resolve`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, `GET /api/recall/stream`, and `POST /api/memory/:id/redact`. `GET /api/memory` is a plain list and stays global-only |
 | `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild`, and all `GET`/`HEAD /api/review/*` reads |
 
 Window and limits are configurable — see [CONFIGURATION.md](CONFIGURATION.md#security). Set a tier's limit to `0` to disable it, or `ENGRAM_RATE_LIMIT_DISABLED=true` to turn the limiter off entirely.
@@ -914,15 +914,15 @@ Manually trigger contradiction checking for a specific memory against all other 
 
 ### `POST /api/contradictions/resolve`
 
-Resolve one or more contradictions using a resolution strategy.
+Resolve a contradiction between two memories using the core resolution path.
 
 **Request body**
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `contradictionId` | string | yes | ID of the contradiction to resolve |
+| `sourceId` | string | yes | Exact ID of one memory in the pair |
+| `targetId` | string | yes | Exact ID of the other memory |
 | `strategy` | string | yes | Resolution strategy (see below) |
-| `manualContent` | string | — | Required when strategy is `manual` |
 
 **Strategies**
 
@@ -932,12 +932,13 @@ Resolve one or more contradictions using a resolution strategy.
 | `keep_oldest` | Archive the newer memory, keep the older one |
 | `keep_important` | Archive the less important memory |
 | `keep_both` | Mark as resolved without archiving either memory |
-| `manual` | Archive both and create a new memory from `manualContent` |
+| `manual` | Leave unresolved for human review (`resolved: false`) |
 
 **Request**
 ```json
 {
-  "contradictionId": "contra-uuid",
+  "sourceId": "uuid-1",
+  "targetId": "uuid-2",
   "strategy": "keep_newest"
 }
 ```
@@ -946,32 +947,52 @@ Resolve one or more contradictions using a resolution strategy.
 ```json
 {
   "resolved": true,
-  "contradictionId": "contra-uuid",
-  "strategy": "keep_newest",
-  "kept": "uuid-2",
-  "archived": "uuid-1"
+  "keptId": "uuid-2",
+  "archivedId": "uuid-1"
 }
 ```
 
-**Request (manual strategy)**
+`keptId` and `archivedId` are omitted when no memory is archived. An already archived endpoint or `manual` returns `resolved: false`.
+
+---
+
+### `POST /api/contradictions/bulk/resolve`
+
+Resolve up to 500 contradiction pairs. Items run sequentially in request order through the same core resolution, sync notification and realtime event path as the single endpoint. Each item commits independently; a failure does not roll back earlier successes or stop later items.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `items` | array | yes | 1–500 resolution items |
+| `items[].sourceId` | string | yes | Exact memory ID, matching the single endpoint |
+| `items[].targetId` | string | yes | Exact ID of the other memory |
+| `items[].strategy` | string | yes | One of the five strategies listed above |
+
+Uses pair IDs, not `edgeId`. Both memories must be visible under the brain's namespace configuration, just like single resolution and bulk memory writes. Hidden and missing memories both return `Memory not found` per item. Uses existing API authentication and the `heavy` plus `global` rate tiers: this is a bounded batch of writes like bulk archive/tag, rather than a whole-store scan. Normal `401`/`429` responses apply.
+
+**Request**
 ```json
 {
-  "contradictionId": "contra-uuid",
-  "strategy": "manual",
-  "manualContent": "User prefers dark mode on desktop and light mode on mobile"
+  "items": [
+    { "sourceId": "uuid-1", "targetId": "uuid-2", "strategy": "keep_both" },
+    { "sourceId": "missing", "targetId": "uuid-3", "strategy": "keep_newest" }
+  ]
 }
 ```
 
-**Response `200`**
+**Response `200`** (including partial failure)
 ```json
 {
-  "resolved": true,
-  "contradictionId": "contra-uuid",
-  "strategy": "manual",
-  "archived": ["uuid-1", "uuid-2"],
-  "newMemoryId": "uuid-3"
+  "results": [
+    { "ok": true },
+    { "ok": false, "error": "Memory not found" }
+  ],
+  "summary": { "total": 2, "resolved": 1, "failed": 1 }
 }
 ```
+
+`results` matches input order. `ok` means core returned `resolved: true`; `manual` and already archived endpoints return `Contradiction not resolved`. Unexpected per-item failures return `Failed to resolve contradiction` without exposing internal details. Duplicate pairs follow the single endpoint's behavior. Invalid bodies (including an invalid strategy, empty list or more than 500 items) return `400` before any writes.
 
 ---
 
@@ -1520,7 +1541,7 @@ Placeholders such as `your-api-key`, `your_api_key`, `xxx`, `<token>`, `${TOKEN}
 
 Dismissals persist in the existing `local_meta` row `review.dismissed.v1` as queue/ID keys (pair IDs sorted). This is the simplest existing device-local metadata storage: no migration, memory tag pollution, or sync change. Repeating a dismissal is idempotent. Dismissals survive app restarts and memory edits and affect both counts and lists.
 
-Use existing `POST /api/contradictions/resolve` with `keep_both` for “not a contradiction”; `DELETE /api/memory/:id` to keep only the other duplicate; `POST /api/memory/:id/tags` with `pinned` to protect a fading memory; and existing `/api/memory/bulk/archive` and `/api/memory/bulk/tag` for batches (up to 1000 IDs).
+Use `POST /api/contradictions/resolve` (or `/api/contradictions/bulk/resolve` for up to 500 pairs) with `keep_both` for “not a contradiction”; `DELETE /api/memory/:id` to keep only the other duplicate; `POST /api/memory/:id/tags` with `pinned` to protect a fading memory; and existing `/api/memory/bulk/archive` and `/api/memory/bulk/tag` for batches (up to 1000 IDs).
 
 ### `POST /api/memory/:id/redact`
 

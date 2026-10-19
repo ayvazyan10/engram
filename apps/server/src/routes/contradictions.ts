@@ -3,6 +3,22 @@ import { brain, realtime, notifySyncWrite } from '../index.js';
 import { isMemoryNotFound } from '../lib/notFound.js';
 import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
 
+type ResolutionInput = {
+  sourceId: string;
+  targetId: string;
+  strategy: 'keep_newest' | 'keep_oldest' | 'keep_important' | 'keep_both' | 'manual';
+};
+
+const resolutionBody = {
+  type: 'object',
+  required: ['sourceId', 'targetId', 'strategy'],
+  properties: {
+    sourceId: { type: 'string', minLength: 1 },
+    targetId: { type: 'string', minLength: 1 },
+    strategy: { type: 'string', enum: ['keep_newest', 'keep_oldest', 'keep_important', 'keep_both', 'manual'] },
+  },
+};
+
 export const contradictionRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/contradictions — list all unresolved contradictions
   app.get<{ Querystring: { limit?: number; offset?: number; namespace?: string; global?: 'true' } }>('/contradictions', {
@@ -79,49 +95,60 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
     },
   });
 
+  // Keep bulk and single resolution on the same core, sync and realtime path.
+  const resolve = async (item: ResolutionInput) => {
+    const result = await brain.resolveContradiction(item.sourceId, item.targetId, item.strategy);
+    if (result.resolved) {
+      notifySyncWrite();
+      realtime?.emit('memory:contradiction_resolved', {
+        sourceId: item.sourceId,
+        targetId: item.targetId,
+        strategy: item.strategy,
+        archivedId: result.archivedId,
+        keptId: result.keptId,
+      });
+    }
+    return result;
+  };
+
   // POST /api/contradictions/resolve — resolve a contradiction
-  app.post<{
-    Body: {
-      sourceId: string;
-      targetId: string;
-      strategy: 'keep_newest' | 'keep_oldest' | 'keep_important' | 'keep_both' | 'manual';
-    };
-  }>('/contradictions/resolve', {
+  app.post<{ Body: ResolutionInput }>('/contradictions/resolve', {
     schema: {
       tags: ['contradictions'],
       summary: 'Resolve a contradiction between two memories',
+      body: resolutionBody,
+    },
+    handler: async (req) => resolve(req.body),
+  });
+
+  app.post<{ Body: { items: ResolutionInput[] } }>('/contradictions/bulk/resolve', {
+    schema: {
+      tags: ['contradictions'],
+      summary: 'Resolve up to 500 contradiction pairs',
       body: {
         type: 'object',
-        required: ['sourceId', 'targetId', 'strategy'],
+        required: ['items'],
         properties: {
-          sourceId: { type: 'string' },
-          targetId: { type: 'string' },
-          strategy: {
-            type: 'string',
-            enum: ['keep_newest', 'keep_oldest', 'keep_important', 'keep_both', 'manual'],
-          },
+          items: { type: 'array', minItems: 1, maxItems: 500, items: resolutionBody },
         },
       },
     },
+    preValidation: strictObjectBody(['items'], ['items']),
     handler: async (req) => {
-      const result = await brain.resolveContradiction(
-        req.body.sourceId,
-        req.body.targetId,
-        req.body.strategy,
-      );
-
-      if (result.resolved) {
-        notifySyncWrite();
-        realtime?.emit('memory:contradiction_resolved', {
-          sourceId: req.body.sourceId,
-          targetId: req.body.targetId,
-          strategy: req.body.strategy,
-          archivedId: result.archivedId,
-          keptId: result.keptId,
-        });
+      const results: { ok: boolean; error?: string }[] = [];
+      // Sequential, like bulk archive: each core call commits independently.
+      for (const item of req.body.items) {
+        try {
+          const result = await resolve(item);
+          results.push(result.resolved ? { ok: true } : { ok: false, error: 'Contradiction not resolved' });
+        } catch (err: unknown) {
+          const missing = isMemoryNotFound(err) || (err instanceof Error && err.message === 'Memory not found');
+          if (!missing) req.log.warn({ err }, 'bulk contradiction resolution failed');
+          results.push({ ok: false, error: missing ? 'Memory not found' : 'Failed to resolve contradiction' });
+        }
       }
-
-      return result;
+      const resolved = results.filter((result) => result.ok).length;
+      return { results, summary: { total: results.length, resolved, failed: results.length - resolved } };
     },
   });
 
