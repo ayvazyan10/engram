@@ -21,10 +21,8 @@ import { GLYPH } from '../../../lib/tokens.js';
  * '⬡' (concept) for its plate tab and '◈' (pattern) for its Inspect tab.
  */
 const COMPONENTS_DIR = join(__dirname, '../..');
-const PANEL_DIRS = [
-  join(COMPONENTS_DIR, 'ui'),
-  join(COMPONENTS_DIR, 'views'),
-];
+// components/views went when the Atlas screens moved to src/features (F6).
+const PANEL_DIRS = [join(COMPONENTS_DIR, 'ui')];
 
 /** Emoji-presentation-by-default characters that live below the astral
  *  planes, plus the VS16 selector that forces emoji presentation. */

@@ -32,16 +32,13 @@ vi.mock('../../hooks/useWebSocket.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../hooks/useWebSocket.js')>()),
   useWebSocket: () => {},
 }));
-// The three non-plate views belong to a different change; stub them so this
-// file asserts what the shell PASSES rather than what they happen to render.
-vi.mock('../../components/views/TimelineView.js', () => ({
-  default: (p: ViewProps) => <div data-testid="timeline">{describeProps(p)}</div>,
+// Timeline and Insights have their own tests; stub them so this file asserts
+// which screen each route mounts rather than what they happen to render.
+vi.mock('../../features/timeline/TimelineView.js', () => ({
+  default: () => <div data-testid="timeline" />,
 }));
-vi.mock('../../components/views/AnalyticsView.js', () => ({
-  default: (p: ViewProps) => <div data-testid="analytics">{describeProps(p)}</div>,
-}));
-vi.mock('../../components/views/ReflectionView.js', () => ({
-  default: (p: ViewProps) => <div data-testid="reflections">{describeProps(p)}</div>,
+vi.mock('../../features/insights/InsightsView.js', () => ({
+  default: (p: { tab: string }) => <div data-testid="insights">{p.tab}</div>,
 }));
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -62,6 +59,10 @@ vi.mock('../../lib/api.js', () => ({
     // The memory sheet fetches the selected memory's neighbourhood, and these
     // tests select memories.
     getGraph: vi.fn().mockResolvedValue({ node: null, connections: [], neighbors: [] }),
+    // Settings and health reads.
+    getSyncStatus: vi.fn().mockResolvedValue({ enabled: false }),
+    getEmbeddingStatus: vi.fn().mockRejectedValue(new Error('not stubbed')),
+    getIndexStatus: vi.fn().mockRejectedValue(new Error('not stubbed')),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -75,20 +76,6 @@ vi.mock('../../lib/api.js', () => ({
 const getGraphLayout = vi.mocked(api.getGraphLayout);
 const getGraphEdges = vi.mocked(api.getGraphEdges);
 const getDecayPolicy = vi.mocked(api.getDecayPolicy);
-
-interface ViewProps {
-  loading: boolean;
-  error: string | null;
-  onRetry: () => void;
-}
-
-function describeProps(p: ViewProps): string {
-  return JSON.stringify({
-    loading: p.loading,
-    error: p.error,
-    onRetry: typeof p.onRetry,
-  });
-}
 
 function plateProps(): { memories: number | null; links: number | null; error: string | null } {
   return JSON.parse(screen.getByTestId('plate').textContent ?? '{}');
@@ -511,25 +498,20 @@ describe('Shell REST payload validation (W10)', () => {
   });
 });
 
-describe('Shell data-view props (coordination point)', () => {
+describe('Shell screens', () => {
   beforeEach(resetAll);
 
   it.each([
-    ['timeline', '/timeline'],
-    ['analytics', '/insights'],
-    ['reflections', '/insights/reflections'],
-  ] as const)('threads loading / error / onRetry into the %s view', async (view, to) => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
+    ['timeline', '/timeline', ''],
+    ['insights', '/insights', 'numbers'],
+    ['insights', '/insights/reflections', 'reflections'],
+  ] as const)('mounts the %s screen for %s', async (view, to, tab) => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     render(<Shell />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
 
     act(() => go(to));
-    const node = await screen.findByTestId(view);
-    expect(JSON.parse(node.textContent ?? '{}')).toEqual({
-      loading: false,
-      error: null,
-      onRetry: 'function',
-    });
+    expect(await screen.findByTestId(view)).toHaveTextContent(tab);
   });
 });
 
@@ -607,7 +589,7 @@ describe('Shell Home', () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
 
     render(<Shell />);
-    expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Nothing charted yet' })).toBeInTheDocument();
     expect(useRouteStore.getState().route.name).toBe('welcome');
 
     act(() => go('/'));

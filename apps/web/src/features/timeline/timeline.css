@@ -1,0 +1,326 @@
+/**
+ * Timeline: days as stations down the page. The day names are set like places
+ * on the map (expanded italic), times and counts in the condensed figures, and
+ * the rows are the Map sheet's own rows. Values come from tokens.css.
+ */
+
+.tl-page {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: var(--s-4) var(--s-6) var(--s-12);
+}
+
+.tl-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--s-6);
+  flex-wrap: wrap;
+  padding-bottom: var(--s-4);
+}
+
+.tl-head .at-lede {
+  margin-bottom: 0;
+}
+
+.tl-jump {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.tl-jump-row {
+  display: flex;
+  gap: var(--s-2);
+}
+
+.tl-jump input {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 560;
+  font-stretch: 87%;
+  font-variant-numeric: tabular-nums;
+  color-scheme: inherit;
+}
+
+/* ─── Days ───────────────────────────────────────────────────────────────── */
+
+.tl-day {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  border-top: 1px solid var(--rule);
+}
+
+.tl-day-h {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  padding: 16px var(--s-4) 16px 0;
+}
+
+.tl-day-h h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 560;
+  font-style: italic;
+  font-stretch: 125%;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+}
+
+.tl-day-h small {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 560;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--ink-3);
+}
+
+.tl-rows {
+  border-left: 1px solid var(--rule);
+}
+
+.tl-row {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: start;
+}
+
+.tl-row > time,
+.tl-fold > button > time {
+  padding: 13px 0 0 var(--s-3);
+  font-size: 13px;
+  font-weight: 560;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.tl-row .mm-row {
+  padding-left: 10px;
+}
+
+.tl-row:last-child .mm-row,
+.tl-fold:last-child {
+  border-bottom: 0;
+}
+
+/* ─── A folded machine stream ────────────────────────────────────────────── */
+
+.tl-fold {
+  border-bottom: 1px solid var(--rule);
+}
+
+.tl-fold > button {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 58px 38px minmax(0, 1fr) auto;
+  align-items: start;
+  width: 100%;
+  padding: 0 14px 12px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear;
+}
+
+.tl-fold > button:hover {
+  background: var(--wash);
+}
+
+.tl-fold > button:focus-visible {
+  outline-offset: -2px;
+}
+
+.tl-fold > button > svg {
+  margin-top: 13px;
+  color: var(--ink-3);
+  transition: transform var(--dur-in) var(--ease-out);
+}
+
+.tl-fold > button[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.tl-stack {
+  display: inline-flex;
+  margin: 15px 0 0 12px;
+}
+
+.tl-stack i {
+  width: 10px;
+  height: 14px;
+  margin-left: -6px;
+  border: 1.5px solid var(--ink-2);
+  border-radius: var(--r-mark);
+  background: var(--raised);
+}
+
+.tl-stack i:first-child {
+  margin-left: 0;
+}
+
+.tl-fold-t {
+  min-width: 0;
+  padding-top: 11px;
+}
+
+.tl-fold-t b {
+  font-weight: 640;
+}
+
+.tl-fold-t small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.tl-fold-rows {
+  border-top: 1px solid var(--rule);
+  background: var(--wash);
+  animation: tl-open var(--dur-in) var(--ease-out);
+}
+
+.tl-fold-rows .tl-row:last-child .mm-row {
+  border-bottom: 0;
+}
+
+@keyframes tl-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* ─── States and the end of the list ─────────────────────────────────────── */
+
+.tl-note {
+  padding: var(--s-5) 0 var(--s-5) 200px;
+}
+
+.tl-note p {
+  margin: 0 0 var(--s-3);
+  color: var(--fault);
+}
+
+.tl-more,
+.tl-end {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: 0;
+  padding: var(--s-4) 0 0 200px;
+  border-top: 1px solid var(--rule);
+  font-size: 13px;
+  font-stretch: 87%;
+  color: var(--ink-3);
+}
+
+.tl-more .mm-quiet {
+  margin: 0;
+}
+
+.tl-empty {
+  max-width: 46ch;
+  padding: var(--s-10) 0 var(--s-6) 200px;
+  border-top: 1px solid var(--rule);
+}
+
+.tl-empty h2 {
+  margin: 0 0 var(--s-2);
+  font-size: 24px;
+  font-weight: 300;
+  font-style: italic;
+  font-stretch: 125%;
+  letter-spacing: -0.01em;
+}
+
+.tl-empty p {
+  margin: 0 0 var(--s-4);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+@media (max-width: 720px) {
+  .tl-page {
+    padding: var(--s-2) 0 var(--s-10);
+  }
+
+  .tl-head {
+    padding: 0 var(--s-4) var(--s-4);
+  }
+
+  .tl-head .at-display {
+    display: none;
+  }
+
+  .tl-jump {
+    width: 100%;
+  }
+
+  .tl-jump input {
+    flex: 1;
+  }
+
+  .tl-day {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tl-day-h {
+    z-index: 1;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 10px var(--s-4);
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .tl-day-h small {
+    margin: 0;
+  }
+
+  .tl-rows {
+    border-left: 0;
+  }
+
+  .tl-row,
+  .tl-fold > button {
+    grid-template-columns: 50px minmax(0, 1fr);
+  }
+
+  .tl-fold > button {
+    grid-template-columns: 50px 38px minmax(0, 1fr) auto;
+  }
+
+  .tl-row > time,
+  .tl-fold > button > time {
+    padding-left: var(--s-4);
+  }
+
+  .tl-note,
+  .tl-more,
+  .tl-end,
+  .tl-empty {
+    padding-left: var(--s-4);
+    padding-right: var(--s-4);
+  }
+}

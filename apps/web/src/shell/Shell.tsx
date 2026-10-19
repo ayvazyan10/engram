@@ -13,7 +13,8 @@ import UnlockGate from '../components/ui/UnlockGate.js';
 import MapView from '../features/map/MapView.js';
 import RecallView from '../features/recall/RecallView.js';
 import MemorySheet from '../features/memory/MemorySheet.js';
-import Onboarding from '../components/views/Onboarding.js';
+import Welcome from '../features/onboarding/Welcome.js';
+import TimelineView from '../features/timeline/TimelineView.js';
 import SettingsView from '../features/settings/SettingsView.js';
 import { useNeuralStore } from '../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../store/memoryStore.js';
@@ -28,10 +29,8 @@ import { useWebSocket, asMemoryRecord } from '../hooks/useWebSocket.js';
 import { useThemeVars } from '../hooks/useThemeVars.js';
 import './shell.css';
 
-// recharts is the bulk of these three views' weight: fetched only when one opens.
-const TimelineView = lazy(() => import('../components/views/TimelineView.js'));
-const AnalyticsView = lazy(() => import('../components/views/AnalyticsView.js'));
-const ReflectionView = lazy(() => import('../components/views/ReflectionView.js'));
+// recharts is the bulk of Insights' weight: fetched only when it opens.
+const InsightsView = lazy(() => import('../features/insights/InsightsView.js'));
 
 /** The server's page cap for GET /memory (`limit` maximum 200). */
 const PAGE_SIZE = 200;
@@ -316,8 +315,10 @@ export default function Shell() {
               <PlateSurface data={plateData} error={plateError} onRetry={retryPlate} />
             </div>
           ) : route.name === 'welcome' ? (
+            <Welcome loading={loading} onRefresh={loadMemories} onDone={() => navigate('/')} />
+          ) : route.name === 'timeline' ? (
             <div className="at-scroll">
-              <Onboarding onRefresh={loadMemories} onDone={() => navigate('/')} />
+              <TimelineView />
             </div>
           ) : route.name === 'settings' ? (
             <div className="at-scroll">
@@ -328,11 +329,11 @@ export default function Shell() {
               <ReviewSoon count={reviewCount} />
             </div>
           ) : (
-            <Suspense fallback={<p className="at-wait">Loading…</p>}>
-              {route.name === 'timeline' && <TimelineView {...viewProps} />}
-              {route.name === 'insights' && route.sub === 'reflections' && <ReflectionView {...viewProps} />}
-              {route.name === 'insights' && route.sub !== 'reflections' && <AnalyticsView {...viewProps} />}
-            </Suspense>
+            <div className="at-scroll">
+              <Suspense fallback={<p className="at-wait">Loading…</p>}>
+                <InsightsView tab={route.sub === 'reflections' ? 'reflections' : 'numbers'} />
+              </Suspense>
+            </div>
           )}
         </main>
       </div>
