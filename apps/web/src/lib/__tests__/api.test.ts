@@ -299,6 +299,20 @@ describe('lib/api endpoint coverage', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ sourceId: 'a', targetId: 'b', strategy: 'keep_newest' });
   });
 
+  it('bulkResolveContradictions sends typed items and returns ordered failures', async () => {
+    const items = [{ sourceId: 'a', targetId: 'b', strategy: 'keep_both' as const }];
+    const response = { results: [{ ok: false, error: 'Memory not found' }], summary: { total: 1, resolved: 0, failed: 1 } };
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, response));
+    await expect(api.bulkResolveContradictions(items)).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith('/api/contradictions/bulk/resolve', expect.objectContaining({ method: 'POST', body: JSON.stringify({ items }) }));
+  });
+
+  it('bulkArchive forwards keepalive for a pagehide flush', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { archived: 1, total: 1 }));
+    await api.bulkArchive(['a'], true);
+    expect(fetch).toHaveBeenCalledWith('/api/memory/bulk/archive', expect.objectContaining({ keepalive: true, body: JSON.stringify({ ids: ['a'] }) }));
+  });
+
   it('getAnalytics() defaults days to 30', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, {
       total: 0, avgImportance: 0, byType: {}, bySource: {}, dailyGrowth: [], hourlyActivity: [], topConcepts: [],
