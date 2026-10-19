@@ -78,12 +78,13 @@ const WHOLE_STORE_PATHS: readonly string[] = [
   '/api/map/rebuild',
 ];
 
-/** Paths that embed text or run a vector search on every call. */
+/** Paths that embed text, search, or apply a bounded batch of writes. */
 const HEAVY_PATHS: readonly string[] = [
   '/api/memory',
   '/api/memory/batch',
   '/api/memory/bulk/archive',
   '/api/memory/bulk/tag',
+  '/api/contradictions/bulk/resolve',
   '/api/recall',
   '/api/recall/explain',
   '/api/recall/stream',

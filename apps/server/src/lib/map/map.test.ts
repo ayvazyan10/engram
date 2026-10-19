@@ -72,8 +72,52 @@ describe('map regions', () => {
       { tags: ['bread'], concept: 'Sourdough' },
     ];
     const names = regionNames(rows, [[0, 1], [2]]);
-    expect(names[0]!.name).toBe('database · postgres');
+    expect(names[0]!.name).toBe('Database · Postgres');
     expect(names[0]!.topTags).toEqual(['database']);
-    expect(names[1]!.name).toBe('bread · sourdough');
+    expect(names[1]!.name).toBe('Bread · Sourdough');
+  });
+});
+
+
+describe('readable region names', () => {
+  it('cleans realistic LTX, Mission Control and Engram/NeuralCore regions', () => {
+    const rows = [
+      { tags: ['ltx', 'the', 'ai', '2026', 'mc:job'], concept: 'The LTX', content: 'The video model is ready for testing.' },
+      { tags: ['ltx', 'the', 'v2'], concept: 'The LTX' },
+      { tags: ['mission', 'control'], concept: 'Mission control dashboard' },
+      { tags: ['mission', 'control'], concept: 'Mission control review' },
+      { tags: ['engram', 'neuralcore'], concept: 'Engram and NeuralCore' },
+      { tags: ['neuralcore', 'engram'], concept: 'NeuralCore and Engram' },
+    ];
+    const groups = [[0, 1], [2, 3], [4, 5]];
+    const result = regionNames(rows, groups);
+    expect(result.map((r) => r.name)).toEqual(['Ltx', 'Mission Control', 'Engram · Neuralcore']);
+    expect(result[0]!.topTags).toEqual(['ltx']);
+    expect(regionNames(rows, groups)).toEqual(result);
+    expect(regionNames(rows, groups.map((g) => [...g].reverse()))).toEqual(result);
+  });
+
+  it('prefers metadata, falls back to content, and counts a phrase once per memory', () => {
+    const rows = [
+      { tags: ['database'], concept: 'Postgres', content: 'Repeated incidental words repeated incidental words' },
+      { tags: [], concept: null, content: 'repeated incidental words' },
+      { tags: [], concept: null, content: 'The bread and sourdough' },
+      { tags: ['database'], concept: 'Postgres database Postgres database' },
+      { tags: ['database'], concept: 'Postgres' },
+      // Metadata in another region must not promote this region's content words.
+      { tags: ['repeated', 'incidental'], concept: null },
+    ];
+    expect(regionNames(rows, [[0, 1], [2], [3, 4]]).map((r) => r.name))
+      .toEqual(['Database · Postgres', 'Bread · Sourdough', 'Database · Postgres (2)']);
+  });
+
+  it('keeps duplicate and empty labels distinct and rejects numeric/short/stopword tokens', () => {
+    const rows = [
+      { tags: ['the', 'and', 'of', 'to', 'an', 'in', 'is', 'AI', '42', '2026'], concept: 'a it was with 123' },
+      { tags: [], concept: null },
+      { tags: ['THE'], concept: '000' },
+    ];
+    expect(regionNames(rows, [[0], [1], [2]]).map((r) => r.name)).toEqual(['Memories', 'Memories (2)', 'Memories (3)']);
+    expect(regionNames([], [])).toEqual([]);
   });
 });
