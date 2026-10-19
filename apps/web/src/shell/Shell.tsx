@@ -238,7 +238,7 @@ export default function Shell() {
         </header>
         )}
 
-        <main className="at-main" aria-label={TITLES[route.name]}>
+        <main tabIndex={-1} className="at-main" aria-label={TITLES[route.name]}>
           {route.name === 'map' ? (
             <MapView
               {...viewProps}

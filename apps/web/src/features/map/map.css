@@ -162,7 +162,7 @@
 .mp-sub-note {
   flex: 1;
   min-width: 0;
-  color: var(--fault);
+  color: var(--fault-text);
 }
 
 .mp-sub .at-scope {
@@ -1021,11 +1021,11 @@ p.mp-more {
   }
 
   .mp-sheet[data-snap="0"] {
-    height: 30%;
+    height: max(30%, 240px);
   }
 
   .mp-sheet[data-snap="2"] {
-    height: calc(100% - 124px);
+    height: calc(100% - 180px);
   }
 
   .mp-sheet[data-dragging] {
@@ -1146,7 +1146,7 @@ p.mp-more {
     left: 12px;
     right: 12px;
     width: auto;
-    bottom: calc(var(--mp-sheet-h, 0px) + 60px);
+    bottom: calc(var(--mp-sheet-h, 0px) + 70px);
     padding: 6px 10px;
   }
 
@@ -1180,4 +1180,11 @@ p.mp-more {
   .mp-scrub {
     animation: none;
   }
+}
+
+@media (max-width: 720px) {
+  .mp-view[data-lens="time"] .mp-sheet[data-snap="2"] { height: calc(100% - 280px); }
+
+  /* On Map the scope is at the search field's left, unlike the shell bar. */
+  .mp-field .at-scope-pop { left: 0; right: auto; }
 }

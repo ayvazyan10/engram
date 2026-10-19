@@ -1,5 +1,6 @@
 import type { RecallExplanation, RecallItem } from '../../lib/api.js';
 import type { MapModel } from '../map/lib/model.js';
+import { toScreen, type Rect, type View } from '../map/lib/project.js';
 
 export interface RouteStop {
   id: string;
@@ -25,6 +26,54 @@ export function routeLayout(items: readonly RecallItem[], model: MapModel | null
       distance: prev ? prev.distance + Math.hypot(x - prev.x, y - prev.y) : 0 });
   }
   return stops;
+}
+
+export const ROUTE_BADGE_RADIUS = 12;
+export const ROUTE_BADGE_HIT_RADIUS = 22;
+
+/** Screen-space badges separate the visible 24px circles, even for identical map points.
+ * The larger hit areas may overlap; picking resolves to the nearest centre.
+ * Try the true point first, then the nearest free slot. Recompute on zoom so
+ * separated memories can return to their true positions. */
+export function routeBadges(stops: readonly RouteStop[], view: View, area: Rect): RouteStop[] {
+  const placed: RouteStop[] = [];
+  const slots: [number, number][] = [];
+  const spacing = ROUTE_BADGE_RADIUS * 2 + 4;
+  for (let y = area.top + ROUTE_BADGE_HIT_RADIUS; y <= area.bottom - ROUTE_BADGE_HIT_RADIUS; y += spacing) {
+    for (let x = area.left + ROUTE_BADGE_HIT_RADIUS; x <= area.right - ROUTE_BADGE_HIT_RADIUS; x += spacing) slots.push([x, y]);
+  }
+  for (const stop of stops) {
+    const [px, py] = toScreen(view, stop.x, stop.y);
+    const free = (x: number, y: number) => placed.every((p) => Math.hypot(p.x - x, p.y - y) >= spacing);
+    let x = px, y = py;
+    if (!free(x, y)) {
+      const slot = slots.filter(([sx, sy]) => free(sx, sy))
+        .sort((a, b) => Math.hypot(a[0] - px, a[1] - py) - Math.hypot(b[0] - px, b[1] - py))[0];
+      if (slot) [x, y] = slot;
+      else {
+        // A very dense route can exceed the viewport. Keep its badges distinct;
+        // pan/zoom and the complete Route list still reach every memory.
+        while (!free(x, y)) x += spacing;
+      }
+    }
+    const prev = placed[placed.length - 1];
+    placed.push({ ...stop, x, y, distance: prev ? prev.distance + Math.hypot(x - prev.x, y - prev.y) : 0 });
+  }
+  return placed;
+}
+
+/** Preserve a 44px hit diameter without letting an earlier rank steal a neighbour's click. */
+export function pickRouteBadge(badges: readonly RouteStop[], x: number, y: number): number {
+  let index = -1;
+  let nearest = ROUTE_BADGE_HIT_RADIUS;
+  for (const badge of badges) {
+    const distance = Math.hypot(x - badge.x, y - badge.y);
+    if (distance <= nearest) {
+      nearest = distance;
+      index = badge.index;
+    }
+  }
+  return index;
 }
 
 /** offset points to the bullet, but chars excludes its citation and optional source. */

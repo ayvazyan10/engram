@@ -92,3 +92,16 @@ describe('UnlockGate (F2)', () => {
     expect(screen.getByPlaceholderText(/api key/i)).toHaveValue('');
   });
 });
+
+
+it('names the unlock dialog and keeps Tab inside even while Unlock is disabled', () => {
+  useAuthStore.setState({ locked: true, hadKey: false });
+  render(<UnlockGate />);
+  expect(screen.getByRole('dialog', { name: 'API key required' })).toHaveAttribute('aria-modal', 'true');
+  const field = screen.getByLabelText('API key');
+  field.focus();
+  fireEvent.keyDown(field, { key: 'Tab' });
+  expect(field).toHaveFocus();
+  fireEvent.keyDown(field, { key: 'Tab', shiftKey: true });
+  expect(field).toHaveFocus();
+});

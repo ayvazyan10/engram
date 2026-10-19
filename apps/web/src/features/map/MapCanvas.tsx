@@ -7,7 +7,7 @@ import { regionMembers } from './lib/model.js';
 import { LAYOUT_SIZE, between, boundsOf, centreOn, contains, easeCubicInOut, easeExpoOut, fitView, toScreen, type Rect, type View } from './lib/project.js';
 import { pick } from './lib/hitTest.js';
 import { rampColour } from './lib/terrain.js';
-import { segmentProgress, type RouteStop } from '../recall/routeLayout.js';
+import { pickRouteBadge, ROUTE_BADGE_RADIUS, routeBadges, segmentProgress, type RouteStop } from '../recall/routeLayout.js';
 import { lensAlpha, pickable, retentionAlpha, type LensState } from './lenses.js';
 
 /**
@@ -136,6 +136,7 @@ export default function MapCanvas(props: Props) {
     glide: null as null | { from: View; to: View; t0: number },
     pinsAt: 0,
     routeAt: 0,
+    badges: [] as RouteStop[],
     colours: null as Colours | null,
     terrain: null as null | { model: MapModel; paths: Path2D[] },
     zoom: null as ZoomBehavior<HTMLCanvasElement, unknown> | null,
@@ -156,7 +157,7 @@ export default function MapCanvas(props: Props) {
     let busy = false;
 
     if (s.glide) {
-      const t = Math.min(1, (now - s.glide.t0) / GLIDE_MS);
+      const t = p.reduced ? 1 : Math.min(1, (now - s.glide.t0) / GLIDE_MS);
       const v = between(s.glide.from, s.glide.to, easeCubicInOut(t), p.area);
       if (t >= 1) s.glide = null;
       else busy = true;
@@ -359,21 +360,22 @@ export default function MapCanvas(props: Props) {
 
     // Recall: one continuous, ranked route. A graph-expanded destination
     // makes its incoming segment dashed; badges arrive with the line.
-    if (p.route?.length) {
+    s.badges = p.route ? routeBadges(p.route, s.view, p.area) : [];
+    if (s.badges.length) {
       const t = p.reduced ? 1 : Math.min(1, Math.max(0, (now - s.routeAt) / 900));
       if (t < 1) busy = true;
-      const distance = p.route[p.route.length - 1]!.distance * easeCubicInOut(t);
+      const distance = s.badges[s.badges.length - 1]!.distance * easeCubicInOut(t);
       ctx.globalAlpha = 1;
       ctx.lineCap = 'round';
-      for (let n = 1; n < p.route.length; n++) {
-        const from = p.route[n - 1]!;
-        const to = p.route[n]!;
+      for (let n = 1; n < s.badges.length; n++) {
+        const from = s.badges[n - 1]!;
+        const to = s.badges[n]!;
         const progress = segmentProgress(from, to, distance);
         if (progress <= 0) continue;
         ctx.beginPath();
-        ctx.moveTo(sx(from.index), sy(from.index));
-        ctx.lineTo(sx(from.index) + (sx(to.index) - sx(from.index)) * progress,
-          sy(from.index) + (sy(to.index) - sy(from.index)) * progress);
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(from.x + (to.x - from.x) * progress,
+          from.y + (to.y - from.y) * progress);
         ctx.lineWidth = 7;
         ctx.strokeStyle = C.paper;
         ctx.stroke();
@@ -384,21 +386,31 @@ export default function MapCanvas(props: Props) {
         ctx.setLineDash([]);
       }
       ctx.lineCap = 'butt';
-      for (const stop of p.route) {
+      for (const stop of s.badges) {
+        if (stop.distance > distance) continue;
+        ctx.beginPath();
+        ctx.moveTo(sx(stop.index), sy(stop.index));
+        ctx.lineTo(stop.x, stop.y);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = C.ink;
+        ctx.stroke();
+      }
+      // Paint every leader before the badges so no later line crosses a number.
+      for (const stop of s.badges) {
         if (stop.distance > distance) continue;
         const active = stop.id === p.hoverId || stop.id === p.focusId;
         ctx.beginPath();
-        ctx.arc(sx(stop.index), sy(stop.index), 12, 0, Math.PI * 2);
-        ctx.fillStyle = active ? C.focus : C.ink;
+        ctx.arc(stop.x, stop.y, ROUTE_BADGE_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = C.ink;
         ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = C.paper;
+        ctx.lineWidth = active ? 3 : 2;
+        ctx.strokeStyle = active ? C.focus : C.paper;
         ctx.stroke();
         ctx.fillStyle = C.paper;
-        ctx.font = '600 12px system-ui';
+        ctx.font = '600 11px system-ui';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(String(stop.rank), sx(stop.index), sy(stop.index));
+        ctx.fillText(String(stop.rank), stop.x, stop.y);
       }
     }
 
@@ -406,10 +418,11 @@ export default function MapCanvas(props: Props) {
     const ring = (id: string | null, gap: number, width: number, colour: string) => {
       const i = id === null ? undefined : model.at.get(id);
       if (i === undefined) return;
-      const r = (p.route ? 12 : radius(i)) + gap;
+      const badge = s.badges.find((stop) => stop.id === id);
+      const r = (badge ? ROUTE_BADGE_RADIUS : radius(i)) + gap;
       ctx.globalAlpha = 1;
       ctx.beginPath();
-      ctx.arc(sx(i), sy(i), r, 0, Math.PI * 2);
+      ctx.arc(badge?.x ?? sx(i), badge?.y ?? sy(i), r, 0, Math.PI * 2);
       ctx.lineWidth = width + 3.5;
       ctx.strokeStyle = C.paper;
       ctx.stroke();
@@ -487,6 +500,7 @@ export default function MapCanvas(props: Props) {
     const s = state.current;
     const behaviour = zoom<HTMLCanvasElement, unknown>()
       .scaleExtent([0.05, 400])
+      .duration(0)
       .on('zoom', (event: { transform: View; sourceEvent: Event | null }) => {
         s.view = { k: event.transform.k, x: event.transform.x, y: event.transform.y };
         if (event.sourceEvent) {
@@ -502,11 +516,7 @@ export default function MapCanvas(props: Props) {
     const pickAt = (px: number, py: number): number => {
       const p = live.current;
       if (p.route) {
-        for (const stop of [...p.route].reverse()) {
-          const [x, y] = toScreen(s.view, stop.x, stop.y);
-          if (Math.hypot(px - x, py - y) <= PICK_PX) return stop.index;
-        }
-        return -1;
+        return pickRouteBadge(s.badges, px, py);
       }
       return pick(p.model.index, p.model.xs, p.model.ys, s.view, px, py, PICK_PX,
         (i) => pickable(p.model.created[i]!, p.lens));

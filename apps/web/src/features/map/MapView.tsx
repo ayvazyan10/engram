@@ -235,6 +235,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
 
   return (
     <div ref={viewRef} className="mp-view" data-lens={lens}>
+      <h1 className="at-sr">Memory map</h1>
       {ready ? (
         <div
           className="mp-map"

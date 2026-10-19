@@ -38,7 +38,7 @@
 .in-stale {
   margin: 0 0 var(--s-3);
   font-size: 13px;
-  color: var(--fault);
+  color: var(--fault-text);
 }
 
 /* ─── Figures ────────────────────────────────────────────────────────────── */
@@ -624,4 +624,25 @@
   .in-toggle {
     margin-left: auto;
   }
+}
+
+/* Six hours per line keeps touch cells legible without horizontal scrolling.
+ * Each semantic row still contains all 24 hours of one day. */
+@media (max-width: 720px) {
+  .in-heat-grid { width: 100%; }
+  .in-heat-grid [role="row"] {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(44px, 1fr));
+  }
+  .in-heat-grid [role="gridcell"] {
+    width: 100%;
+    height: 44px;
+    font-size: 12px;
+  }
+  .in-heat-grid [role="gridcell"]::before {
+    content: attr(data-hour);
+    font-size: 10px;
+  }
+  .in-heat-days span { height: 185px; align-items: flex-start; padding-top: 4px; }
+  .in-heat-ticks { display: none; }
 }

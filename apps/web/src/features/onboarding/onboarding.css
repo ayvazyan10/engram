@@ -313,7 +313,8 @@
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.6;
-  /* Wraps at spaces only, so a flag never parts from its value mid-token. */
+  /* Long paths and keys must fit the phone as well as prose. */
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   overflow-x: auto;
 }
@@ -321,7 +322,7 @@
 .wc-alert {
   margin: var(--s-2) 0 0;
   font-size: 13px;
-  color: var(--fault);
+  color: var(--fault-text);
 }
 
 .wc-facts {

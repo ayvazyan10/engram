@@ -118,7 +118,11 @@ export default function RecallView({ onStore }: { onStore: () => void }) {
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
     if (event.altKey || event.ctrlKey || event.metaKey || target.closest('input, select, textarea, [contenteditable="true"]')) return;
-    if (event.key === 'c') {
+    if (target.closest('.rc-map') && ['+', '=', '-', '0'].includes(event.key)) {
+      event.preventDefault();
+      if (event.key === '0') canvas.current?.fit();
+      else canvas.current?.zoomBy(event.key === '-' ? 1 / 1.5 : 1.5);
+    } else if (event.key === 'c') {
       event.preventDefault();
       void copy();
     } else if ((event.key === 'j' || event.key === 'k') && included.length) {
@@ -198,7 +202,7 @@ export default function RecallView({ onStore }: { onStore: () => void }) {
         <div className="rc-toolbar">
           <div role="tablist" aria-label="Recall display">
             {(['route', 'exact'] as const).map((name) => <button key={name} type="button" role="tab" id={`rc-tab-${name}`}
-              aria-controls={`rc-${name}`} aria-selected={tab === name} tabIndex={tab === name ? 0 : -1}
+              aria-controls="rc-panel" aria-selected={tab === name} tabIndex={tab === name ? 0 : -1}
               onClick={() => setTab(name)} onKeyDown={(event) => {
                 if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
                 event.preventDefault();
@@ -211,7 +215,7 @@ export default function RecallView({ onStore }: { onStore: () => void }) {
         </div>
         {copied === 'failed' && <p role="alert" className="rc-copy-note">The browser blocked the clipboard. Select the exact text below and copy it.</p>}
         {copied === 'copied' && <span role="status" className="at-sr">Exact context copied.</span>}
-        <div ref={panel} className="rc-body" role="tabpanel" id={`rc-${tab}`} aria-labelledby={`rc-tab-${tab}`} tabIndex={0}>
+        <div ref={panel} className="rc-body" role="tabpanel" id="rc-panel" aria-labelledby={`rc-tab-${tab}`} tabIndex={0}>
           {answer.status === 'idle' && <div className="rc-empty"><h2>Ask a question. Follow the context.</h2><p>Enter something your AI might be asked to see which memories it would receive.</p></div>}
           {answer.status === 'loading' && <p role="status">Finding the memories your AI would receive…</p>}
           {answer.status === 'error' && <div role="alert"><p>Recall failed: {answer.message}</p><button className="at-btn sec" onClick={() => setAttempt((n) => n + 1)}>Try again</button></div>}
@@ -240,8 +244,8 @@ export default function RecallView({ onStore }: { onStore: () => void }) {
               onMouseEnter={() => setHover(part.id)} onMouseLeave={() => setHover(null)}>{part.text}</span>
           ))}</pre>}
         </div>
-        <p id="rc-keys" className="rc-keys">j / k step through included memories · Enter opens · c copies</p>
-        <p className="at-sr" aria-live="polite">{focusId ? excerpts.get(focusId) : ''}</p>
+        <p id="rc-keys" className="rc-keys">j / k step through included memories · Enter opens · c copies · + / − zoom the map · 0 fits</p>
+        <p className="at-sr" aria-live="polite">{focusId ? excerpts.get(focusId)?.slice(0, 80) : ''}</p>
       </section>
     </div>
   );

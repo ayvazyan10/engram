@@ -76,6 +76,7 @@
 }
 
 .rc-head {
+  flex: none;
   padding: var(--s-5);
 }
 
@@ -178,6 +179,7 @@
 }
 
 .rc-toolbar {
+  flex: none;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -294,7 +296,7 @@
   display: block;
   margin-top: var(--s-1);
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -321,16 +323,17 @@
 .rc-copy-note {
   margin: 0;
   padding: var(--s-3) var(--s-5);
-  color: var(--fault);
+  color: var(--fault-text);
   font-size: 13px;
 }
 
 .rc-keys {
+  flex: none;
   margin: 0;
   padding: var(--s-3) var(--s-5);
   border-top: 1px solid var(--rule);
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 @media (max-width: 900px) {
@@ -340,13 +343,13 @@
   }
 
   .rc-map {
-    height: 38vh;
-    min-height: 260px;
+    height: 38dvh;
+    min-height: 320px;
   }
 
   .rc-sheet {
     width: 100%;
-    min-height: 62vh;
+    display: block;
     border-left: 0;
     border-top: 1px solid var(--rule);
   }
@@ -362,4 +365,8 @@
     font-size: 13px;
   }
 
+}
+
+@media (max-width: 720px) {
+  .rc-span { display: inline-block; min-width: 44px; min-height: 44px; }
 }

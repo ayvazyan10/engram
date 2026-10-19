@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import StoreMemoryModal from '../StoreMemoryModal.js';
+import ModalShell from '../ModalShell.js';
 import { api } from '../../../lib/api.js';
 
 vi.mock('../../../lib/api.js', () => ({ api: { storeMemory: vi.fn() } }));
@@ -151,4 +152,21 @@ describe('StoreMemoryModal keyboard submit', () => {
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true });
     await waitFor(() => expect(api.storeMemory).toHaveBeenCalledTimes(2));
   });
+});
+
+
+it('moves focus into a dialog without autofocus, recovers escaped focus, and returns to its opener', () => {
+  const opener = document.createElement('button');
+  document.body.append(opener);
+  opener.focus();
+  const { unmount } = render(<ModalShell title="Confirm" onClose={vi.fn()}><button disabled>Unavailable</button><button>Continue</button></ModalShell>);
+  expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  opener.focus();
+  fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+  expect(screen.getByRole('button', { name: 'Continue' })).toHaveFocus();
+  fireEvent.keyDown(document, { key: 'Tab' });
+  expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+  unmount();
+  expect(opener).toHaveFocus();
+  opener.remove();
 });

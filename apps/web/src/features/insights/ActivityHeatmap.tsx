@@ -114,6 +114,7 @@ export default function ActivityHeatmap({ data }: { data: readonly HourlyActivit
                       key={hour}
                       role="gridcell"
                       data-cell={index}
+                      data-hour={hourLabel(hour)}
                       data-step={step + 1}
                       tabIndex={index === active ? 0 : -1}
                       aria-label={cellLabel(cell)}
@@ -142,7 +143,7 @@ export default function ActivityHeatmap({ data }: { data: readonly HourlyActivit
       </div>
 
       <div className="in-heat-foot">
-        <p aria-live="polite">
+        <p>
           {reading ? '' : 'Busiest: '}
           {DAY_NAMES[shown.dow]} {hourLabel(shown.hour)}, <b>{shown.count}</b> {shown.count === 1 ? 'memory' : 'memories'}
         </p>

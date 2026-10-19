@@ -717,7 +717,7 @@
 
 .rv-btn.danger {
   background: var(--fault);
-  color: #fff;
+  color: #0B1618;
 }
 
 .rv-col .rv-btn {
@@ -838,7 +838,11 @@
   }
 
   .rv-title {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .rv-title-row {
@@ -847,6 +851,7 @@
 
   .rv-queues {
     flex-direction: row;
+    flex-wrap: wrap;
     gap: var(--s-2);
     margin: 0 calc(-1 * var(--s-4));
     padding: 2px var(--s-4) 4px;
@@ -921,4 +926,9 @@
     top: auto;
     bottom: var(--s-2);
   }
+}
+
+@media (max-width: 720px) {
+  .rv-item { grid-template-columns: 48px minmax(0, 1fr); }
+  .rv-check { width: 44px; height: 44px; margin-top: 4px; }
 }

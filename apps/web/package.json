@@ -12,7 +12,8 @@
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "check:bundle": "node scripts/check-bundle.mjs"
   },
   "dependencies": {
     "cmdk": "1.1.1",

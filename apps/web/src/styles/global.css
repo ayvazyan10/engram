@@ -137,6 +137,8 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
  * including dialog fields and buttons. Component styles leave the outline
  * available so keyboard focus remains visible.
  */
+a[href]:focus-visible,
+summary:focus-visible,
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
@@ -265,5 +267,23 @@ select:focus-visible,
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Phone controls share a minimum target, including dialogs outside the shell.
+ * :is gives these rules enough specificity to override compact desktop sizes. */
+@media (max-width: 720px) {
+  #root :is(button, select, input:not([type="radio"]):not([type="checkbox"]), .at-nav, .at-opt, .at-tabs a, .rv-queues a, .at-seg-opt) {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  #root :is(input:not([type="radio"]):not([type="checkbox"]), select, textarea) {
+    font-size: 16px;
+  }
+
+  #root :is(.at-tabs a, .rv-queues a) {
+    display: inline-flex;
+    align-items: center;
   }
 }

@@ -11,7 +11,7 @@ import { useMemoryStore } from '../../../store/memoryStore.js';
 import { useNeuralStore } from '../../../store/neuralStore.js';
 import type { RouteStop } from '../routeLayout.js';
 
-const camera = { reveal: vi.fn(), fit: vi.fn() };
+const camera = { reveal: vi.fn(), fit: vi.fn(), zoomBy: vi.fn() };
 let drawn: Record<string, unknown> = {};
 vi.mock('../../map/MapCanvas.js', () => ({ default: (props: Record<string, unknown> & { ref?: unknown }) => {
   drawn = props;
@@ -43,7 +43,7 @@ function go(hash: string) {
 }
 beforeEach(() => {
   drawn = {};
-  camera.reveal.mockReset(); camera.fit.mockReset(); onStore.mockReset();
+  camera.zoomBy.mockReset(); camera.reveal.mockReset(); camera.fit.mockReset(); onStore.mockReset();
   go('#/recall?q=deploy');
   const p = payload();
   useMapStore.setState({ status: 'ready', model: buildModel(p), payload: p, scopeKey: '*', error: null, focusId: null, hoverId: null });
@@ -218,4 +218,23 @@ describe('Recall view', () => {
     act(() => useMapStore.setState({ status: 'ready' }));
     expect(screen.getByText('No memories charted yet.')).toBeInTheDocument();
   });
+});
+
+
+it('zooms the Recall map by keyboard without intercepting form input, and limits announcements', async () => {
+  const data = explanation();
+  data.context = 'x'.repeat(300);
+  data.items = [{ ...base, offset: 0, chars: 300 }];
+  vi.mocked(api.explainRecall).mockResolvedValue(data);
+  const { container } = render(<RecallView onStore={onStore} />);
+  await screen.findByRole('button', { name: /3 xxx/ });
+  fireEvent.keyDown(map(), { key: '+' });
+  fireEvent.keyDown(map(), { key: '-' });
+  fireEvent.keyDown(map(), { key: '0' });
+  expect(camera.zoomBy.mock.calls).toEqual([[1.5], [1 / 1.5]]);
+  expect(camera.fit).toHaveBeenCalledOnce();
+  fireEvent.keyDown(screen.getByLabelText('Question for recall'), { key: '+' });
+  expect(camera.zoomBy).toHaveBeenCalledTimes(2);
+  fireEvent.focus(row(/xxx/));
+  expect(container.querySelector('[aria-live="polite"]')?.textContent).toHaveLength(80);
 });

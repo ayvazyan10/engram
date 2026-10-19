@@ -595,7 +595,7 @@
 }
 
 .mm-foot p[data-tone="fault"] {
-  color: var(--fault);
+  color: var(--fault-text);
 }
 
 /* Edit. */
@@ -682,6 +682,8 @@
 }
 
 @media (max-width: 720px) {
+  .mm-head { padding-top: calc(14px + env(safe-area-inset-top)); }
+
   /* A phone gets the whole screen for one memory. */
   .mm-sheet {
     left: 0;
@@ -732,5 +734,19 @@
 @media (prefers-reduced-motion: reduce) {
   .mm-skel {
     animation: none;
+  }
+}
+
+.mm-mode {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .mm-tag {
+    height: auto;
+    min-height: 46px;
   }
 }

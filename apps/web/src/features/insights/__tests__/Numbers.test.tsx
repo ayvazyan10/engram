@@ -146,7 +146,8 @@ describe('ActivityHeatmap', () => {
 
   it('reads out the busiest hour, and any cell reached by the arrow keys', () => {
     render(<ActivityHeatmap data={[{ hour: 9, dayOfWeek: 1, count: 5 }, { hour: 30, dayOfWeek: 1, count: 1 }]} />);
-    const readout = () => document.querySelector('[aria-live="polite"]');
+    const readout = () => document.querySelector('.in-heat-foot p');
+    expect(readout()).not.toHaveAttribute('aria-live');
     expect(readout()).toHaveTextContent('Busiest: Monday 09:00, 5 memories');
     const first = screen.getByRole('gridcell', { name: 'Sunday 00:00, 0 memories' });
     expect(first).toHaveAttribute('tabindex', '0');

@@ -377,3 +377,19 @@ describe('MemorySheet: contradictions', () => {
     expect(useMemoryStore.getState().hiddenIds.size).toBe(0);
   });
 });
+
+it('connects the Read/Edit tabs to their panel and supports keyboard navigation', async () => {
+  renderSheet();
+  open();
+  const read = await screen.findByRole('tab', { name: 'Read' });
+  const edit = screen.getByRole('tab', { name: 'Edit' });
+  expect(read).toHaveAttribute('tabindex', '0');
+  expect(edit).toHaveAttribute('tabindex', '-1');
+  expect(document.getElementById(read.getAttribute('aria-controls')!)).toBe(screen.getByRole('tabpanel', { name: 'Read' }));
+  fireEvent.keyDown(read, { key: 'End' });
+  expect(edit).toHaveFocus();
+  fireEvent.keyDown(edit, { key: 'Home' });
+  expect(read).toHaveFocus();
+  fireEvent.click(edit);
+  expect(screen.getByRole('tabpanel', { name: 'Edit' })).toHaveAttribute('id', edit.getAttribute('aria-controls'));
+});

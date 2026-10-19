@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import './ui.css';
 
-const FOCUSABLE_SELECTOR = 'button:not(:disabled), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE_SELECTOR = 'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 interface Props {
   title: string;
@@ -19,6 +19,15 @@ export default function ModalShell({ title, onClose, children, footer, width = '
   const dialogRef = useRef<HTMLDivElement>(null);
   const overlayMouseDownRef = useRef(false);
   const titleId = useId();
+  // Capture before children's autoFocus runs during mount.
+  const opener = useRef(document.activeElement as HTMLElement | null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current!;
+    if (!dialog.contains(document.activeElement)) dialog.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus();
+    const back = opener.current;
+    return () => { if (back?.isConnected) back.focus(); };
+  }, []);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -33,7 +42,10 @@ export default function ModalShell({ title, onClose, children, footer, width = '
       if (focusables.length === 0) return;
       const first = focusables[0]!;
       const last = focusables[focusables.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) {
+      if (!dialogRef.current.contains(document.activeElement)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last.focus();
       } else if (!e.shiftKey && document.activeElement === last) {

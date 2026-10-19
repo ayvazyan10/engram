@@ -142,7 +142,7 @@
   padding: 0 4px;
   border-radius: 8px;
   background: var(--fault);
-  color: #fff;
+  color: #0B1618;
   font-size: 10.5px;
   font-weight: 700;
   font-stretch: 75%;
@@ -210,6 +210,11 @@
   min-height: 0;
   position: relative;
   overflow: hidden;
+}
+
+/* Route announcements focus the main container, including after keyboard navigation. */
+.at-shell .at-main[tabindex="-1"]:focus {
+  outline: none;
 }
 
 .at-scroll {
@@ -567,7 +572,7 @@ button.at-scope:hover,
 
 .at-btn.danger {
   background: transparent;
-  color: var(--fault);
+  color: var(--fault-text);
   border-color: color-mix(in srgb, var(--fault) 45%, transparent);
 }
 
@@ -813,6 +818,7 @@ button.at-scope:hover,
 @media (max-width: 720px) {
   .at-shell {
     grid-template-columns: minmax(0, 1fr);
+    padding-top: env(safe-area-inset-top);
     padding-bottom: calc(66px + env(safe-area-inset-bottom));
   }
 
@@ -891,7 +897,7 @@ button.at-scope:hover,
   }
 
   .at-pal-scrim {
-    padding-top: var(--s-4);
+    padding-top: calc(var(--s-4) + env(safe-area-inset-top));
   }
 
   /* No keyboard to press them with. */

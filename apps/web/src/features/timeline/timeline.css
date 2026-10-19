@@ -217,7 +217,7 @@
 
 .tl-note p {
   margin: 0 0 var(--s-3);
-  color: var(--fault);
+  color: var(--fault-text);
 }
 
 .tl-more,
@@ -269,7 +269,11 @@
   }
 
   .tl-head .at-display {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
 
   .tl-jump {
@@ -277,6 +281,7 @@
   }
 
   .tl-jump input {
+    min-width: 0;
     flex: 1;
   }
 

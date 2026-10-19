@@ -382,9 +382,12 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
             <button
               type="button"
               role="tab"
+              id={`${titleId}-read`}
+              aria-controls={`${titleId}-panel`}
+              tabIndex={mode === 'read' ? 0 : -1}
               aria-selected={mode === 'read'}
               onClick={() => setMode('read')}
-              onKeyDown={(e) => e.key === 'ArrowRight' && editTabRef.current?.focus()}
+              onKeyDown={(e) => { if (['ArrowRight', 'ArrowLeft', 'End'].includes(e.key)) { e.preventDefault(); editTabRef.current?.focus(); } }}
             >
               Read
             </button>
@@ -392,9 +395,12 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
               ref={editTabRef}
               type="button"
               role="tab"
+              id={`${titleId}-edit`}
+              aria-controls={`${titleId}-panel`}
+              tabIndex={mode === 'edit' ? 0 : -1}
               aria-selected={mode === 'edit'}
               onClick={() => setMode('edit')}
-              onKeyDown={(e) => e.key === 'ArrowLeft' && (e.currentTarget.previousElementSibling as HTMLElement | null)?.focus()}
+              onKeyDown={(e) => { if (['ArrowLeft', 'ArrowRight', 'Home'].includes(e.key)) { e.preventDefault(); (e.currentTarget.previousElementSibling as HTMLElement | null)?.focus(); } }}
             >
               Edit
             </button>
@@ -402,6 +408,8 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
         )}
       </header>
 
+      <div className="mm-mode" id={`${titleId}-panel`} role={memory ? 'tabpanel' : undefined}
+        aria-labelledby={memory ? `${titleId}-${mode}` : undefined}>
       {!memory ? (
         <div className="mm-body">
           {current.status === 'loading' ? (
@@ -569,6 +577,7 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }
