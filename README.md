@@ -108,6 +108,8 @@ CLI            ──direct───────→ ┘
 
 ### One-command install
 
+For Claude Code, choose the [recommended plugin](docs/INTEGRATIONS.md#claude-code-plugin-recommended) OR `engram setup` for MCP and hooks, never both.
+
 ```bash
 # Memory for your AI client — npx-based MCP config, no clone/build
 npx -y @engram-ai-memory/cli setup --npx

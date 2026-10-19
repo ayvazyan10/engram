@@ -152,6 +152,7 @@ describe('configureMcpClient', () => {
     expect(written.mcpServers.engram).toEqual(server);
     expect(skipped).toEqual([]);
     expect(output()).toContain(path.join(home, '.cursor', 'mcp.json'));
+    expect(output()).not.toContain('/plugin');
   });
 
   it('registers Claude Code at user scope, not in a project-scope file', () => {
@@ -161,9 +162,41 @@ describe('configureMcpClient', () => {
     expect(JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).mcpServers.engram).toEqual(server);
     // ~/.mcp.json is the file setup used to write and nothing reads.
     expect(fs.existsSync(path.join(home, '.mcp.json'))).toBe(false);
-    expect(output()).toContain('Claude Code plugin (recommended)');
+    expect(output()).toContain('Prefer the Claude Code plugin instead (do not use both):');
     expect(output()).toContain('/plugin marketplace add ayvazyan10/engram');
     expect(output()).toContain('/plugin install engram@engram');
+  });
+
+  it.each(['claude-code', 'claude', 'claudecode'])('leaves %s MCP to an enabled plugin', (source) => {
+    const home = tempDir('home');
+    const settings = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settings));
+    const before = JSON.stringify({ enabledPlugins: { 'engram@engram': true } });
+    fs.writeFileSync(settings, before);
+    const skipped: string[] = [];
+
+    configureMcpClient(source, server, home, skipped);
+
+    expect(fs.existsSync(path.join(home, '.claude.json'))).toBe(false);
+    expect(fs.readFileSync(settings, 'utf8')).toBe(before);
+    expect(skipped).toEqual([]);
+    expect(output()).toContain('Engram plugin is active — setup leaves Claude Code MCP and hooks to it.');
+    expect(output()).not.toContain('/plugin install');
+  });
+
+  it('reports malformed Claude settings before registering MCP', () => {
+    const home = tempDir('home');
+    const settings = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settings));
+    fs.writeFileSync(settings, '{ broken');
+    const skipped: string[] = [];
+
+    configureMcpClient('claude-code', server, home, skipped);
+
+    expect(fs.existsSync(path.join(home, '.claude.json'))).toBe(false);
+    expect(fs.readFileSync(settings, 'utf8')).toBe('{ broken');
+    expect(skipped).toHaveLength(1);
+    expect(output()).toContain('Claude Code plugin check skipped');
   });
 
   it('keeps other servers already registered with that client', () => {
@@ -239,10 +272,13 @@ describe('setupClaudeCode', () => {
     expect(output()).toMatch(/not detected/i);
   });
 
-  it('registers the server at user scope and installs both hooks', () => {
+  it.each([undefined, false, 'true'])('registers MCP and both hooks when plugin enabled is %s', (enabled) => {
     const home = tempDir('home');
     const paths = claudePathsIn(home);
     fs.mkdirSync(paths.dir, { recursive: true });
+    if (enabled !== undefined) {
+      fs.writeFileSync(paths.settings, JSON.stringify({ enabledPlugins: { 'engram@engram': enabled } }));
+    }
     const hooksDir = path.join(home, '.engram', 'hooks');
     const config = { ...defaultConfig(path.join(home, '.engram')), repoPath: repoWithTemplates(), port: 4901 };
     const server = { command: 'node', args: ['/repo/packages/mcp/dist/server.js'] };
@@ -250,6 +286,7 @@ describe('setupClaudeCode', () => {
     setupClaudeCode(config, server, true, hooksDir, paths, []);
 
     expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toEqual(server);
+    expect(output().match(/\/plugin install engram@engram/g)).toHaveLength(1);
 
     const settings = JSON.parse(fs.readFileSync(paths.settings, 'utf8'));
     const commands = Object.values(settings.hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>)
@@ -263,6 +300,45 @@ describe('setupClaudeCode', () => {
       expect(fs.readFileSync(script, 'utf8')).not.toContain('__API_BASE__');
       expect(fs.readFileSync(script, 'utf8')).toContain('http://localhost:4901');
     }
+  });
+
+  it.each([true, false])('leaves MCP and hooks untouched for an enabled plugin (withHooks=%s)', (withHooks) => {
+    const home = tempDir('home');
+    const paths = claudePathsIn(home);
+    fs.mkdirSync(paths.dir);
+    const settings = JSON.stringify({ enabledPlugins: { 'engram@engram': true }, permissions: { allow: [] } });
+    const userJson = JSON.stringify({ mcpServers: { other: { command: 'other' } }, userID: 'keep' });
+    fs.writeFileSync(paths.settings, settings);
+    fs.writeFileSync(paths.userJson, userJson);
+    const hooksDir = path.join(home, '.engram', 'hooks');
+    const skipped: string[] = [];
+
+    setupClaudeCode(defaultConfig(home), { command: 'node' }, withHooks, hooksDir, paths, skipped);
+
+    expect(fs.readFileSync(paths.userJson, 'utf8')).toBe(userJson);
+    expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toBeUndefined();
+    expect(fs.readFileSync(paths.settings, 'utf8')).toBe(settings);
+    expect(fs.existsSync(hooksDir)).toBe(false);
+    expect(skipped).toEqual([]);
+    expect(output()).toContain('Engram plugin is active — setup leaves Claude Code MCP and hooks to it.');
+    expect(output()).not.toContain('/plugin install');
+  });
+
+  it('reports malformed settings without writing MCP or hooks', () => {
+    const home = tempDir('home');
+    const paths = claudePathsIn(home);
+    fs.mkdirSync(paths.dir);
+    fs.writeFileSync(paths.settings, '{ broken');
+    const hooksDir = path.join(home, 'hooks');
+    const skipped: string[] = [];
+
+    setupClaudeCode(defaultConfig(home), {}, true, hooksDir, paths, skipped);
+
+    expect(fs.readFileSync(paths.settings, 'utf8')).toBe('{ broken');
+    expect(fs.existsSync(paths.userJson)).toBe(false);
+    expect(fs.existsSync(hooksDir)).toBe(false);
+    expect(skipped).toHaveLength(1);
+    expect(output()).toContain('Claude Code plugin check skipped');
   });
 
   it('registers the MCP server but no hooks in npx mode', () => {
@@ -313,4 +389,52 @@ describe('CLAUDE_PATHS', () => {
     expect(CLAUDE_PATHS.userJson).toBe(path.join(os.homedir(), '.claude.json'));
     expect(CLAUDE_PATHS.settings).toBe(path.join(os.homedir(), '.claude', 'settings.json'));
   });
+});
+
+describe('setup command', () => {
+  it.each([
+    ['claude-code', [], true, false, 1],
+    ['claude', [], true, false, 1],
+    ['claude-code', ['--no-claude-hooks'], true, false, 1],
+    ['claude-code', [], false, false, 1],
+    ['mcp-client', [], true, false, 1],
+    ['cursor', ['--no-claude-hooks'], true, false, 0],
+    ['claude-code', [], true, true, 0],
+  ] as const)('prints plugin advice once only for Claude: %s %j, detected=%s, plugin=%s',
+    (source, flags, detected, enabled, adviceCount) => {
+      const home = tempDir('home');
+      const claudeDir = path.join(home, '.claude');
+      if (detected) fs.mkdirSync(claudeDir);
+      if (enabled) fs.writeFileSync(path.join(claudeDir, 'settings.json'),
+        JSON.stringify({ enabledPlugins: { 'engram@engram': true } }));
+
+      // File-backed output also works in sandboxes that restrict child pipes.
+      const logPath = path.join(home, 'setup.log');
+      const logFd = fs.openSync(logPath, 'w');
+      let result;
+      try {
+        result = spawnSync(process.execPath, [
+          '--import', 'tsx', path.join(__dirname, '..', 'cli.ts'),
+          'setup', '--npx', '--source', source, ...flags,
+        ], {
+          env: { ...process.env, HOME: home, USERPROFILE: home, ENGRAM_HOME: path.join(home, '.engram') },
+          stdio: ['ignore', logFd, logFd],
+          timeout: 20000,
+        });
+      } finally {
+        fs.closeSync(logFd);
+      }
+      const stdout = fs.readFileSync(logPath, 'utf8');
+
+      expect(result.error).toBeUndefined();
+      expect(result.status, stdout).toBe(0);
+      expect(stdout.match(/\/plugin install engram@engram/g) ?? []).toHaveLength(adviceCount);
+      // A second write would create a backup of the freshly registered MCP config.
+      expect(fs.readdirSync(home).filter((file) => file.endsWith('.bak'))).toEqual([]);
+      expect(stdout).toContain('Engram installed');
+      if (enabled) {
+        expect(fs.existsSync(path.join(home, '.claude.json'))).toBe(false);
+        expect(stdout.match(/Engram plugin is active/g)).toHaveLength(1);
+      }
+    });
 });

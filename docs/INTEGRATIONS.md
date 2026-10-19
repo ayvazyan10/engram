@@ -72,6 +72,8 @@ Example client configuration (replace the key placeholder with your configured k
 
 ### Claude Code plugin (recommended)
 
+Choose the plugin OR `engram setup` for Claude Code MCP and hooks, never both; setup leaves those integrations to an already enabled Engram plugin.
+
 Run these commands in Claude Code:
 
 ```text
@@ -87,7 +89,7 @@ The MCP server exposes Engram as native tools inside any MCP-compatible AI clien
 
 **Option A — npx (fastest, recommended)**
 
-Add to the config file your client reads:
+If you are not using the Claude Code plugin, add to the config file your client reads:
 
 | Client | Config file |
 |---|---|

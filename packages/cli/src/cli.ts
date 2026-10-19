@@ -285,7 +285,12 @@ program
     // so rather than reporting a success that did not happen.
     const skipped: string[] = [];
 
-    if (opts.mcp !== false) {
+    // Auto-memory below owns Claude's MCP registration when it runs, avoiding
+    // a second write and a second plugin notice for --source claude-code.
+    const claudeMcpHandledByHooks = opts.claudeHooks !== false
+      && fs.existsSync(CLAUDE_PATHS.dir)
+      && resolveMcpClient(opts.source, os.homedir()).id === 'claude-code';
+    if (opts.mcp !== false && !claudeMcpHandledByHooks) {
       step('Configuring MCP integration...');
       configureMcpClient(opts.source, engramServer, os.homedir(), skipped);
     }

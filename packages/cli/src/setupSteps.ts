@@ -18,7 +18,7 @@ import { spawnSync } from 'child_process';
 import { buildStatus, serializeBuildStamp } from './buildState.js';
 import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
-  updateJsonConfig, installHookScript, registerHook,
+  readJson, updateJsonConfig, installHookScript, registerHook,
 } from './claudeSetup.js';
 import { resolveMcpClient, manualSnippet, supportedClientList } from './mcpClients.js';
 import { setupRequirements, unmet } from './preflight.js';
@@ -117,6 +117,23 @@ export function currentBuildStatus(repoPath: string, stampPath: string): ReturnT
 
 // ─── MCP client registration ─────────────────────────────────────────────────
 
+/** Both Claude setup paths must leave MCP and hooks to an enabled plugin. */
+function shouldConfigureClaudeCode(settings: string, skipped: string[]): boolean {
+  try {
+    if (readJson(settings).enabledPlugins?.['engram@engram'] === true) {
+      ok('Engram plugin is active — setup leaves Claude Code MCP and hooks to it.');
+      return false;
+    }
+  } catch (err) {
+    reportConfigRefusal(err, 'Claude Code plugin check', skipped);
+    return false;
+  }
+  console.log('  Prefer the Claude Code plugin instead (do not use both):');
+  console.log('  /plugin marketplace add ayvazyan10/engram');
+  console.log('  /plugin install engram@engram');
+  return true;
+}
+
 /**
  * Register the server where the named client actually reads it.
  *
@@ -133,11 +150,8 @@ export function configureMcpClient(
 ): void {
   const target = resolveMcpClient(source, home);
 
-  if (target.id === 'claude-code') {
-    console.log('  Claude Code plugin (recommended):');
-    console.log('  /plugin marketplace add ayvazyan10/engram');
-    console.log('  /plugin install engram@engram');
-  }
+  if (target.id === 'claude-code'
+    && !shouldConfigureClaudeCode(path.join(home, '.claude', 'settings.json'), skipped)) return;
 
   if (target.kind === 'manual') {
     warn(`No MCP config file is known for --source ${source} — nothing was registered.`);
@@ -197,6 +211,7 @@ export function setupClaudeCode(
     warn('Claude Code not detected (~/.claude absent) — skipping auto-memory');
     return;
   }
+  if (!shouldConfigureClaudeCode(paths.settings, skipped)) return;
   try {
     reportBackup(updateJsonConfig(paths.userJson, (current) => ({
       ...current,

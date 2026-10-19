@@ -32,7 +32,7 @@ SUMMARY="${SUMMARY:0:1500}"
 curl -s --max-time 5 -X POST "${ENGRAM_API}/api/memory" \
   -H "Content-Type: application/json" \
   -d "$(jq -n --arg c "Claude Code session ${SESSION_ID:-unknown}: ${SUMMARY}" \
-        '{content:$c, type:"episodic", source:"claude-code", importance:0.6, tags:["session","auto-stored"]}')" \
+        '{content:$c, type:"episodic", source:"claude-code", importance:0.6, tags:["session","session-summary","auto-stored","pending-distill"]}')" \
   >/dev/null 2>&1 || true
 
 exit 0

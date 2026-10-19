@@ -89,6 +89,8 @@ Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-m
 
 ### Fixed
 
+- **`@engram-ai-memory/cli`** — `engram setup` presents the Claude Code plugin as an alternative and skips MCP and hook registration when it is enabled, preventing duplicate tools, session storage and recall. Claude Code registration and plugin advice run once per setup; setup's session-end hook now tags summaries for distillation while preserving the existing `session` tag.
+
 - **`@engram-ai-memory/core`** — A `filter`/`project` client could forget, update, tag or resolve contradictions on another namespace's memories after finding them with `crossNamespace`. Mutations now resolve ids only within its own namespace plus global memories.
 
 - **`@engram-ai-memory/core`** — Local writes no longer hide unseen commits from another process, so a memory stored through MCP remains searchable through the server without a restart.
