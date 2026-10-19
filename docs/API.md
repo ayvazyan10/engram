@@ -57,8 +57,8 @@ Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback
 | Tier | Default limit | Applies to |
 |---|---|---|
 | `global` | 1000 / 60s | Every `/api/*` request |
-| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, and `GET /api/recall/stream`. `GET /api/memory` is a plain list and stays global-only |
-| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild` |
+| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, `GET /api/recall/stream`, and `POST /api/memory/:id/redact`. `GET /api/memory` is a plain list and stays global-only |
+| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild`, and all `GET`/`HEAD /api/review/*` reads |
 
 Window and limits are configurable — see [CONFIGURATION.md](CONFIGURATION.md#security). Set a tier's limit to `0` to disable it, or `ENGRAM_RATE_LIMIT_DISABLED=true` to turn the limiter off entirely.
 
@@ -415,6 +415,10 @@ List memories with optional filters.
 |---|---|---|
 | `type` | `episodic` \| `semantic` \| `procedural` | Filter by type |
 | `source` | string | Filter by source |
+| `namespace` | string | Exact namespace; intersects the brain's configured scope |
+| `global` | `true` | Only memories with a null namespace; intersects `namespace` |
+| `before` | ISO date-time | Exclusive `createdAt < before`; timezone offsets normalize to UTC |
+| `tag` | string | Exact tag membership (case-sensitive) |
 | `limit` | integer 1–200 | Default: 50 |
 | `offset` | integer >= 0 | Default: 0 |
 
@@ -856,23 +860,31 @@ All fields are optional; only provided fields are updated.
 
 ### `GET /api/contradictions`
 
-List all unresolved contradictions.
+List live unresolved contradiction edges with both memories in scope, ordered by edge ID.
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `limit` | integer 1–1000 | Default: 200 |
+| `offset` | integer >= 0 | Default: 0 |
+| `namespace` | string | Exact namespace for both ends, intersected with the brain's scope |
+| `global` | `true` | Both ends must have a null namespace |
+
+Unknown/repeated query parameters or invalid bounds return 400. Archived memories and tombstoned edges are excluded. `count` is this page's length; `total` is the SQL count before pagination.
 
 **Response `200`**
 ```json
 {
-  "count": 3,
-  "contradictions": [
-    {
-      "id": "contra-uuid",
-      "memoryA": "uuid-1",
-      "memoryB": "uuid-2",
-      "confidence": 0.85,
-      "explanation": "Memory A says user prefers dark mode; Memory B says user prefers light mode",
-      "detectedAt": "2026-03-24T14:30:00.000Z",
-      "resolved": false
-    }
-  ]
+  "count": 1,
+  "total": 3,
+  "contradictions": [{
+    "edgeId": "edge-uuid",
+    "confidence": 0.85,
+    "metadata": {},
+    "source": { "id": "uuid-1", "content": "First fact", "type": "semantic", "importance": 0.7, "createdAt": "2026-03-24T14:30:00.000Z" },
+    "target": { "id": "uuid-2", "content": "Second fact", "type": "semantic", "importance": 0.7, "createdAt": "2026-03-24T14:31:00.000Z" }
+  }]
 }
 ```
 
@@ -1411,6 +1423,122 @@ Get details for a specific plugin.
 Unregister a plugin.
 
 **Response `204`** — no body.
+
+---
+
+## Atlas Review
+
+All Review reads honour `namespace` and `global=true` exactly as the memory list, intersected with the brain's namespace visibility. Pair queues require **both** ends in scope. Archived memories and tombstoned edges are excluded. These endpoints use the existing authentication; all Review GET/HEAD requests consume the `whole-store` and `global` rate tiers because reads share a whole-store scan. Dismiss uses `global`; redact uses `heavy` and `global`. Normal 401/429 responses apply.
+
+### `GET /api/review/summary`
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `namespace` | string | Exact project namespace |
+| `global` | `true` | Only null-namespace memories |
+
+**Response `200`**
+```json
+{ "contradictions": 4, "duplicates": 3, "fading": 2, "secrets": 1, "fingerprint": "sha256-hex" }
+```
+
+Counts exclude dismissals. `secrets` counts memories, not individual findings. The fingerprint covers visible memory data, edges, dismissals, and decay eligibility. The app caches the most recently requested snapshot by this fingerprint; current retention is refreshed on reads.
+
+### `GET /api/review/:queue`
+
+`queue` is `contradictions`, `duplicates`, `fading`, or `secrets`; other values return 404.
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `namespace` | string | Exact project namespace |
+| `global` | `true` | Only null-namespace memories |
+| `limit` | integer 1–200 | Default: 50 |
+| `offset` | integer >= 0 | Default: 0 |
+
+**Response `200`**: `{ total: number, items: (PairItem | SingleItem)[] }`. `total` is before pagination, after scope and dismissal filters; an offset past the end returns an empty `items` array. Unknown/repeated query keys or invalid values return 400 on both read endpoints.
+
+```typescript
+type MemoryLite = {
+  id: string;
+  type: 'episodic' | 'semantic' | 'procedural';
+  content: string; concept: string | null; summary: string | null;
+  importance: number; createdAt: string;
+};
+type PairItem = {
+  kind: 'pair'; a: MemoryLite; b: MemoryLite;
+  edgeId: string; strength: number; sharedWordRatio: number;
+};
+type SingleItem = {
+  kind: 'single'; memory: MemoryLite; retention: number;
+  reason: 'fading-but-important' | 'possible-secret';
+  findings?: {
+    rule: string; field: 'content' | 'concept' | 'summary';
+    start: number; end: number; length: number; preview: string;
+  }[];
+};
+```
+
+- `contradictions`: unresolved `contradicts` edges, ordered by edge ID.
+- `duplicates`: existing live `relates_to` edges with strength >= 0.95, ordered by edge ID; no new similarity computation. `sharedWordRatio` is the intersection/union of lowercase word sets in the masked content (0 for empty sets).
+- `fading`: not protected by the current decay policy, importance >= 0.6, and server retention < twice `archiveThreshold`; importance descending, then memory ID.
+- `secrets`: at least one finding in content, concept, or summary, ordered by memory ID. Findings use UTF-16 offsets into the **original** field, with exclusive `end` and `length = end - start`.
+
+Detected spans in **every Review queue's** content, concept, and summary are replaced with `[REDACTED]`. Findings expose only rule, field, offsets, length, and a masked preview (for example `ghp_****Ef12`), never the matched value or surrounding text. Embeddings, tags, source, and arbitrary metadata are omitted from `MemoryLite`.
+
+**Secret rule names**
+
+| Rule | Detects |
+|---|---|
+| `github-token` | `gh[pousr]_` tokens and `github_pat_` tokens |
+| `gitlab-token` | `glpat-` tokens |
+| `aws-access-key` | `AKIA` and `ASIA` access key IDs |
+| `ai-api-key` | OpenAI `sk-` and Anthropic `sk-ant-` style keys |
+| `cloudflare-api-token` | `cfat_` tokens |
+| `cloudflare-tunnel-token` | Base64 JSON tunnel credentials containing string `a`, `t`, and `s` fields |
+| `slack-token` | `xox[abprs]-` tokens |
+| `stripe-key` | `sk_live_` and `rk_live_` keys |
+| `jwt` | Three-part `eyJ…` tokens |
+| `private-key` | PEM private-key blocks, including incomplete blocks through end of field |
+| `url-credentials` | Username/password credentials in URLs |
+| `keyword-assignment` | Password, passwd, passphrase, pass, secret, API key, token, access key, or пароль assignments; values of at least six characters |
+| `keyword-entropy` | 32+ character runs, at least ten distinct characters and entropy >= 3.5 bits/character, within 40 characters of a secret keyword |
+
+Placeholders such as `your-api-key`, `your_api_key`, `xxx`, `<token>`, `${TOKEN}`, `***`, `example`, `sk-...`, `[REDACTED]`, and `user:password@` are excluded. UUIDs are excluded from generic detection; git SHAs and other high-entropy strings require a nearby keyword. Overlapping matches report the specific rule once.
+
+### `POST /api/review/dismiss`
+
+**Request body**
+```json
+{ "queue": "duplicates", "ids": ["uuid-1", "uuid-2"] }
+```
+
+`queue` is `duplicates`, `fading`, or `secrets`. Duplicates require two distinct IDs; single queues require one. IDs must identify live, accessible memories. Returns **204**, with no body; 400 for an invalid body and 404 for unknown, archived, or inaccessible IDs.
+
+Dismissals persist in the existing `local_meta` row `review.dismissed.v1` as queue/ID keys (pair IDs sorted). This is the simplest existing device-local metadata storage: no migration, memory tag pollution, or sync change. Repeating a dismissal is idempotent. Dismissals survive app restarts and memory edits and affect both counts and lists.
+
+Use existing `POST /api/contradictions/resolve` with `keep_both` for “not a contradiction”; `DELETE /api/memory/:id` to keep only the other duplicate; `POST /api/memory/:id/tags` with `pinned` to protect a fading memory; and existing `/api/memory/bulk/archive` and `/api/memory/bulk/tag` for batches (up to 1000 IDs).
+
+### `POST /api/memory/:id/redact`
+
+**Request body**
+```json
+{ "rules": ["github-token", "ai-api-key"] }
+```
+
+Send `{}` for all rules. `rules` is an optional array of rule names from the table above; an empty array selects none. Unknown fields, unknown rule names, duplicate rules, or a non-array `rules` value return 400.
+
+The server rescans the live memory, replaces each selected secret span with exactly `[REDACTED]`, and calls the same core update path as `PATCH /api/memory/:id` for content, concept, and summary. It updates sync timestamps/device attribution, schedules sync, and re-embeds when the normal embedding text changes. It does not archive or purge any rows, including old archived copies. Dismissal does not prevent explicit redaction.
+
+**Response `200`**
+```json
+{ "id": "uuid-1", "redacted": 3 }
+```
+
+`redacted` counts replaced spans across all three fields. No memory text or secret is returned. Missing, archived, inaccessible, or prefix-only IDs return 404; no selected findings returns 409 `{ "error": "Nothing to redact" }`.
 
 ---
 

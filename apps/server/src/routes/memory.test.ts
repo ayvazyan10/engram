@@ -168,3 +168,22 @@ it('PATCH preserves validation failures', async () => {
     expect(response.statusCode).toBe(400);
   }
 });
+
+it('GET /api/memory filters before exclusively and tags exactly, combined with pagination and scope', async () => {
+  const base = { type: 'episodic' as const, content: 'Timeline entry', source: 'timeline', updatedAt: '2026-01-01T00:00:00.000Z' };
+  getDb().insert(schema.memories).values([
+    { ...base, id: 'timeline-1', createdAt: '2026-01-01T00:00:00.000Z', tags: '["topic"]', namespace: 'A' },
+    { ...base, id: 'timeline-2', createdAt: '2026-01-02T00:00:00.000Z', tags: '["topic"]', namespace: 'A' },
+    { ...base, id: 'timeline-3', createdAt: '2026-01-03T00:00:00.000Z', tags: '["topic"]', namespace: 'A' },
+    { ...base, id: 'timeline-4', createdAt: '2026-01-01T00:00:00.000Z', tags: '["topic-more"]', namespace: 'A' },
+    { ...base, id: 'timeline-5', createdAt: '2026-01-01T00:00:00.000Z', tags: '["topic"]', namespace: 'B' },
+  ]).run();
+  const response = await app.inject({ method: 'GET', url: '/api/memory?source=timeline&namespace=A&tag=topic&before=2026-01-03T00:00:00Z&offset=1&limit=1' });
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({ count: 1, memories: [{ id: 'timeline-1' }] });
+  const timezone = await app.inject({ method: 'GET', url: '/api/memory?source=timeline&namespace=A&tag=topic&before=2026-01-03T02:00:00%2B02:00' });
+  expect(timezone.json().memories.map((m: { id: string }) => m.id)).toEqual(['timeline-2', 'timeline-1']);
+  for (const query of ['before=bad', 'before=2026-01-01', 'before=2026-01-01T00:00:00Z&before=2026-01-02T00:00:00Z', 'tag=a&tag=b']) {
+    expect((await app.inject({ method: 'GET', url: `/api/memory?${query}` })).statusCode).toBe(400);
+  }
+});

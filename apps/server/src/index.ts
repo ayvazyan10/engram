@@ -32,6 +32,7 @@ import { searchRoutes } from './routes/search.js';
 import { graphRoutes } from './routes/graph.js';
 import { mapRoutes } from './routes/map.js';
 import { sceneRoutes } from './routes/scene.js';
+import { reviewRoutes } from './routes/review.js';
 import { contradictionRoutes } from './routes/contradictions.js';
 import { embeddingRoutes } from './routes/embeddings.js';
 import { indexRoutes } from './routes/index-mgmt.js';
@@ -390,6 +391,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
         { name: 'memory', description: 'Memory CRUD operations' },
         { name: 'search', description: 'Semantic search and recall' },
         { name: 'graph', description: 'Knowledge graph queries' },
+        { name: 'review', description: 'Review queues, dismissals and secret detection' },
         { name: 'contradictions', description: 'Contradiction detection and resolution' },
         { name: 'embeddings', description: 'Embedding model management and re-embedding' },
         { name: 'index', description: 'Vector index persistence and management' },
@@ -415,6 +417,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   await app.register(sceneRoutes, { prefix: '/api' });
   await app.register(mapRoutes, { prefix: '/api' });
   await app.register(contradictionRoutes, { prefix: '/api' });
+  await app.register(reviewRoutes, { prefix: '/api' });
   await app.register(embeddingRoutes, { prefix: '/api' });
   await app.register(indexRoutes, { prefix: '/api' });
   await app.register(webhookRoutes, { prefix: '/api' });

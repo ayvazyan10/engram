@@ -1,8 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { getDb, schema } from '@engram-ai-memory/core';
-import { eq, isNull, desc, and, or, getTableColumns } from 'drizzle-orm';
+import { eq, isNull, desc, and, or, getTableColumns, lt, sql } from 'drizzle-orm';
 import { brain, realtime, notifySyncWrite } from '../index.js';
-import { strictQueryString } from '../lib/strictBody.js';
+import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
+import { redactField, scanSecrets, secretRuleNames } from '../lib/review/secrets.js';
+import { isMemoryNotFound } from '../lib/notFound.js';
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
   // POST /api/memory — store a memory
@@ -138,7 +140,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
 
   // GET /api/memory — list memories
   app.get<{
-    Querystring: { type?: string; source?: string; namespace?: string; global?: 'true'; limit?: number; offset?: number };
+    Querystring: { type?: string; source?: string; namespace?: string; global?: 'true'; before?: string; tag?: string; limit?: number; offset?: number };
   }>(
     '/memory',
     {
@@ -153,6 +155,8 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
             source: { type: 'string' },
             namespace: { type: 'string' },
             global: { type: 'string', enum: ['true'] },
+            before: { type: 'string', format: 'date-time' },
+            tag: { type: 'string' },
             // A `maximum` alone is only half a bound. SQLite reads LIMIT -1 as
             // "no limit", so ?limit=-1 returned the whole table — every row
             // carrying its FP16 embedding as a JSON byte array — and a
@@ -166,12 +170,14 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       // above documents the contract without enforcing it — an unknown key is
       // stripped in silence and the caller is answered 200 for a request that was
       // plainly a typo. This is what enforces it; see lib/strictBody.ts.
-      preValidation: strictQueryString(['type', 'source', 'namespace', 'global', 'limit', 'offset']),
+      preValidation: strictQueryString(['type', 'source', 'namespace', 'global', 'before', 'tag', 'limit', 'offset']),
       handler: async (req) => {
         const db = getDb();
-        const { type, source, namespace, global, limit = 50, offset = 0 } = req.query;
+        const { type, source, namespace, global, before, tag, limit = 50, offset = 0 } = req.query;
 
         const conditions = [isNull(schema.memories.archivedAt)];
+        if (before !== undefined) conditions.push(lt(schema.memories.createdAt, new Date(before).toISOString()));
+        if (tag !== undefined) conditions.push(sql`exists (select 1 from json_each(${schema.memories.tags}) where value = ${tag})`);
         if (type) conditions.push(eq(schema.memories.type, type as 'episodic' | 'semantic' | 'procedural'));
         if (source) conditions.push(eq(schema.memories.source, source));
         if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
@@ -193,6 +199,38 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       },
     }
   );
+
+  app.post<{ Params: { id: string }; Body: { rules?: string[] } }>('/memory/:id/redact', {
+    schema: {
+      tags: ['memory'], summary: 'Replace detected secret spans with [REDACTED]',
+      body: {
+        type: 'object', additionalProperties: false,
+        properties: { rules: { type: 'array', uniqueItems: true, items: { type: 'string', enum: secretRuleNames } } },
+      },
+    },
+    preValidation: strictObjectBody(['rules'], ['rules']),
+    handler: async (req, reply) => {
+      const memory = getDb().select().from(schema.memories).where(and(
+        eq(schema.memories.id, req.params.id), isNull(schema.memories.archivedAt),
+      )).get();
+      if (!memory || !brain.canAccessNamespace(memory.namespace)) return reply.code(404).send({ error: 'Memory not found' });
+      const findings = scanSecrets(memory).filter((f) => req.body.rules === undefined || req.body.rules.includes(f.rule));
+      if (!findings.length) return reply.code(409).send({ error: 'Nothing to redact' });
+      const updates: { content?: string; concept?: string; summary?: string } = {};
+      for (const field of ['content', 'concept', 'summary'] as const) {
+        const spans = findings.filter((f) => f.field === field);
+        if (spans.length) updates[field] = redactField(memory[field]!, spans);
+      }
+      try {
+        await brain.updateMemory(memory.id, updates);
+        notifySyncWrite();
+        return { id: memory.id, redacted: findings.length };
+      } catch (error) {
+        if (isMemoryNotFound(error)) return reply.code(404).send({ error: 'Memory not found' });
+        throw error;
+      }
+    },
+  });
 
   // GET /api/memory/:id — get by ID
   app.get<{ Params: { id: string } }>('/memory/:id', {

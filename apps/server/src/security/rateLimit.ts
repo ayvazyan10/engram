@@ -95,6 +95,9 @@ const HEAVY_PATHS: readonly string[] = [
  * against every tier it matches, so a heavy call also consumes global budget.
  */
 export function tiersFor(method: string, pathname: string): readonly RateLimitTier[] {
+  // Review reads share a cached whole-store scan, including secret masking.
+  if ((method === 'GET' || method === 'HEAD') && pathname.startsWith('/api/review/')) return ['whole-store', 'global'];
+  if (method === 'POST' && /^\/api\/memory\/[^/]+\/redact$/.test(pathname)) return ['heavy', 'global'];
   if (WHOLE_STORE_PATHS.includes(pathname)) return ['whole-store', 'global'];
 
   // GET /api/memory is a plain list; only the writing/searching verbs are heavy.
