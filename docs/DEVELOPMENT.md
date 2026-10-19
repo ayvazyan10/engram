@@ -40,7 +40,8 @@ Turborepo respects `dependsOn: ["^build"]` — packages are always built in depe
 ```
 tooling/tsconfig  →  packages/core  →  packages/mcp
                                     →  apps/server
-                  →  packages/vis   →  apps/web
+                  →  packages/vis
+apps/web (independent frontend)
 adapters/* (depend on core)
 ```
 
@@ -89,7 +90,7 @@ Server starts at `http://localhost:4901`.
 
 ### Start the dashboard
 
-In production, the 3D dashboard is served from the API server at `http://localhost:4901` (after building with `pnpm turbo run build`).
+In production, the Atlas dashboard is served from the API server at `http://localhost:4901` (after building with `pnpm turbo run build`).
 
 For development with hot-reload:
 
@@ -285,7 +286,9 @@ pnpm turbo run build
 pnpm turbo run test:coverage
 ```
 
-ESLint runs from the shared config in `tooling/`. Two rules are relaxed on purpose and worth knowing about: `no-console` is off for the CLI, whose stdout *is* its user interface, and `react/no-unknown-property` is off for the three canvas files, because the plugin only knows HTML attributes and every report there was a react-three-fiber prop.
+ESLint runs from the shared config in `tooling/`. `no-console` is off for the CLI, whose stdout *is* its user interface.
+
+After building the Atlas dashboard, `pnpm --filter @engram-ai-memory/web check:bundle` checks the gzip JavaScript budgets: 200 KB for initial loading and 125 KB for lazy Insights, including charts. It also checks that Insights and charts stay out of the initial imports.
 
 ---
 

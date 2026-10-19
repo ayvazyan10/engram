@@ -1,7 +1,7 @@
 {
   "name": "@engram-ai-memory/web",
-  "version": "0.5.0",
-  "description": "Engram visualization dashboard — 3D neural graph with React Three Fiber",
+  "version": "0.6.0",
+  "description": "Engram Atlas dashboard — Map, Recall, Review, Timeline, Insights and Settings",
   "private": true,
   "scripts": {
     "dev": "vite",

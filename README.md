@@ -41,7 +41,7 @@ Most AI tools forget everything the moment a session ends. Engram solves this by
 | **7-Step Recall Pipeline** | Embed → Vector search → Graph expand → Score → Rank → Truncate → Log |
 | **Memory Decay & GC** | Ebbinghaus forgetting curve, auto-archive stale memories, episodic→semantic consolidation |
 | **Memory Reflection** | AI-driven insight engine — the AI connected over MCP reasons over your memories to surface patterns, knowledge gaps, trends, and contradictions. Engram runs no LLM of its own — no API keys, no external calls. |
-| **Dashboard v2** | Multi-view dashboard: 3D neural graph, Timeline, Analytics (charts + heatmaps), Reflections panel |
+| **Atlas dashboard** | Map, Recall, Review, Timeline, Insights and Settings; light/dark and ⌘K command palette |
 | **Optional Namespaces** | Disabled by default; enable filtering or strict isolation per project/agent |
 | **Contradiction Detection** | Auto-detect conflicting memories, 5 resolution strategies (keep_newest/oldest/important/both/manual) |
 | **Embedding Upgradability** | Swap embedding models, store model ID alongside vectors, batch re-embedding pipeline |
@@ -114,7 +114,7 @@ For Claude Code, choose the [recommended plugin](docs/INTEGRATIONS.md#claude-cod
 # Memory for your AI client — npx-based MCP config, no clone/build
 npx -y @engram-ai-memory/cli setup --npx
 
-# Optional: REST API + 3D dashboard on :4901 (the wizard clones and builds the server)
+# Optional: REST API + Atlas dashboard on :4901 (the wizard clones and builds the server)
 npm i -g @engram-ai-memory/cli
 engram setup
 engram start
@@ -369,7 +369,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `@engram-ai-memory/mcp` | MCP Server — 24 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
 | `@engram-ai-memory/cli` | CLI — store, search, recall, reflections, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
 | `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (53 endpoints) | — |
-| `@engram-ai-memory/web` | Multi-view dashboard — 3D neural graph, Timeline, Analytics, Reflections | — |
+| `@engram-ai-memory/web` | Atlas dashboard — Map, Recall, Review, Timeline, Insights, Settings | — |
 | `@engram-ai-memory/vis` | Force-directed layout + animation helpers | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/vis?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/vis) |
 | `@engram-ai-memory/adapter-ollama` | Transparent Ollama memory proxy (:11435) | — |
 
@@ -416,7 +416,7 @@ This is a summary. [docs/CONFIGURATION.md](docs/CONFIGURATION.md) has the full l
 | Service | Port | Purpose |
 |---|---|---|
 | Engram API | **4901** | REST + WebSocket + Swagger UI |
-| Dashboard | **4901** | 3D visualization (served from API server) |
+| Dashboard | **4901** | Atlas dashboard (served from API server) |
 | Dashboard (Docker) | **4902** | Standalone dashboard container, optional |
 | Ollama Proxy | **11435** | Memory injection proxy → Ollama |
 
@@ -432,11 +432,15 @@ All ports are in the 49xx range to avoid conflicts with common dev services (300
 # Load demo memories with knowledge graph connections
 cd packages/core && npx tsx scripts/demo.ts
 
-# Open the 3D visualization
+# Open the Atlas dashboard
 # → http://localhost:4901
 ```
 
-**Dashboard views:** 3D (Cosmos · Neural Net · Clusters) · Timeline · Analytics · Reflections
+**Atlas views:** Map · Recall · Review · Timeline · Insights · Settings
+
+Explore memories on a map with named regions, Meaning / Faults / Time lenses and search pins. Recall draws the numbered route of what your AI would be told alongside the exact context. Review contradictions, near-duplicates, fading-but-important memories and possible secrets, with Redact for detected secrets. Open any memory to inspect or edit it; archive and memory-sheet contradiction actions offer a six-second Undo. Timeline groups memories by day, Insights holds Numbers and Reflections, and Settings shows connection steps and health. Welcome guides the first connection.
+
+Use light or dark mode (or follow the system), open commands with **⌘K / Ctrl+K**, and keep the same project scope as you move between memory views. The layout adapts to phones, with keyboard navigation and an accessible list alongside the map.
 
 ---
 
@@ -450,7 +454,7 @@ cd packages/core && npx tsx scripts/demo.ts
 | Cold startup (1k memories) | ~1.2s | Full DB scan + index build |
 | Cached startup (1k memories) | ~45ms | Persisted index (27x faster) |
 | Storage per memory | ~1.3 KB | FP16 compressed (2x reduction) |
-| Dashboard | > 30 FPS | InstancedMesh + postprocessing |
+| Dashboard JS budgets | ≤ 200 KB initial / ≤ 125 KB lazy Insights (gzip) | Canvas map; charts load with Insights; `check:bundle` enforces limits |
 
 Embeddings run **locally** using ONNX Runtime WASM — no OpenAI API, no cost, no data leaving your machine.
 

@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires Node.js 22+ and npm. Works on macOS, Linux, and Windows."
 metadata:
   author: ayvazyan10
-  version: "0.8.0"
+  version: "0.9.0"
   homepage: https://engram.am
 ---
 

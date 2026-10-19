@@ -9,6 +9,60 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-19
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.9.0, and the Claude Desktop extension bundle 0.9.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.7.0 and `@engram-ai-memory/web` 0.6.0.
+
+### Added
+
+- **`@engram-ai-memory/web`** — **Atlas**, a complete dashboard redesign with Map, Recall, Review, Timeline, Insights, Settings and Welcome. Hash routes preserve browser history and link to an open memory with `?m=<id>`. A desktop rail and phone bottom navigation share an All / Global / project scope that persists across memory views.
+
+- **`@engram-ai-memory/web`** — The memory map places memories by meaning over density terrain, with named regions, type shapes and colors, reflection markers, and server-reported retention and protection. Meaning, Faults and Time lenses expose similarity, contradictions and recency. Search results appear as linked pins, including weaker matches; Recent, Regions and Results lists provide an accessible alternative to the canvas. Region names can be overridden on this device.
+
+- **`@engram-ai-memory/web`** — Recall shows what the AI would be told as a numbered route on the map, with graph-expanded stops distinguished from direct retrieval. Route and Exact tabs link each memory to its context span, show token-budget decisions and offer copyable context. Previewing recall does not mark memories as accessed.
+
+- **`@engram-ai-memory/web`** — Review has four project-scoped queues: contradictions, near-duplicates, fading-but-important memories and possible secrets. Pair cards highlight word differences; keyboard triage and bulk selection support keeping, dismissing, pinning, tagging and archiving. Redact confirms replacement of detected secrets using masked previews.
+
+- **`@engram-ai-memory/web`** — A memory sheet opens over any route with text, importance, retention, tags, project, dates, connections and contradictions. Edit saves only changed fields. Archive and memory-sheet contradiction resolutions are deferred behind a six-second Undo, available by button or Ctrl/Cmd+Z; pending writes are sent when leaving the page. Review archives use the same Undo window.
+
+- **`@engram-ai-memory/web`** — Timeline groups memories by local day, folds repeated machine streams, supports jumping to a date and pages through the store with a stable time anchor. Insights brings Numbers (charts and table equivalents with 7/30/90-day ranges, counting every project) and Reflections (filtered reports, folded near-identical reports and cycle status).
+
+- **`@engram-ai-memory/web`** — Settings offers color mode, AI connection steps, server and live-update health, database path, memory counts, search-index and embedding status, and read-only decay and cloud-sync status. Welcome provides setup for Claude Code, Claude Desktop, Cursor, VS Code and Codex CLI, then waits for the first memory.
+
+- **`@engram-ai-memory/web`** — A word-ranked command palette opens with ⌘K / Ctrl+K, with search and navigation shortcuts. Light and dark modes can follow the system or be selected explicitly; the choice is applied before first paint. Atlas uses locally served Archivo fonts and shared design tokens.
+
+- **`@engram-ai-memory/web`** — Phone layouts include bottom sheets and full-screen memory details. Keyboard map navigation, live announcements, dialog focus management, chart tables and accessible lists accompany 44 px touch targets and text contrast checks. `check:bundle` enforces gzip JavaScript budgets of 200 KB for initial loading and 125 KB for lazy Insights, including charts.
+
+- **`@engram-ai-memory/server`** — `GET /api/map` returns a scoped, cached 2D projection refined by similarity links, named regions, and each memory's retention and protection. Small additions are placed near their neighbours; a count change of at least 10% triggers a full layout. `POST /api/map/rebuild` forces recomputation with a single-flight guard. Region names prefer tags and concepts, preserve dominant phrases and omit stopwords and numeric tokens.
+
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/server`** — `NeuralBrain.explainRecall()` and `POST /api/recall/explain` preview exact context with ranks, context positions and offsets, retrieval origin, estimated tokens and inclusion/budget decisions. They share recall's retrieval and filters without database writes or recall plugin hooks; the endpoint also accepts exact project or global scope.
+
+- **`@engram-ai-memory/server`** — `GET /api/review/summary` and `GET /api/review/:queue` provide scoped counts and paginated Review items. Near-duplicates use existing similarity edges; fading uses the active decay policy. `POST /api/review/dismiss` stores idempotent device-local dismissals for duplicates, fading and secrets; contradictions use keep-both resolution.
+
+- **`@engram-ai-memory/server`** — `POST /api/contradictions/bulk/resolve` processes up to 500 pairs through the existing resolution, sync and realtime path, with ordered per-item results and partial failures. `GET /api/memory` adds an exclusive `before` timestamp and exact `tag` filter; `GET /api/contradictions` adds `offset`, `total` and project/global filters requiring both memories in scope.
+
+### Changed
+
+- **`@engram-ai-memory/core`** — `ContextAssembler` separates read-only planning from committing access statistics and audit rows. Existing recall, streaming recall, MCP recall and REST recall output and side effects are preserved.
+
+- **`@engram-ai-memory/core`** — `getContradictions()` filters live, visible edges and paginates in SQL before loading their memories, with stable edge-ID ordering. `getContradictionCount()` supplies the matching total. `updateMemory()` accepts summary updates for redaction.
+
+- **`@engram-ai-memory/web`** — Canvas and D3 replace the previous dashboard rendering stack. Insights and its charts load on demand; shared D3 dependencies stay outside the chart chunk so the map does not pull charts into initial loading.
+
+### Removed
+
+- **`@engram-ai-memory/web`** — The 3D scene, five visualization plates (Links, Hotspots, Over time, Communities and Overview), plate data layer and route, and three-theme system (Neural / Mono / Midnight) are gone. Atlas replaces the old Home, inspector and view switchers; three.js, React Three Fiber, Drei and postprocessing dependencies and their chunk rules have been removed from the dashboard.
+
+### Fixed
+
+- **`@engram-ai-memory/web`** — Phone Review cards no longer overlap the list; the Time lens fits above navigation, the scope picker opens inward and Recall badges avoid collisions with usable touch targets. Dialogs and the memory sheet restore focus, and map region-member labels strip Markdown for readable tooltips and announcements.
+
+- **`@engram-ai-memory/web`** — Command search requires every typed word and prioritizes name prefixes, avoiding unrelated results above matching commands.
+
+### Security
+
+- **`@engram-ai-memory/server`** — Review masks detected secrets in content, concept and summary across every queue, returning rule names, offsets and masked previews instead of matched values. `POST /api/memory/:id/redact` rescans the live memory and replaces selected spans with `[REDACTED]` through the normal update, re-embedding and sync path; it does not purge archived copies. New endpoints enforce existing authentication, namespace visibility and rate limits, with whole-store limits on Review reads and map rebuilds and heavy limits on recall explain, redaction and bulk resolution.
+
 ## [0.8.0] — 2026-10-19
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.8.0, and the Claude Desktop extension bundle 0.8.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.6.0 and `@engram-ai-memory/web` 0.5.0.
@@ -556,7 +610,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.7.0
 [0.6.5]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.5

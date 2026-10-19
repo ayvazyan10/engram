@@ -63,7 +63,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
            ┌──────────────────────────┐
            │  React Dashboard :4901   │
            │  @engram-ai-memory/web                 │
-           │  React Three Fiber (3D)  │
+           │  Atlas: Canvas + D3      │
            │  Socket.io (real-time)   │
            └──────────────────────────┘
 ```
@@ -81,7 +81,7 @@ neuralCore/
 │
 ├── apps/
 │   ├── server/             @engram-ai-memory/server    — REST API + WebSocket
-│   └── web/                @engram-ai-memory/web       — 3D dashboard
+│   └── web/                @engram-ai-memory/web       — Atlas dashboard
 │
 ├── adapters/
 │   └── ollama/             @engram-ai-memory/adapter-ollama
@@ -296,37 +296,40 @@ See [API.md](API.md) for full endpoint reference and [CONFIGURATION.md](CONFIGUR
 
 ---
 
-## Visualization dashboard (`@engram-ai-memory/web`)
+## Atlas dashboard (`@engram-ai-memory/web`)
 
-Built with **React 19 + Vite 6**. Three-dimensional neural graph rendered with **React Three Fiber** and **@react-three/drei**.
+Built with **React 19 + Vite 6**, **Canvas + D3** for the memory map, and **Recharts** loaded on demand for Insights.
 
-### 3D views
+### Views
 
-Position is not decorative. Every node's coordinate comes from `GET /api/graph/layout` — a PCA projection of that memory's stored embedding into three components, computed server-side and cached on a fingerprint of the store. Two nodes near each other mean two memories near each other. The three views are framings over that one layout, not separate scatter functions:
-
-| View | Framing |
+| View | What it shows |
 |---|---|
-| Cosmos | The projection as it is, free orbit — global structure |
-| Neural Net | The projection with type pulled apart along X — bands you can compare, similarity still governing within a band |
-| Clusters | The projection folded into three per-type volumes |
+| Map | Memories in named regions, Meaning / Faults / Time lenses, search pins, and Recent / Regions / Results lists |
+| Recall | A numbered route on the map and the exact context your AI would receive, with ranking and token-budget decisions |
+| Review | Contradictions, near-duplicates, fading-but-important memories and possible secrets; word diffs, keyboard triage, bulk actions and Redact |
+| Timeline | Memories grouped by local day, paginated with a stable time anchor and a jump-to-date control |
+| Insights | Numbers (charts and tables, 7/30/90 days, all projects) and Reflections (reports and cycle status) |
+| Settings | Light/dark/system colour mode, connection steps, server and database health, index and embeddings, and read-only decay and sync status |
 
-Nebula and Galaxy were removed. Nebula was Cosmos with a larger radius and the type colours discarded; Galaxy encoded nothing in position at all.
+`GET /api/map` projects embeddings into two dimensions, refines positions with similarity links and groups memories into named regions. The server caches layouts per scope and supplies retention and protection values. Region renames are saved on the device. Recall uses `POST /api/recall/explain`, which previews context without changing access counts, decay timestamps or audit rows.
 
-Edges come from `GET /api/graph/edges` in one bulk request, which reports how many connections exist versus how many are renderable, so the scene key can state what it is not showing.
+The memory sheet opens over any route with `?m=<id>` for inspection, editing, tags and connections. Archive and memory-sheet contradiction resolutions wait six seconds before being sent, with Undo by button or ⌘Z / Ctrl+Z. Welcome offers client setup instructions and waits for the first memory.
 
-Beside the 3D canvas the dashboard has Timeline, Analytics and Reflections views.
+A desktop rail and phone bottom navigation share hash routes and a persistent All / Global / project scope. The command palette opens with ⌘K / Ctrl+K. The map has keyboard navigation and an accessible list; dialogs and sheets manage focus.
 
 ### Real-time updates
 
-The dashboard connects to `ws://localhost:4901/neural` via Socket.io. When a memory is stored via the API, it appears in the graph within the next render cycle.
+The dashboard connects to `ws://localhost:4901/neural` via Socket.io. Memory events refresh the shared records and map.
 
 ### State management
 
 Zustand stores:
 
-- `neuralStore` — neurons, connections, selection state, WebSocket connection status
-- `memoryStore` — memory records, search results, recall context
-- `viewStore` — active visualization variant and theme
+- `neuralStore` — open memory, contradiction pairs and WebSocket connection status
+- `memoryStore` — memory records, search results and project scope
+- `mapStore` — map data, lens, region selection and local region names
+- `routeStore` — active hash route and query parameters
+- `analyticsStore` — Insights data and time range
 - `authStore` — whether the server is demanding an API key, and whether this session has supplied one
 
 When `ENGRAM_API_KEY` is set on the server, the key is entered in the dashboard UI and held in the browser session — read per request and re-read by the socket on every reconnect attempt. It is **never** built into the bundle. The static assets and the SPA shell are served without it, because a browser cannot attach a header to a top-level navigation.

@@ -1596,8 +1596,8 @@ Unknown query parameters and invalid values return `400`. Combining `namespace` 
     "degree": 0, "contradictCount": 0, "label": "Database connections"
   }],
   "regions": [{
-    "id": "memory-id", "name": "database · connections",
-    "autoName": "database · connections", "count": 1,
+    "id": "memory-id", "name": "Database · Connections",
+    "autoName": "Database · Connections", "count": 1,
     "x": 0.2, "y": -0.3, "reflectionShare": 0,
     "contradictions": 0, "newThisWeek": 1, "topTags": ["database"]
   }]
@@ -1606,7 +1606,7 @@ Unknown query parameters and invalid values return `400`. Combining `namespace` 
 
 `method` is `pca2+knn` or `fallback`; `explainedVariance` contains the two PCA variance fractions. `embeddingModel`, `source`, `namespace` and `lastAccessedAt` can be null. Labels are at most 80 characters. Retention and protection use core's active decay policy and are refreshed on each response. `degree` counts incident live connections; `contradictCount` counts incident contradiction edges.
 
-Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. The ID is the member nearest the region centroid (the squared-distance medoid). Names use the top two TF-IDF terms from tags and concepts within the visible scope, ignoring `reflection*` and `mc:*` tags. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
+Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. The ID is the member nearest the region centroid (the squared-distance medoid). Names rank terms within the visible scope, preferring tags and concepts and falling back to content when those provide no usable words. They ignore stopwords, short and numeric tokens, and `reflection*` / `mc:*` metadata. A dominant two-word phrase keeps its reading order; otherwise the top two terms are joined. Labels use title case, with suffixes to distinguish duplicate names. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
 
 The layout is cached per project scope. New memories below the recompute threshold are placed at their similarity-weighted neighbour centroid without moving existing points. Unlinked inserts use deterministic fallback positions. A full layout runs when the count changes by at least 10% relative to its last full run, or on rebuild; recomputes use previous positions and Procrustes alignment. `generatedAt` and `computeMs` describe the last layout update, not the current request.
 
@@ -1672,7 +1672,7 @@ Get the knowledge graph neighborhood for a memory node.
 
 ### `GET /api/graph/layout`
 
-One 3D coordinate per memory, derived from that memory's stored embedding by a PCA projection into three components. This is what the dashboard's 3D views are drawn from — position means semantic proximity, not a hash of the id.
+One 3D coordinate per memory, derived from that memory's stored embedding by a PCA projection into three components. This endpoint remains available to API clients; the Atlas dashboard uses the 2D projection from `GET /api/map`.
 
 The projection is computed server-side (the vectors live there, and 651 × 384 floats is about a megabyte a browser has no reason to download) and cached on a fingerprint of the memory set — row count plus the newest `createdAt`/`updatedAt` plus the active namespace — so any store, edit, archive or delete invalidates it and nothing else does.
 

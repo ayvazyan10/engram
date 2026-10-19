@@ -226,7 +226,7 @@ Every response — route handlers, the static bundle and the SPA fallback alike 
 | `ENGRAM_CSP` | *(the built-in policy)* | Replaces the whole `Content-Security-Policy` value. `off` sends no CSP header at all; blank or unset uses the default |
 | `ENGRAM_HSTS_MAX_AGE` | *(none)* | Seconds for `Strict-Transport-Security: max-age=<n>; includeSubDomains`. Off by default — the server speaks HTTP, and a wrong value is sticky in the browser for its whole max-age |
 
-The default policy is written against what the built dashboard actually loads, not copied from a template:
+The server currently sends this default policy:
 
 ```
 default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none';
@@ -236,7 +236,7 @@ img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob
 connect-src 'self' https://cdn.jsdelivr.net ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*
 ```
 
-Two entries are load-bearing rather than decorative: `blob:` in `script-src` is what lets the 3D text labels bootstrap their worker (`importScripts` on a blob URL is governed by `script-src`, not `worker-src`), and `cdn.jsdelivr.net` is where that same library fetches its unicode font index at runtime. A fork that adds its own CDN should override `ENGRAM_CSP` rather than lose either.
+Atlas serves its Archivo fonts locally. The default policy still permits blob scripts and the listed font/CDN origins from the previous dashboard; those allowances are not required by Atlas's map labels. Override the full policy with `ENGRAM_CSP` to customize it.
 
 ### Known limitation — realtime and namespaces
 
@@ -619,13 +619,9 @@ The in-memory vector index rebuilds from the database on server start unless a p
 
 ### Dashboard performance
 
-The 3D visualization targets 30 FPS. If performance drops with many neurons:
+Atlas draws its memory map with Canvas and D3. `GET /api/map` computes and caches the layout on the server per project scope; small additions are placed near their neighbours without moving existing points. `POST /api/map/rebuild` forces a full layout. See [Atlas Map](API.md#atlas-map) for cache and rebuild behavior.
 
-1. Lower `dpr` in `<Canvas>` (change `[1, 1.5]` to `[1, 1]`)
-2. Disable bloom: reduce `intensity` in `<Bloom>` to 0
-3. Raise `minStrength` on `GET /api/graph/edges` so fewer edges are drawn
-
-Nodes are drawn with two instanced meshes and every edge with a single `LineSegments`, so draw-call count does not scale with the store — switching views does not change it.
+Insights and its charts load on demand. After a web build, `pnpm --filter @engram-ai-memory/web check:bundle` enforces gzip JavaScript budgets of 200 KB initially and 125 KB for lazy Insights, including charts.
 
 ---
 
@@ -633,7 +629,7 @@ Nodes are drawn with two instanced meshes and every edge with a single `LineSegm
 
 | Port | Service | Description |
 |---|---|---|
-| `4901` | API Server | Engram REST API + Swagger docs at `/docs` + 3D Dashboard |
+| `4901` | API Server | Engram REST API + Swagger docs at `/docs` + Atlas dashboard |
 | `4902` | Dashboard | Standalone dashboard container (`docker compose`). The API server also serves the built dashboard on `4901`, so this is optional |
 | `11435` | Ollama Proxy | Transparent memory-injecting proxy for Ollama |
 
@@ -656,10 +652,7 @@ pm2 start apps/server/dist/index.js \
   --NODE_ENV=production \
   --ENGRAM_DB_PATH=/data/engram.db
 
-# Start dashboard (optional)
-pm2 start apps/dashboard/dist/index.js \
-  --name engram-dashboard \
-  --env production
+# The API server also serves the built Atlas dashboard from apps/web/dist.
 
 # Start Ollama proxy (optional)
 pm2 start adapters/ollama/dist/proxy.js \
