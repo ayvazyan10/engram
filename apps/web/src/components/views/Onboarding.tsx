@@ -6,7 +6,7 @@ import { useServerStats } from '../../lib/serverStats.js';
 import { getStoredApiKey } from '../../lib/apiKey.js';
 import { RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import { segmentBase, segmentState, trackStyle } from '../ui/segmented.js';
-import MemoryCard from '../ui/MemoryCard.js';
+import { MemoryRow } from '../../features/memory/MemoryRow.js';
 
 const PACKAGE_ARGS = '"-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"';
 
@@ -207,7 +207,7 @@ export default function Onboarding({ onRefresh, onDone }: Props) {
             {first ? (
               <>
                 <h2 style={{ ...s.stepTitle, color: t.textPrimary }}>Your first memory arrived</h2>
-                <MemoryCard record={first} selected={first.id === selectedId} onSelect={selectNeuron} />
+                <MemoryRow record={first} current={first.id === selectedId} onOpen={selectNeuron} />
                 <button
                   type="button"
                   className="ec-primary"

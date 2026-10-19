@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toPlainText, memoryRowText, truncateLabel, CONTENT_SLICE_LENGTH } from '../plainText.js';
+import { toPlainText, toReadableText, memoryRowText, truncateLabel, CONTENT_SLICE_LENGTH } from '../plainText.js';
 
 describe('toPlainText (H4 — raw Markdown was printed as literal text)', () => {
   it('strips the ATX heading marker every reflection body opens with', () => {
@@ -120,5 +120,17 @@ describe('truncateLabel (F7 — a cut with no mark is not a truncation)', () => 
   it('handles the degenerate budgets without throwing', () => {
     expect(truncateLabel('anything', 0)).toBe('');
     expect(truncateLabel('', 34)).toBe('');
+  });
+});
+
+describe('toReadableText', () => {
+  it('strips the Markdown syntax but keeps paragraphs and list lines', () => {
+    expect(toReadableText('# Trend Analysis\n\n\n\n**Most Significant Trend:**  \n- one `x`\n- two')).toBe(
+      'Trend Analysis\n\nMost Significant Trend:\n- one x\n- two'
+    );
+  });
+
+  it('is total on empty input', () => {
+    expect(toReadableText('')).toBe('');
   });
 });

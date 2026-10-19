@@ -218,6 +218,22 @@ describe('lib/api endpoint coverage', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ query: 'hello', topK: 20, ...fields });
   });
 
+  it('search() sends a lower threshold when asked, for the weaker-matches pass', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { count: 0, results: [] }));
+    await api.search('hello', 10, undefined, undefined, 0.15);
+    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(JSON.parse(init?.body as string)).toEqual({ query: 'hello', topK: 10, threshold: 0.15 });
+  });
+
+  it('deleteMemory and resolveContradiction can outlive the page with keepalive', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse(200, { resolved: true }));
+    await api.deleteMemory('mem-1', true);
+    await api.resolveContradiction('a', 'b', 'keep_both', true);
+    expect(vi.mocked(fetch).mock.calls.map(([, init]) => init?.keepalive)).toEqual([true, true]);
+  });
+
   it('getGraph() defaults depth to 1', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { node: null, connections: [], neighbors: [] }));
     await api.getGraph('mem-1');

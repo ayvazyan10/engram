@@ -1,0 +1,736 @@
+/**
+ * The memory sheet and the memory row. Values come from tokens.css; the specs
+ * are the Atlas direction's detail mockup (design/build/dir-a.html, mock 3).
+ */
+
+/* ─── Type mark: a shape per type, hollow for reflections ────────────────── */
+
+.mm-mark {
+  flex: none;
+  display: block;
+  stroke-width: 0;
+}
+
+.mm-mark[data-type="semantic"] { fill: var(--sem); stroke: var(--sem); }
+.mm-mark[data-type="episodic"] { fill: var(--epi); stroke: var(--epi); }
+.mm-mark[data-type="procedural"] { fill: var(--pro); stroke: var(--pro); }
+
+.mm-mark[data-hollow="true"] {
+  fill: var(--paper);
+  stroke-width: 1.5;
+}
+
+/* ─── Row ────────────────────────────────────────────────────────────────── */
+
+.mm-row {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 12px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear;
+}
+
+.mm-row:hover {
+  background: var(--wash);
+}
+
+.mm-row[aria-current="true"] {
+  background: var(--wash);
+  box-shadow: inset 3px 0 0 var(--ink);
+}
+
+.mm-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.mm-row .mm-mark {
+  margin: 4px 0 0 2px;
+}
+
+.mm-row-main {
+  min-width: 0;
+}
+
+.mm-row-t {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 14.5px;
+  line-height: 1.42;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.mm-row-t mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sem) 18%, transparent);
+  color: inherit;
+}
+
+.mm-row-m {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 5px;
+  font-size: 12.5px;
+  font-stretch: 87%;
+  color: var(--ink-3);
+}
+
+.mm-proj {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* ─── Sheet ──────────────────────────────────────────────────────────────── */
+
+.mm-sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  width: 440px;
+  max-width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  color: var(--ink);
+  border-left: 1px solid var(--rule);
+  box-shadow: -10px 0 30px -18px rgba(0, 0, 0, 0.25);
+  font-size: 14px;
+  line-height: 1.45;
+  animation: mm-in var(--dur-in) var(--ease-out);
+}
+
+.mm-sheet.mm-sheet:focus-visible {
+  /* Focus rests on the sheet itself when it opens; its controls show their own. */
+  outline: none;
+}
+
+.mm-sheet[data-state="closing"] {
+  animation: mm-out var(--dur-out) var(--ease-in) forwards;
+  pointer-events: none;
+}
+
+/* An opaque sheet slides in whole: fading it would show the list through it. */
+@keyframes mm-in {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes mm-out {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.mm-head {
+  flex: none;
+  padding: 14px 14px 12px 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mm-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.mm-head-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mm-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 640;
+  color: var(--ink);
+}
+
+.mm-icon-btn {
+  flex: none;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear, color var(--dur-hover) linear;
+}
+
+.mm-icon-btn:hover {
+  background: var(--wash);
+  color: var(--ink);
+}
+
+.mm-tabs {
+  display: flex;
+  gap: 2px;
+  width: max-content;
+  margin-top: 10px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--wash);
+}
+
+.mm-tabs button {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--dur-hover) linear;
+}
+
+.mm-tabs button:hover {
+  color: var(--ink);
+}
+
+.mm-tabs button[aria-selected="true"] {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.mm-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mm-sec {
+  margin: 0;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mm-sec h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 640;
+  color: var(--ink-2);
+}
+
+.mm-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mm-small {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.mm-small a {
+  color: var(--ink);
+}
+
+.mm-quiet {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin: 6px 0 0 -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear, color var(--dur-hover) linear;
+}
+
+.mm-quiet:hover {
+  background: var(--wash);
+  color: var(--ink);
+}
+
+.mm-error {
+  margin: 12px 18px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--fault);
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Importance against retention, with the archive threshold marked. */
+.mm-meter {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.mm-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--wash-2);
+}
+
+.mm-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--ink);
+}
+
+.mm-bar i[data-kind="retention"] {
+  background: var(--ink-2);
+}
+
+.mm-bar b {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1.5px;
+  background: var(--fault);
+}
+
+.mm-meter strong {
+  font-weight: 600;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+}
+
+.mm-note {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+/* Tags. */
+.mm-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mm-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: var(--wash);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mm-tag > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mm-tag button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mm-tag button:hover {
+  background: var(--rule);
+  color: var(--ink);
+}
+
+.mm-tag-add {
+  padding: 0 8px 0 10px;
+  border-color: var(--rule);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: text;
+}
+
+.mm-tag-add:focus-within {
+  border-color: var(--ink);
+}
+
+.mm-tag-add input {
+  width: 84px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  outline: none;
+}
+
+.mm-tag-add input::placeholder {
+  color: var(--ink-2);
+}
+
+/* Facts. */
+.mm-kv {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.mm-kv dt {
+  color: var(--ink-3);
+}
+
+.mm-kv dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Contradictions, drawn as the map draws faults. */
+.mm-fault {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--fault) 40%, var(--rule));
+  border-left: 3px solid var(--fault);
+  border-radius: 4px;
+  background: var(--raised);
+}
+
+.mm-fault[data-done="true"] {
+  border-color: var(--rule);
+  border-left-color: var(--pro);
+}
+
+.mm-fault-t {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mm-fault-t:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mm-fault-m {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  font-stretch: 87%;
+  color: var(--ink-3);
+}
+
+.mm-fault-done {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mm-res {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mm-res button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear;
+}
+
+.mm-res button:hover {
+  background: var(--wash);
+}
+
+/* Connections: the memory at the other end, and how strongly. */
+.mm-conns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mm-conn {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 54px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mm-conn-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mm-conn:hover .mm-conn-t {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mm-conn i {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ink-2);
+}
+
+/* Loading. */
+.mm-skel {
+  display: block;
+  height: 10px;
+  margin: 9px 0;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--wash) 0, var(--rule) 50%, var(--wash) 100%);
+  background-size: 600px 100%;
+  animation: mm-shimmer 1.6s linear infinite;
+}
+
+@keyframes mm-shimmer {
+  from {
+    background-position: -300px 0;
+  }
+  to {
+    background-position: 300px 0;
+  }
+}
+
+/* The fixed foot: what Archive means, and the two actions. */
+.mm-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.mm-foot p {
+  margin: 0 auto 0 0;
+  max-width: 220px;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+
+.mm-foot p[data-tone="fault"] {
+  color: var(--fault);
+}
+
+/* Edit. */
+.mm-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mm-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 16px 18px;
+  border: 0;
+}
+
+.mm-f {
+  margin: 0 0 16px;
+}
+
+.mm-f label {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.mm-f-row {
+  display: flex !important;
+  justify-content: space-between;
+}
+
+.mm-f-row b {
+  font-weight: 600;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.mm-f textarea,
+.mm-input {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+}
+
+.mm-f textarea {
+  min-height: 150px;
+  padding: 10px 12px;
+  font-size: 14.5px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.mm-input {
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 15px;
+}
+
+.mm-f textarea:focus-visible,
+.mm-input:focus-visible {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px var(--wash-2);
+}
+
+.mm-f input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.mm-hint {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+@media (max-width: 720px) {
+  /* A phone gets the whole screen for one memory. */
+  .mm-sheet {
+    left: 0;
+    width: auto;
+    border-left: 0;
+    animation-name: mm-up;
+  }
+
+  .mm-sheet[data-state="closing"] {
+    animation-name: mm-down;
+  }
+
+  @keyframes mm-up {
+    from {
+      transform: translateY(100%);
+    }
+  }
+
+  @keyframes mm-down {
+    to {
+      transform: translateY(100%);
+    }
+  }
+
+  .mm-foot {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .mm-foot {
+    flex-wrap: wrap;
+  }
+
+  .mm-foot p {
+    flex: 1 0 100%;
+    max-width: none;
+  }
+
+  .mm-foot .mm-foot-note {
+    display: none;
+  }
+
+  .mm-foot .at-btn {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-skel {
+    animation: none;
+  }
+}

@@ -162,7 +162,9 @@ export const api = {
     concept?: string;
   }) => request<{ memory: { id: string; type: string; content: string; importance: number; source: string | null; concept: string | null; tags: string; createdAt: string; summary: string | null } }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
 
-  deleteMemory: (id: string) => request<void>(`/memory/${id}`, { method: 'DELETE' }),
+  /** `keepalive` lets the call outlive the page: a deferred archive still
+   *  waiting out its undo window is sent this way when the tab closes. */
+  deleteMemory: (id: string, keepalive = false) => request<void>(`/memory/${id}`, { method: 'DELETE', keepalive }),
 
   recall: (query: string, maxTokens = 2000) =>
     request<{ context: string; memories: unknown[]; latencyMs: number }>('/recall', {
@@ -170,10 +172,11 @@ export const api = {
       body: JSON.stringify({ query, maxTokens }),
     }),
 
-  search: (query: string, topK = 10, types?: string[], namespace?: string | null) =>
+  /** `threshold` is the server's cosine floor (0.3 when left out). */
+  search: (query: string, topK = 10, types?: string[], namespace?: string | null, threshold?: number) =>
     request<{ count: number; results: unknown[] }>('/search', {
       method: 'POST',
-      body: JSON.stringify({ query, topK, types, namespace: namespace ?? undefined, global: namespace === null ? true : undefined }),
+      body: JSON.stringify({ query, topK, threshold, types, namespace: namespace ?? undefined, global: namespace === null ? true : undefined }),
     }),
 
   // depth is explicit: the server defaults to 2, and the 3D view only draws
@@ -229,10 +232,11 @@ export const api = {
       }>;
     }>('/contradictions'),
 
-  resolveContradiction: (sourceId: string, targetId: string, strategy: string) =>
+  resolveContradiction: (sourceId: string, targetId: string, strategy: string, keepalive = false) =>
     request<{ resolved: boolean; archivedId?: string; keptId?: string }>('/contradictions/resolve', {
       method: 'POST',
       body: JSON.stringify({ sourceId, targetId, strategy }),
+      keepalive,
     }),
 
   /**

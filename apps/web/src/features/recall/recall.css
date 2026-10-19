@@ -1,0 +1,115 @@
+/* The recall text, until F4 draws the route on the map. */
+
+.rc-page {
+  max-width: 820px;
+}
+
+.rc-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  margin: var(--s-6) 0;
+  padding: 0 8px 0 14px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-float);
+  box-shadow: var(--shadow);
+  color: var(--ink-2);
+}
+
+.rc-field:has(input:focus-visible) {
+  border-color: color-mix(in srgb, var(--ink) 45%, var(--rule));
+}
+
+.rc-field input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  outline: none;
+}
+
+.rc-field input::placeholder {
+  color: var(--ink-3);
+}
+
+.rc-state {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--ink-2);
+}
+
+.rc-empty {
+  padding: var(--s-5);
+  border: 1px dashed var(--rule);
+  border-radius: var(--r-control);
+}
+
+.rc-empty p {
+  margin: 0 0 var(--s-2);
+}
+
+.rc-muted {
+  color: var(--ink-2);
+}
+
+.rc-frame {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+  overflow: hidden;
+}
+
+.rc-frame figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--rule);
+  font-size: 13px;
+  font-stretch: 87%;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.rc-frame pre {
+  margin: 0;
+  padding: 16px 18px 24px;
+  font-family: var(--font);
+  font-size: 13.5px;
+  font-stretch: 92%;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rc-frame .rc-state {
+  padding: 0 18px 16px;
+  color: var(--fault);
+}
+
+.rc-ref {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--sem) 45%, transparent);
+  border-radius: 0;
+  background: transparent;
+  color: var(--sem);
+  font: inherit;
+  font-weight: 640;
+  font-stretch: 80%;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.rc-ref:hover,
+.rc-ref[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--sem) 15%, transparent);
+}

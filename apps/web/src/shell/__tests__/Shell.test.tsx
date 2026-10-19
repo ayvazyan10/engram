@@ -51,13 +51,15 @@ vi.mock('../../lib/api.js', () => ({
     health: vi.fn().mockResolvedValue({ status: 'ok', version: '0.5.0', uptime: 1 }),
     deleteMemory: vi.fn(),
     storeMemory: vi.fn(),
+    search: vi.fn(),
+    recall: vi.fn(),
     // The plate data layer's three calls. They are `api` methods, so they are
     // stubbed alongside every other call the layout makes — there is no second
     // entry point that could carry a different key or a different timeout.
     getGraphLayout: vi.fn(),
     getGraphEdges: vi.fn(),
     getDecayPolicy: vi.fn(),
-    // NeuronInspector fetches the selected memory's neighbourhood, and these
+    // The memory sheet fetches the selected memory's neighbourhood, and these
     // tests select memories.
     getGraph: vi.fn().mockResolvedValue({ node: null, connections: [], neighbors: [] }),
   },
@@ -157,7 +159,9 @@ function go(to: string) {
 function resetAll() {
   window.location.hash = '';
   useRouteStore.setState({ route: parseHash('') });
-  useMemoryStore.setState({ records: [], loadedCount: 0, projectFilter: undefined });
+  useMemoryStore.setState({
+    records: [], loadedCount: 0, projectFilter: undefined, searchQuery: '', searchResults: [], weakerResults: [], hiddenIds: new Set(),
+  });
   useNeuralStore.setState({
     neurons: [], connections: [], contradictionPairs: [], contradictionIds: new Set(),
     selectedNeuronId: null, hoveredNeuronId: null, isConnected: false,
@@ -224,7 +228,9 @@ describe('Shell effect wiring (W12)', () => {
       .mockResolvedValueOnce({ count: 1, memories: [record({ id: 'c' })] });
 
     render(<Shell />);
-    fireEvent.click(await screen.findByRole('button', { name: /load more/i }));
+    await waitFor(() => expect(plateProps().memories).toBe(1));
+    act(() => go('/'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
 
     await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['a', 'b', 'c']));
     expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, offset: 2 });
@@ -443,6 +449,8 @@ describe('Shell owns Escape', () => {
   });
 
   it('leaves the selection alone when Escape came from a text field', async () => {
+    go('/');
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     render(<Shell />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
     act(() => useNeuralStore.getState().selectNeuron('a'));
@@ -452,27 +460,26 @@ describe('Shell owns Escape', () => {
   });
 
   it('leaves the selection alone while a modal is open — that Escape belongs to the modal', async () => {
+    go('/');
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     render(<Shell />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
-    fireEvent.click(screen.getByTitle(/store new memory/i));
+    fireEvent.click(screen.getByRole('button', { name: 'Store a memory' }));
     act(() => useNeuralStore.getState().selectNeuron('a'));
 
     pressEscape();
     expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
   });
 
-  it('closes only the archive confirmation, keeping the memory it was confirming selected', async () => {
+  it('lets the open memory sheet take its own Escape, which closes it once', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     render(<Shell />);
     await waitFor(() => expect(useMemoryStore.getState().records).toHaveLength(1));
     act(() => useNeuralStore.getState().selectNeuron('a'));
 
-    fireEvent.click(await screen.findByRole('button', { name: /archive memory/i }));
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-
-    pressEscape(document);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(useNeuralStore.getState().selectedNeuronId).toBe('a');
+    const sheet = await screen.findByRole('dialog', { name: /semantic memory/i });
+    pressEscape(sheet);
+    expect(useNeuralStore.getState().selectedNeuronId).toBeNull();
   });
 
   it('stands down for anything a nearer component already handled', async () => {
@@ -533,10 +540,12 @@ describe('Shell store-memory modal integration', () => {
   });
 
   it('opens the store-memory modal, and closing it removes the dialog', async () => {
+    go('/');
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     render(<Shell />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
 
-    fireEvent.click(screen.getByTitle(/store new memory/i));
+    fireEvent.click(screen.getByRole('button', { name: 'Store a memory' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /close/i }));
@@ -575,17 +584,16 @@ describe('Shell on a phone', () => {
     window.matchMedia = originalMatchMedia;
   });
 
-  it('shows the plate alone on a phone, where three columns cannot fit', async () => {
+  it('shows the plate on a phone', async () => {
     render(<Shell />);
     expect(await screen.findByTestId('plate')).toBeInTheDocument();
-    expect(screen.queryByTitle(/store new memory/i)).not.toBeInTheDocument();
   });
 });
 
 describe('Shell Home', () => {
   beforeEach(resetAll);
 
-  it('opens on Home: search and the recent memories, not a plate', async () => {
+  it('opens on the map: search and the recent memories, not a plate', async () => {
     go('/');
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
@@ -594,12 +602,28 @@ describe('Shell Home', () => {
     expect(screen.queryByTestId('plate')).not.toBeInTheDocument();
   });
 
-  it('opens on the first-run onboarding when the store is empty', async () => {
+  it('opens on the first-run onboarding when the store is empty, once', async () => {
     go('/');
-    vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 0, memories: [] });
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
 
     render(<Shell />);
     expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
+    expect(useRouteStore.getState().route.name).toBe('welcome');
+
+    act(() => go('/'));
+    expect(await screen.findByRole('heading', { name: 'Recent memories' })).toBeInTheDocument();
+    expect(useRouteStore.getState().route.name).toBe('map');
+  });
+
+  it('does not send a filtered empty list to the onboarding', async () => {
+    go('/');
+    useMemoryStore.setState({ projectFilter: '/code/api' });
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
+
+    render(<Shell />);
+    await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
+    expect(await screen.findByText('No memories in api yet.')).toBeInTheDocument();
+    expect(useRouteStore.getState().route.name).toBe('map');
   });
 });
 
@@ -610,14 +634,27 @@ describe('Shell routes', () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
   });
 
-  it('shows Home on the map and its AI lens on Recall, and the lens tabs move between the two', async () => {
+  it('takes a search on to Recall with its words, where the exact text opens its memories', async () => {
+    vi.mocked(api.search).mockResolvedValue({ count: 0, results: [] });
+    vi.mocked(api.recall).mockResolvedValue({
+      context: '## Knowledge\n• [aaaaaaaa · 2026-10-19] Sync encryption is optional.',
+      memories: [{ id: 'aaaaaaaa-1111' }],
+      latencyMs: 4,
+    });
     render(<Shell />);
-    expect(await screen.findByRole('heading', { name: 'Recent memories' })).toBeInTheDocument();
+    const input = await screen.findByLabelText(/search memories/i);
+    fireEvent.change(input, { target: { value: 'is sync encrypted' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
 
-    fireEvent.click(screen.getByRole('tab', { name: 'What my AI knows' }));
-    expect(useRouteStore.getState().route.name).toBe('recall');
-    expect(screen.getByRole('tab', { name: 'What my AI knows' })).toHaveAttribute('aria-selected', 'true');
+    const link = await screen.findByRole('link', { name: 'Ask what my AI would be told' });
+    expect(link).toHaveAttribute('href', '#/recall?q=is+sync+encrypted');
+    act(() => go(link.getAttribute('href')!));
+    expect(useRouteStore.getState().route).toMatchObject({ name: 'recall', params: { q: 'is sync encrypted' } });
     expect(document.title).toBe('Recall — Engram');
+    expect(api.recall).toHaveBeenCalledWith('is sync encrypted', 2000);
+
+    fireEvent.click(await screen.findByRole('button', { name: '[aaaaaaaa · 2026-10-19]' }));
+    expect(useNeuralStore.getState().selectedNeuronId).toBe('aaaaaaaa-1111');
   });
 
   it('opens Settings and the onboarding from their routes', async () => {

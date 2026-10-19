@@ -551,6 +551,31 @@ button.at-scope:hover,
   cursor: pointer;
 }
 
+.at-btn svg {
+  flex: none;
+}
+
+.at-btn:hover {
+  filter: brightness(1.15);
+}
+
+.at-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: none;
+}
+
+.at-btn.danger {
+  background: transparent;
+  color: var(--fault);
+  border-color: color-mix(in srgb, var(--fault) 45%, transparent);
+}
+
+.at-btn.danger:hover {
+  background: color-mix(in srgb, var(--fault) 8%, transparent);
+  filter: none;
+}
+
 .at-btn.sec {
   background: var(--raised);
   color: var(--ink);
@@ -560,6 +585,7 @@ button.at-scope:hover,
 
 .at-btn.sec:hover {
   background: color-mix(in srgb, var(--ink) 4%, var(--raised));
+  filter: none;
 }
 
 /* ─── The plates, until F3 replaces them with the map ────────────────────── */
@@ -754,6 +780,7 @@ button.at-scope:hover,
   display: flex;
   align-items: center;
   gap: 14px;
+  width: max-content;
   max-width: calc(100vw - 32px);
   padding: 10px 16px;
   border-radius: 8px;

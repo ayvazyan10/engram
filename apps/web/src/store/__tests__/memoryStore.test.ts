@@ -100,3 +100,27 @@ describe('memoryStore search results', () => {
     expect(useMemoryStore.getState().searchResults).toEqual(results);
   });
 });
+
+describe('memoryStore archive bookkeeping', () => {
+  beforeEach(() => {
+    useMemoryStore.setState({ records: [], searchResults: [], weakerResults: [], hiddenIds: new Set(), storeChanges: 0 });
+  });
+
+  it('hides and unhides a memory waiting out its undo, without touching the lists', () => {
+    useMemoryStore.setState({ records: [makeRecord({ id: 'a' })] });
+    useMemoryStore.getState().setHidden('a', true);
+    expect(useMemoryStore.getState().hiddenIds.has('a')).toBe(true);
+    expect(useMemoryStore.getState().records).toHaveLength(1);
+    useMemoryStore.getState().setHidden('a', false);
+    expect(useMemoryStore.getState().hiddenIds.size).toBe(0);
+  });
+
+  it('removes an archived memory from the list and from both sets of search results', () => {
+    const a = makeRecord({ id: 'a' });
+    useMemoryStore.setState({ records: [a], searchResults: [a], weakerResults: [a] });
+    useMemoryStore.getState().removeRecord('a');
+    const state = useMemoryStore.getState();
+    expect([state.records, state.searchResults, state.weakerResults]).toEqual([[], [], []]);
+    expect(state.storeChanges).toBe(1);
+  });
+});

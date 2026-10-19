@@ -1,0 +1,511 @@
+/**
+ * Home: the floating search field and the side sheet over the map's ground.
+ * Specs from the Atlas direction's Home and phone mockups (dir-a, mocks 1, 6).
+ */
+
+.mp-view {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Until the map is drawn: quiet contours and one line saying so. */
+.mp-ground {
+  position: absolute;
+  inset: 0 400px 0 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--s-4);
+  padding: 120px var(--s-6) var(--s-6);
+}
+
+.mp-contours {
+  width: min(400px, 70%);
+  fill: none;
+  stroke: var(--contour);
+  stroke-width: 1.2;
+}
+
+.mp-ground p {
+  margin: 0;
+  max-width: 34ch;
+  text-align: center;
+  font-size: 15px;
+  font-style: italic;
+  font-stretch: 125%;
+  font-weight: 520;
+  letter-spacing: 0.035em;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* ─── Search field ───────────────────────────────────────────────────────── */
+
+.mp-field {
+  position: absolute;
+  left: var(--s-5);
+  top: 18px;
+  z-index: 6;
+  width: 440px;
+  max-width: calc(100% - 400px - 40px);
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-float);
+  box-shadow: var(--shadow);
+  transition: border-color var(--dur-hover) linear, box-shadow var(--dur-hover) linear;
+}
+
+.mp-field:has(input:focus-visible) {
+  border-color: color-mix(in srgb, var(--ink) 45%, var(--rule));
+  box-shadow: var(--shadow), 0 0 0 3px var(--wash-2);
+}
+
+.mp-q {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 50px;
+  padding: 0 10px 0 14px;
+  color: var(--ink-2);
+}
+
+.mp-q > svg {
+  flex: none;
+}
+
+.mp-q input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+
+.mp-q input:focus-visible {
+  /* The field around it shows focus. */
+  outline: none;
+}
+
+.mp-q input::placeholder {
+  color: var(--ink-3);
+}
+
+.mp-clear {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.mp-clear:hover {
+  background: var(--wash);
+  color: var(--ink);
+}
+
+.mp-spin {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 1px;
+  border: 2px solid var(--rule);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: mp-spin 0.8s linear infinite;
+}
+
+@keyframes mp-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.mp-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 44px;
+  padding: 0 6px 0 10px;
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.mp-sub-note {
+  flex: 1;
+  min-width: 0;
+  color: var(--fault);
+}
+
+.mp-sub .at-scope {
+  min-height: 28px;
+}
+
+.mp-sub .at-cmd {
+  margin-left: 0;
+  min-height: 30px;
+  font-size: 13px;
+}
+
+/* ─── Side sheet ─────────────────────────────────────────────────────────── */
+
+.mp-sheet {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 7;
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--rule);
+  box-shadow: -10px 0 30px -18px rgba(0, 0, 0, 0.25);
+}
+
+.mp-grab {
+  display: none;
+}
+
+.mp-head {
+  flex: none;
+  padding: 18px 14px 12px 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mp-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mp-head h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.mp-count {
+  display: none;
+}
+
+.mp-store {
+  flex: none;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.mp-head p {
+  margin: 3px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.mp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mp-body[aria-busy="true"] > * {
+  opacity: 0.55;
+  transition: opacity var(--dur-hover) linear;
+}
+
+/* A folded machine stream: one line, opens to its rows. */
+.mp-group {
+  border-bottom: 1px solid var(--rule);
+}
+
+.mp-group > button {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px 12px 18px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear;
+}
+
+.mp-group > button:hover {
+  background: var(--wash);
+}
+
+.mp-group > button:focus-visible {
+  outline-offset: -2px;
+}
+
+.mp-group > button > svg {
+  flex: none;
+  margin-left: auto;
+  color: var(--ink-3);
+  transition: transform var(--dur-in) var(--ease-out);
+}
+
+.mp-group > button[aria-expanded="true"] > svg {
+  transform: rotate(180deg);
+}
+
+.mp-group-t {
+  min-width: 0;
+}
+
+.mp-group-t b {
+  font-weight: 640;
+}
+
+.mp-group-t small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.mp-stack {
+  flex: none;
+  display: inline-flex;
+  width: 18px;
+}
+
+.mp-stack i {
+  width: 10px;
+  height: 14px;
+  margin-left: -6px;
+  border: 1.5px solid var(--ink-2);
+  border-radius: 2px;
+  background: var(--raised);
+}
+
+.mp-stack i:first-child {
+  margin-left: 0;
+}
+
+.mp-group-rows {
+  border-top: 1px solid var(--rule);
+  background: var(--paper);
+  animation: mp-open var(--dur-in) var(--ease-out);
+}
+
+.mp-group-rows .mm-row {
+  padding-left: 30px;
+}
+
+.mp-group-rows .mm-row:last-child {
+  border-bottom: 0;
+}
+
+@keyframes mp-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.mp-weak {
+  padding: 18px 18px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mp-weak h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 640;
+  color: var(--ink-2);
+}
+
+.mp-weak p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.mp-recall {
+  padding: 16px 18px 24px;
+}
+
+.mp-recall p {
+  margin: 0 0 12px;
+  max-width: 48ch;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.mp-recall div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.mp-note {
+  padding: 16px 18px;
+}
+
+.mp-note p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mp-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: 8px 10px 16px 18px;
+  font-size: 12.5px;
+  font-stretch: 87%;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.mp-more .mm-quiet {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .mp-ground {
+    inset: 0 0 56% 0;
+    gap: var(--s-3);
+    padding: 116px var(--s-4) var(--s-4);
+  }
+
+  .mp-contours {
+    width: 44%;
+  }
+
+  .mp-ground p {
+    font-size: 13.5px;
+  }
+
+  .mp-field {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    width: auto;
+    max-width: none;
+  }
+
+  .mp-q {
+    height: 46px;
+  }
+
+  /* With one project and no error, the row under the field has nothing to hold. */
+  .mp-sub:not(:has(.at-scope-wrap, [role="alert"])) {
+    display: none;
+  }
+
+  /* A bottom sheet that rests at three heights; drag or tap the handle. */
+  .mp-sheet {
+    top: auto;
+    left: 0;
+    width: auto;
+    height: 56%;
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+    box-shadow: 0 -8px 30px -14px rgba(0, 0, 0, 0.3);
+    transition: height var(--dur-in) var(--ease-out);
+  }
+
+  .mp-sheet[data-snap="0"] {
+    height: 30%;
+  }
+
+  .mp-sheet[data-snap="2"] {
+    height: calc(100% - 124px);
+  }
+
+  .mp-sheet[data-dragging] {
+    transition: none;
+  }
+
+  .mp-grab {
+    display: block;
+    flex: none;
+    width: 100%;
+    padding: 9px 0 6px;
+    border: 0;
+    background: transparent;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .mp-grab i {
+    display: block;
+    width: 40px;
+    height: 5px;
+    margin: 0 auto;
+    border-radius: 3px;
+    background: var(--rule);
+  }
+
+  .mp-head {
+    padding: 2px 12px 10px 18px;
+  }
+
+  .mp-head h2 {
+    display: block;
+    font-size: 17px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .mp-count {
+    display: block;
+    flex: none;
+    font-size: 13px;
+    font-stretch: 87%;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-3);
+  }
+
+  .mp-head p {
+    display: none;
+  }
+
+  .mp-store {
+    padding: 0 8px;
+  }
+
+  .mp-store span {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-spin {
+    animation: none;
+    border-top-color: var(--ink-2);
+  }
+}

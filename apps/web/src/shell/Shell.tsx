@@ -7,13 +7,12 @@ import CommandPalette, { GO_KEYS } from './CommandPalette.js';
 import Toasts, { showToast } from './Toasts.js';
 import { useRouteStore, type Route } from './routeStore.js';
 import PlateSurface from '../components/plates/PlateSurface.js';
-import MemoryPanel from '../components/ui/MemoryPanel.js';
-import SearchBar from '../components/ui/SearchBar.js';
-import NeuronInspector from '../components/ui/NeuronInspector.js';
 import StoreMemoryModal from '../components/ui/StoreMemoryModal.js';
 import UnlockGate from '../components/ui/UnlockGate.js';
-// Home is the landing view, so it is in the main chunk rather than split.
-import HomeView from '../components/views/HomeView.js';
+// The map is the landing view, so it is in the main chunk rather than split.
+import MapView from '../features/map/MapView.js';
+import RecallView from '../features/recall/RecallView.js';
+import MemorySheet from '../features/memory/MemorySheet.js';
 import Onboarding from '../components/views/Onboarding.js';
 import SettingsView from '../features/settings/SettingsView.js';
 import { useNeuralStore } from '../store/neuralStore.js';
@@ -26,7 +25,6 @@ import { loadPlateData } from '../lib/plate/data.js';
 import { refreshServerStats } from '../lib/serverStats.js';
 import type { ObsData } from '../lib/plate/contract.js';
 import { useWebSocket, asMemoryRecord } from '../hooks/useWebSocket.js';
-import { COMPACT_QUERY, useMediaQuery } from '../hooks/useMediaQuery.js';
 import { useThemeVars } from '../hooks/useThemeVars.js';
 import './shell.css';
 
@@ -66,7 +64,6 @@ export default function Shell() {
   const reviewCount = useNeuralStore((s) => s.contradictionPairs.length);
   const t = useTemplateStore((s) => s.activeTemplate);
   const locked = useAuthStore((s) => s.locked);
-  const isCompact = useMediaQuery(COMPACT_QUERY);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -213,10 +210,19 @@ export default function Shell() {
     document.title = route.name === 'map' ? 'Engram' : `${TITLES[route.name]} — Engram`;
   }, [route.name]);
 
-  /** `/` and the palette's Search: the field is on Map, Recall and the plates. */
+  // An empty store opens on the steps to connect an AI, once per visit; the
+  // map stays reachable from the rail.
+  const welcomed = useRef(false);
+  useEffect(() => {
+    const empty = !loading && !loadError && projectFilter === undefined && useMemoryStore.getState().records.length === 0;
+    if (!empty || welcomed.current || useRouteStore.getState().route.name !== 'map') return;
+    welcomed.current = true;
+    navigate('/welcome');
+  }, [loading, loadError, projectFilter, navigate]);
+
+  /** `/` and the palette's Search: the field is on the map. */
   const focusSearch = useCallback(() => {
-    const name = useRouteStore.getState().route.name;
-    if (name !== 'map' && name !== 'recall' && name !== 'plates') flushSync(() => navigate('/'));
+    if (useRouteStore.getState().route.name !== 'map') flushSync(() => navigate('/'));
     const input = document.querySelector<HTMLInputElement>(SEARCH_INPUT);
     input?.focus();
     input?.select();
@@ -266,6 +272,8 @@ export default function Shell() {
       <Rail reviewCount={reviewCount} />
 
       <div className="at-stage">
+        {/* The map carries its scope and commands in its own search field. */}
+        {route.name !== 'map' && (
         <header className="at-bar" data-route={route.name}>
           {/* A phone has no rail to say where you are; the place name does. */}
           <span className="at-where" aria-hidden="true">
@@ -290,29 +298,23 @@ export default function Shell() {
             <span>Commands</span>
           </button>
         </header>
+        )}
 
         <main className="at-main" aria-label={TITLES[route.name]}>
-          {route.name === 'map' || route.name === 'recall' ? (
-            <HomeView {...viewProps} onLoadMore={loadMore} loadingMore={loadingMore} onStore={openStore} />
+          {route.name === 'map' ? (
+            <MapView
+              {...viewProps}
+              onLoadMore={loadMore}
+              loadingMore={loadingMore}
+              onStore={openStore}
+              onCommands={() => setPaletteOpen(true)}
+            />
+          ) : route.name === 'recall' ? (
+            <RecallView onStore={openStore} />
           ) : route.name === 'plates' ? (
-            isCompact ? (
-              <div className="at-plate">
-                <PlateSurface data={plateData} error={plateError} onRetry={retryPlate} />
-              </div>
-            ) : (
-              <div className="at-plates">
-                <div className="at-plates-side" style={{ background: t.panelBg, borderRightColor: t.panelBorder }}>
-                  <SearchBar />
-                  <MemoryPanel {...viewProps} onStore={openStore} onLoadMore={loadMore} loadingMore={loadingMore} />
-                </div>
-                <div className="at-plate">
-                  <PlateSurface data={plateData} error={plateError} onRetry={retryPlate} />
-                </div>
-                <div className="at-plates-inspector" style={{ background: t.panelBg, borderLeftColor: t.panelBorder }}>
-                  <NeuronInspector />
-                </div>
-              </div>
-            )
+            <div className="at-plate">
+              <PlateSurface data={plateData} error={plateError} onRetry={retryPlate} />
+            </div>
           ) : route.name === 'welcome' ? (
             <div className="at-scroll">
               <Onboarding onRefresh={loadMemories} onDone={() => navigate('/')} />
@@ -337,6 +339,7 @@ export default function Shell() {
 
       <BottomNav reviewCount={reviewCount} onCommands={() => setPaletteOpen(true)} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onSearch={focusSearch} onStore={openStore} />
+      <MemorySheet />
       <Toasts />
 
       {showStoreModal && (

@@ -22,6 +22,9 @@ const PATHS = {
   more: (<><circle cx="6" cy="12" r="1.3" /><circle cx="12" cy="12" r="1.3" /><circle cx="18" cy="12" r="1.3" /></>),
   chev: (<path d="M7 10l5 5 5-5" />),
   check: (<path d="M5 12.5l4.5 4.5L19 7.5" />),
+  close: (<path d="M6 6l12 12M18 6L6 18" />),
+  edit: (<path d="M14.5 5.5l4 4L9 19H5v-4z" />),
+  archive: (<><path d="M4 6.5h16v3H4z" /><path d="M5.5 9.5v9h13v-9M10 13h4" /></>),
   plug: (<><path d="M9 3.5v4M15 3.5v4" /><path d="M6.5 7.5h11v3a5.5 5.5 0 01-11 0z" /><path d="M12 16v4.5" /></>),
   plates: (<><path d="M3.5 8.5L12 4l8.5 4.5L12 13z" /><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" opacity=".55" /></>),
 } satisfies Record<string, ReactElement>;

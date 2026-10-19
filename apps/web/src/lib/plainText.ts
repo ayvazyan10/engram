@@ -49,6 +49,24 @@ export function toPlainText(value: string): string {
 }
 
 /**
+ * Markdown source → readable text that keeps its paragraphs and lists: the
+ * same syntax stripped as `toPlainText`, but line breaks stay (runs of blank
+ * lines become one) for a reader that shows the whole memory.
+ */
+export function toReadableText(value: string): string {
+  if (!value) return '';
+  return value
+    .replace(FENCE, '')
+    .replace(HEADING, '')
+    .replace(BOLD, '$1')
+    .replace(EM, '$1')
+    .replace(CODE, '$1')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
  * Truncate to at most `max` characters, ALWAYS marking that it happened (F7).
  *
  * The ellipsis is the whole point: NeuronLabels used a bare `slice(0, 34)` and

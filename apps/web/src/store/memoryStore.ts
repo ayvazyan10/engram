@@ -13,6 +13,10 @@ export interface MemoryRecord {
   /** The project this memory belongs to: an absolute git-root path, or null
    *  (or absent, from an older server) for a global memory. */
   namespace?: string | null;
+  /** How often recall has handed this memory to an AI, and when it last did.
+   *  Full rows carry them (GET /graph/:id); a list page may not. */
+  accessCount?: number;
+  lastAccessedAt?: string | null;
 }
 
 /** Which memories Home lists: `undefined` is every one, `null` the global
@@ -22,6 +26,9 @@ export type ProjectFilter = string | null | undefined;
 interface MemoryState {
   records: MemoryRecord[];
   searchResults: MemoryRecord[];
+  /** When the search found fewer than three, the hits a second, looser pass
+   *  added. Listed apart, under "Weaker matches". */
+  weakerResults: MemoryRecord[];
   searchQuery: string;
   isSearching: boolean;
   /**
@@ -38,12 +45,10 @@ interface MemoryState {
    * fetched.
    */
   loadedCount: number;
-  currentContext: string;
-  /** Full ids of the memories `currentContext` was assembled from. The block
-   *  itself only prints 8-character prefixes. */
-  contextIds: string[];
-  recallLatencyMs: number | null;
   highlightedIds: Set<string>;
+  /** Memories archived a moment ago whose call waits out the undo window:
+   *  every list leaves them out until it is sent or undone. */
+  hiddenIds: ReadonlySet<string>;
   /**
    * Bumped when a memory joins or leaves the STORE (a socket arrival, an
    * archive) — not when the dashboard merely loads another page of it. The
@@ -57,12 +62,11 @@ interface MemoryState {
 
   setProjectFilter: (filter: ProjectFilter) => void;
   setRecords: (records: MemoryRecord[]) => void;
-  setSearchResults: (results: MemoryRecord[]) => void;
+  setSearchResults: (results: MemoryRecord[], weaker?: MemoryRecord[]) => void;
   setSearchQuery: (query: string) => void;
   setSearching: (searching: boolean) => void;
-  /** `latencyMs: null` clears the status bar's recall read-out. */
-  setContext: (context: string, latencyMs: number | null, ids?: string[]) => void;
   setHighlightedIds: (ids: Set<string>) => void;
+  setHidden: (id: string, hidden: boolean) => void;
   /** The next page of the list, appended. Rows already present (a socket
    *  arrival shifts the server's offsets) are skipped. */
   appendRecords: (records: MemoryRecord[]) => void;
@@ -78,23 +82,28 @@ interface MemoryState {
 export const useMemoryStore = create<MemoryState>((set) => ({
   records: [],
   searchResults: [],
+  weakerResults: [],
   searchQuery: '',
   isSearching: false,
   loadedCount: 0,
-  currentContext: '',
-  contextIds: [],
-  recallLatencyMs: null,
   highlightedIds: new Set(),
+  hiddenIds: new Set(),
   storeChanges: 0,
   projectFilter: undefined,
 
   setProjectFilter: (filter) => set({ projectFilter: filter }),
   setRecords: (records) => set({ records, loadedCount: records.length }),
-  setSearchResults: (results) => set({ searchResults: results }),
+  setSearchResults: (results, weaker = []) => set({ searchResults: results, weakerResults: weaker }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setSearching: (searching) => set({ isSearching: searching }),
-  setContext: (context, latencyMs, ids = []) => set({ currentContext: context, recallLatencyMs: latencyMs, contextIds: ids }),
   setHighlightedIds: (ids) => set({ highlightedIds: ids }),
+  setHidden: (id, hidden) =>
+    set((state) => {
+      const hiddenIds = new Set(state.hiddenIds);
+      if (hidden) hiddenIds.add(id);
+      else hiddenIds.delete(id);
+      return { hiddenIds };
+    }),
   appendRecords: (page) =>
     set((state) => {
       const known = new Set(state.records.map((r) => r.id));
@@ -129,6 +138,8 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   removeRecord: (id) =>
     set((state) => ({
       records: state.records.filter((r) => r.id !== id),
+      searchResults: state.searchResults.filter((r) => r.id !== id),
+      weakerResults: state.weakerResults.filter((r) => r.id !== id),
       loadedCount: Math.max(0, state.loadedCount - 1),
       storeChanges: state.storeChanges + 1,
     })),
@@ -142,5 +153,6 @@ export const useMemoryStore = create<MemoryState>((set) => ({
     set((state) => ({
       records: state.records.map((r) => (r.id === record.id ? record : r)),
       searchResults: state.searchResults.map((r) => (r.id === record.id ? record : r)),
+      weakerResults: state.weakerResults.map((r) => (r.id === record.id ? record : r)),
     })),
 }));
