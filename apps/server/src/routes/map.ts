@@ -98,7 +98,7 @@ function payload(cache: CachedMap): MapPayload {
   const now = new Date();
   const decay = new DecayEngine(brain.getDecayPolicy());
   const tags = rows.map((row) => JSON.parse(row.tags) as string[]);
-  const names = regionNames(rows.map((r, i) => ({ tags: tags[i]!, concept: r.concept })), groups.map((g) => g.members));
+  const names = regionNames(rows.map((r, i) => ({ tags: tags[i]!, concept: r.concept, content: r.content })), groups.map((g) => g.members));
   const nodes: MapNode[] = rows.map((row, i) => ({
     ...projection.points[i]!, type: row.type, importance: row.importance,
     retention: decay.computeRetention(row, now), protected: decay.isProtected(row),
