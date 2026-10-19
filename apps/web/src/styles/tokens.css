@@ -36,6 +36,18 @@
   --terrain-6: #7FA693;
   --hill: rgba(15, 42, 38, 0.10);
 
+  /* Charts: one spruce hue for counts of memories (Insights), and its ordinal
+     ramp for the activity grid, validated with the dataviz --ordinal check. */
+  --series: #2F6B58;
+  --heat-1: #8AB5A3;
+  --heat-2: #5A9580;
+  --heat-3: #2F6B58;
+  --heat-4: #123F33;
+  --heat-ink-1: #0F1A1C;
+  --heat-ink-2: #0F1A1C;
+  --heat-ink-3: #FFFFFF;
+  --heat-ink-4: #FFFFFF;
+
   /* Type: Archivo, one family; the width axis does a second face's work. */
   --font: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
@@ -134,6 +146,15 @@
     --terrain-5: #26433E;
     --terrain-6: #2C4D46;
     --hill: rgba(0, 0, 0, 0.35);
+    --series: #6DB49E;
+    --heat-1: #3A6A5D;
+    --heat-2: #4F8F7B;
+    --heat-3: #6DB49E;
+    --heat-4: #A6DDCA;
+    --heat-ink-1: #FFFFFF;
+    --heat-ink-2: #0F1A1C;
+    --heat-ink-3: #0F1A1C;
+    --heat-ink-4: #0F1A1C;
   }
 }
 
@@ -164,6 +185,15 @@
   --terrain-5: #26433E;
   --terrain-6: #2C4D46;
   --hill: rgba(0, 0, 0, 0.35);
+  --series: #6DB49E;
+  --heat-1: #3A6A5D;
+  --heat-2: #4F8F7B;
+  --heat-3: #6DB49E;
+  --heat-4: #A6DDCA;
+  --heat-ink-1: #FFFFFF;
+  --heat-ink-2: #0F1A1C;
+  --heat-ink-3: #0F1A1C;
+  --heat-ink-4: #0F1A1C;
 }
 
 @media (prefers-reduced-motion: reduce) {

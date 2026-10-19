@@ -18,16 +18,13 @@ vi.mock('../../hooks/useWebSocket.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../hooks/useWebSocket.js')>()),
   useWebSocket: () => {},
 }));
-// The views F6 replaces belong to a different change; stub them so this
-// file asserts what the shell PASSES rather than what they happen to render.
-vi.mock('../../components/views/TimelineView.js', () => ({
-  default: (p: ViewProps) => <div data-testid="timeline">{describeProps(p)}</div>,
+// Timeline and Insights have their own tests; stub them so this file asserts
+// which screen each route mounts rather than what they happen to render.
+vi.mock('../../features/timeline/TimelineView.js', () => ({
+  default: () => <div data-testid="timeline" />,
 }));
-vi.mock('../../components/views/AnalyticsView.js', () => ({
-  default: (p: ViewProps) => <div data-testid="analytics">{describeProps(p)}</div>,
-}));
-vi.mock('../../components/views/ReflectionView.js', () => ({
-  default: (p: ViewProps) => <div data-testid="reflections">{describeProps(p)}</div>,
+vi.mock('../../features/insights/InsightsView.js', () => ({
+  default: (p: { tab: string }) => <div data-testid="insights">{p.tab}</div>,
 }));
 vi.mock('../../lib/api.js', () => ({
   api: {
@@ -48,6 +45,10 @@ vi.mock('../../lib/api.js', () => ({
     // The Review badge and screen.
     getReviewSummary: vi.fn(),
     getReviewQueue: vi.fn(),
+    // Settings and health reads.
+    getSyncStatus: vi.fn().mockResolvedValue({ enabled: false }),
+    getEmbeddingStatus: vi.fn().mockRejectedValue(new Error('not stubbed')),
+    getIndexStatus: vi.fn().mockRejectedValue(new Error('not stubbed')),
   },
   ApiError: class ApiError extends Error {
     status: number;
@@ -60,20 +61,6 @@ vi.mock('../../lib/api.js', () => ({
 
 const getMap = vi.mocked(api.getMap);
 const getDecayPolicy = vi.mocked(api.getDecayPolicy);
-
-interface ViewProps {
-  loading: boolean;
-  error: string | null;
-  onRetry: () => void;
-}
-
-function describeProps(p: ViewProps): string {
-  return JSON.stringify({
-    loading: p.loading,
-    error: p.error,
-    onRetry: typeof p.onRetry,
-  });
-}
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   return {
@@ -335,25 +322,20 @@ describe('Shell REST payload validation (W10)', () => {
   });
 });
 
-describe('Shell data-view props (coordination point)', () => {
+describe('Shell screens', () => {
   beforeEach(resetAll);
 
   it.each([
-    ['timeline', '/timeline'],
-    ['analytics', '/insights'],
-    ['reflections', '/insights/reflections'],
-  ] as const)('threads loading / error / onRetry into the %s view', async (view, to) => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
+    ['timeline', '/timeline', ''],
+    ['insights', '/insights', 'numbers'],
+    ['insights', '/insights/reflections', 'reflections'],
+  ] as const)('mounts the %s screen for %s', async (view, to, tab) => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
     render(<Shell />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
 
     act(() => go(to));
-    const node = await screen.findByTestId(view);
-    expect(JSON.parse(node.textContent ?? '{}')).toEqual({
-      loading: false,
-      error: null,
-      onRetry: 'function',
-    });
+    expect(await screen.findByTestId(view)).toHaveTextContent(tab);
   });
 });
 
@@ -432,7 +414,7 @@ describe('Shell Home', () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 0, memories: [] });
 
     render(<Shell />);
-    expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Nothing charted yet' })).toBeInTheDocument();
     expect(useRouteStore.getState().route.name).toBe('welcome');
 
     act(() => go('/'));
@@ -535,26 +517,27 @@ describe('Shell memory links (?m=)', () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
   });
 
-  it('opens the memory a link names', async () => {
-    window.location.hash = '#/?m=a';
-    useRouteStore.setState({ route: parseHash('#/?m=a') });
+  it.each(['/', '/timeline', '/insights/reflections'])('opens the memory named by a %s link', async (route) => {
+    go(`${route}?m=a`);
     render(<Shell />);
     await waitFor(() => expect(useNeuralStore.getState().selectedNeuronId).toBe('a'));
+    expect(await screen.findByRole('dialog', { name: /semantic memory/i })).toBeInTheDocument();
   });
 
-  it('writes the selected memory into the link, and Escape takes it out again', async () => {
-    go('/');
+  it.each(['/', '/timeline?before=2026-10-01', '/insights/reflections'])('keeps the %s route when opening and closing a memory', async (route) => {
+    go(route);
     render(<Shell />);
     await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
 
     act(() => useNeuralStore.getState().selectNeuron('a'));
-    expect(window.location.hash).toBe('#/?m=a');
+    expect(window.location.hash).toBe(`#${route}${route.includes('?') ? '&' : '?'}m=a`);
+    expect(await screen.findByRole('dialog', { name: /semantic memory/i })).toBeInTheDocument();
 
     act(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     });
     expect(useNeuralStore.getState().selectedNeuronId).toBeNull();
-    expect(window.location.hash).toBe('#/');
+    expect(window.location.hash).toBe(`#${route}`);
   });
 
   it('closes the memory when the reader goes somewhere else', async () => {

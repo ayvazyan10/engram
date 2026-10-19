@@ -1,0 +1,104 @@
+/**
+ * Settings and health. Facts are set as a spec sheet: what it is and what it
+ * means on the left, the value in condensed figures on the right. A state
+ * carries a word as well as its dot (the dot matches the rail's Live dot).
+ */
+
+.st-page .wc-connect {
+  margin: var(--s-4) 0 var(--s-4);
+}
+
+.st-watch {
+  margin-top: var(--s-1);
+}
+
+.st-h {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.st-h .mm-quiet {
+  margin: 0 -8px 0 0;
+  font-size: 13px;
+}
+
+.st-rows {
+  margin: var(--s-2) 0 0;
+}
+
+.st-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  gap: var(--s-4);
+  padding: 11px 0;
+  border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent);
+}
+
+.st-row:first-child {
+  border-top: 0;
+}
+
+.st-row dt {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.st-row dt small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--ink-3);
+}
+
+.st-row dd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--s-2);
+  margin: 0;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 560;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.st-row dd i {
+  flex: none;
+  margin-top: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pro);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pro) 22%, transparent);
+}
+
+.st-row dd[data-state="bad"] i {
+  background: var(--fault);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fault) 22%, transparent);
+}
+
+.st-path {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-stretch: 100%;
+  letter-spacing: 0;
+}
+
+@media (max-width: 720px) {
+  .st-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .st-row dd {
+    justify-content: flex-start;
+    text-align: left;
+  }
+}

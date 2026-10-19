@@ -353,9 +353,7 @@ export function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-/** '#rrggbb' -> 0xrrggbb, for three.js material colours. Lets viewStore.ts
- *  reference TYPE_COLORS directly instead of re-typing the same hex as a
- *  numeric literal. */
+/** '#rrggbb' -> 0xrrggbb, for numeric material colours. */
 export function hexToInt(hex: string): number {
   return parseInt(hex.replace('#', ''), 16);
 }

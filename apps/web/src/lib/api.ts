@@ -233,9 +233,11 @@ export const api = {
 
   /** `namespace`: a path lists one project, `null` the global memories, and
    *  leaving it out lists every memory. */
-  listMemories: (params?: { type?: string; namespace?: string | null; limit?: number; offset?: number }) => {
+  listMemories: (params?: { type?: string; namespace?: string | null; limit?: number; offset?: number; before?: string }) => {
     const q = new URLSearchParams();
     if (params?.type) q.set('type', params.type);
+    // ISO date-time: only memories stored strictly before it (Timeline paging).
+    if (params?.before) q.set('before', params.before);
     if (typeof params?.namespace === 'string') q.set('namespace', params.namespace);
     if (params?.namespace === null) q.set('global', 'true');
     if (params?.limit) q.set('limit', String(params.limit));
@@ -339,7 +341,32 @@ export const api = {
    * is the server's rather than a constant the client picked.
    */
   getDecayPolicy: () =>
-    request<{ halfLifeDays: number; archiveThreshold: number }>('/decay/policy'),
+    request<{ halfLifeDays: number; archiveThreshold: number; decayIntervalMs?: number }>('/decay/policy'),
+
+  /** GET /api/sync/status — `{ enabled: false }` when ENGRAM_SYNC_URL is unset. */
+  getSyncStatus: () =>
+    request<{
+      enabled: boolean;
+      state?: 'idle' | 'pushing' | 'pulling' | 'error';
+      lastSyncAt?: string | null;
+      pendingPushCount?: number;
+      lastError?: string | null;
+    }>('/sync/status'),
+
+  /** GET /api/embeddings/status — the model and how many memories it has embedded. */
+  getEmbeddingStatus: () =>
+    request<{
+      currentModel: string;
+      currentDimension: number;
+      totalEmbedded: number;
+      staleCount: number;
+      legacyCount: number;
+      dimensionMismatchCount: number;
+      needsReEmbed: boolean;
+    }>('/embeddings/status'),
+
+  /** GET /api/index/status — the vector index search reads. */
+  getIndexStatus: () => request<{ entryCount: number; loadedFrom: string; persisted: boolean }>('/index/status'),
 
   /**
    * GET /api/analytics — windowed and all-time figures, with the window stated.
