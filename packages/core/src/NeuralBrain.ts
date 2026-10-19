@@ -47,7 +47,7 @@ import { PluginRegistry } from './plugins/PluginRegistry.js';
 import type { EngramPlugin, PluginInfo } from './plugins/PluginRegistry.js';
 import { assertValidImportance, clampImportance } from './retrieval/ImportanceScorer.js';
 import { ContextAssembler, FILTER_CANDIDATE_MULTIPLIER, hasRecallFilters, matchesMemoryFilters } from './retrieval/ContextAssembler.js';
-import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
+import type { RecallOptions, RecallResult, RecallExplanation, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
 import { hybridSearch } from './retrieval/HybridSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
@@ -1226,6 +1226,17 @@ export class NeuralBrain {
     return result;
   }
 
+  /** Preview recall without access-statistic, audit or plugin-hook writes. */
+  async explainRecall(query: string, options?: RecallOptions): Promise<RecallExplanation> {
+    this.assertInitialized();
+    await this.syncIndexFromStore();
+    const { context, latencyMs, budget, items, candidates } = await this.assembler.plan(query, {
+      ...options,
+      crossNamespace: this.resolveCrossNamespace(options?.crossNamespace),
+    });
+    return { context, latencyMs, budget, items, candidates };
+  }
+
   /**
    * Streaming recall — yields memories progressively as they're found.
    * High-confidence vector results first, then graph-expanded neighbors, then final context.
@@ -1369,7 +1380,7 @@ export class NeuralBrain {
 
   async updateMemory(
     id: string,
-    input: Partial<Pick<StoreInput, 'content' | 'importance' | 'tags' | 'concept'>>,
+    input: Partial<Pick<StoreInput, 'content' | 'importance' | 'tags' | 'concept'>> & { summary?: string },
   ): Promise<Memory> {
     const resolvedId = this.resolveMemoryId(id);
     if (!resolvedId) throw new Error(`Memory not found: ${id}`);
@@ -1377,7 +1388,7 @@ export class NeuralBrain {
     const db = getDb();
     const existing = db.select().from(schema.memories)
       .where(eq(schema.memories.id, resolvedId)).get()!;
-    const { content, importance, tags, concept } = input;
+    const { content, importance, tags, concept, summary } = input;
     const updates: Partial<NewMemory> = {
       updatedAt: new Date().toISOString(), deviceId: getDeviceId(),
     };
@@ -1385,6 +1396,7 @@ export class NeuralBrain {
     if (importance !== undefined) updates.importance = importance;
     if (tags !== undefined) updates.tags = JSON.stringify(tags);
     if (concept !== undefined) updates.concept = concept;
+    if (summary !== undefined) updates.summary = summary;
     const text = memoryEmbeddingText({ ...existing, ...updates });
     const newVector = text !== memoryEmbeddingText(existing) ? await embed(text) : null;
     if (newVector) {
@@ -2299,70 +2311,56 @@ export class NeuralBrain {
   /**
    * Get all unresolved contradictions (memories linked by 'contradicts' edges).
    */
-  async getContradictions(namespace?: string, limit?: number): Promise<Array<{
+  private contradictionConditions(namespace?: string, global?: boolean): SQL[] {
+    const conditions = this.liveConditions();
+    // Existing core callers use soft filter-mode visibility (project + shared).
+    // REST supplies the global selector, even when false, for exact list scope.
+    if (this.namespaceMode === 'filter') conditions.push(this.activeNamespace
+      ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))!
+      : isNull(schema.memories.namespace));
+    if (global !== undefined) {
+      if (this.activeNamespace) conditions.push(eq(schema.memories.namespace, this.activeNamespace));
+      if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
+      if (global) conditions.push(isNull(schema.memories.namespace));
+    }
+    const visible = getDb().select({ id: schema.memories.id }).from(schema.memories).where(and(...conditions));
+    const edges = [
+      eq(schema.memoryConnections.relationship, 'contradicts'),
+      isNull(schema.memoryConnections.deletedAt),
+      inArray(schema.memoryConnections.sourceId, visible),
+      inArray(schema.memoryConnections.targetId, visible),
+    ];
+    if (global === undefined && this.namespaceMode === 'filter' && namespace) {
+      const project = getDb().select({ id: schema.memories.id }).from(schema.memories).where(eq(schema.memories.namespace, namespace));
+      edges.push(or(inArray(schema.memoryConnections.sourceId, project), inArray(schema.memoryConnections.targetId, project))!);
+    }
+    return edges;
+  }
+
+  async getContradictionCount(namespace?: string, global = false): Promise<number> {
+    this.assertInitialized();
+    return getDb().select({ total: sql<number>`count(*)` }).from(schema.memoryConnections)
+      .where(and(...this.contradictionConditions(namespace, global))).get()!.total;
+  }
+
+  async getContradictions(namespace?: string, limit?: number, offset = 0, global?: boolean): Promise<Array<{
     edge: { id: string; sourceId: string; targetId: string; strength: number; metadata: string };
     source: Memory;
     target: Memory;
   }>> {
     this.assertInitialized();
     const db = getDb();
-
-    const edges = await db
-      .select()
-      .from(schema.memoryConnections)
-      .where(
-        and(
-          eq(schema.memoryConnections.relationship, 'contradicts'),
-          isNull(schema.memoryConnections.deletedAt)
-        )
-      );
-
-    const results: Array<{
-      edge: { id: string; sourceId: string; targetId: string; strength: number; metadata: string };
-      source: Memory;
-      target: Memory;
-    }> = [];
-
-    // Load every referenced memory in ONE query instead of two per edge. The
-    // previous 1+2N pattern kept getting slower as the contradicts set grew,
-    // and most of those rows were then discarded as archived/out-of-namespace.
+    const edges = db.select({
+      id: schema.memoryConnections.id, sourceId: schema.memoryConnections.sourceId,
+      targetId: schema.memoryConnections.targetId, strength: schema.memoryConnections.strength, metadata: schema.memoryConnections.metadata,
+    }).from(schema.memoryConnections)
+      .where(and(...this.contradictionConditions(namespace, global)))
+      .orderBy(schema.memoryConnections.id).limit(limit ?? -1).offset(offset).all();
     const referencedIds = [...new Set(edges.flatMap((e) => [e.sourceId, e.targetId]))];
-    const activeMemories = referencedIds.length
-      ? await db
-          .select()
-          .from(schema.memories)
-          .where(and(inArray(schema.memories.id, referencedIds), isNull(schema.memories.archivedAt)))
-      : [];
-    const byId = new Map(activeMemories.map((m) => [m.id, m]));
-
-    for (const edge of edges) {
-      const source = byId.get(edge.sourceId);
-      const target = byId.get(edge.targetId);
-
-      // Only include if both memories are still active
-      if (!source || !target) continue;
-
-      // Namespace filtering
-      if (!this.canAccessNamespace(source.namespace) || !this.canAccessNamespace(target.namespace)) continue;
-      if (this.namespaceMode === 'filter' && namespace
-          && source.namespace !== namespace && target.namespace !== namespace) continue;
-
-      if (limit !== undefined && results.length >= limit) break;
-
-      results.push({
-        edge: {
-          id: edge.id,
-          sourceId: edge.sourceId,
-          targetId: edge.targetId,
-          strength: edge.strength,
-          metadata: edge.metadata,
-        },
-        source,
-        target,
-      });
-    }
-
-    return results;
+    const rows = referencedIds.length ? db.select().from(schema.memories)
+      .where(inArray(schema.memories.id, referencedIds)).all() : [];
+    const byId = new Map(rows.map((m) => [m.id, m]));
+    return edges.map((edge) => ({ edge, source: byId.get(edge.sourceId)!, target: byId.get(edge.targetId)! }));
   }
 
   /**

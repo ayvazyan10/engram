@@ -229,7 +229,7 @@ export function resetSceneCaches(): void {
   edgeCache = null;
 }
 
-async function memoryFingerprint(): Promise<string> {
+export async function memoryFingerprint(conditions: SQL[] = memoryScope()): Promise<string> {
   const db = getDb();
   const [row] = await db
     .select({
@@ -238,7 +238,7 @@ async function memoryFingerprint(): Promise<string> {
       created: sql<string | null>`max(${schema.memories.createdAt})`,
     })
     .from(schema.memories)
-    .where(and(...memoryScope()));
+    .where(and(...conditions));
   return `m:${row?.total ?? 0}:${row?.newest ?? '-'}:${row?.created ?? '-'}:${brain.getNamespace() ?? '-'}`;
 }
 

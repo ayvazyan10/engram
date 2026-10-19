@@ -46,6 +46,7 @@ function insert(id: string, similarity: number, fields: Partial<NewMemory> = {})
 }
 
 async function retrieve(mode: string, options: RecallOptions): Promise<string[]> {
+  if (mode === 'explain') return (await brain.explainRecall('query', options)).items.filter((item) => item.included).map((item) => item.id);
   if (mode === 'search') return (await brain.search('query', options)).map((memory) => memory.id);
   if (mode === 'recall') return (await brain.recall('query', options)).memories.map((memory) => memory.id);
   const ids: string[] = [];
@@ -56,7 +57,7 @@ async function retrieve(mode: string, options: RecallOptions): Promise<string[]>
   return ids;
 }
 
-describe.each(['search', 'recall', 'stream'])('%s filters', (mode) => {
+describe.each(['search', 'recall', 'stream', 'explain'])('%s filters', (mode) => {
   it('uses inclusive event dates, falling back to creation dates and comparing instants', async () => {
     insert('before', 1, { eventAt: '2026-01-09T23:59:59.999Z' });
     insert('lower', 0.99, { eventAt: SINCE });
@@ -98,7 +99,7 @@ describe.each(['search', 'recall', 'stream'])('%s filters', (mode) => {
   });
 });
 
-describe.each(['recall', 'stream'])('%s graph filters', (mode) => {
+describe.each(['recall', 'stream', 'explain'])('%s graph filters', (mode) => {
   it('filters graph neighbors that were not vector candidates', async () => {
     insert('seed', 1, { eventAt: SINCE, tags: '["keep"]' });
     insert('neighbor-tags', 0, { eventAt: SINCE });
@@ -114,22 +115,22 @@ describe.each(['recall', 'stream'])('%s graph filters', (mode) => {
   });
 });
 
-describe('search project filters', () => {
+describe.each(['search', 'explain'])('%s project filters', (mode) => {
   it.each([{ namespace: '/code/api' }, { global: true as const }])('fills topK past leading nonmatches for %j', async (filter) => {
     insert('other-1', 1, { namespace: '/code/web' });
     insert('other-2', 0.99, { namespace: '/code/web' });
     for (let i = 0; i < 3; i++) {
       insert(`match-${i}`, 0.98 - i / 100, { namespace: 'namespace' in filter ? filter.namespace : null });
     }
-    expect((await brain.search('query', { topK: 2 })).map((m) => m.id)).toEqual(['other-1', 'other-2']);
-    expect((await brain.search('query', { topK: 2, ...filter })).map((m) => m.id)).toEqual(['match-0', 'match-1']);
+    expect(await retrieve(mode, { topK: 2 })).toEqual(['other-1', 'other-2']);
+    expect(await retrieve(mode, { topK: 2, ...filter })).toEqual(['match-0', 'match-1']);
   });
 
   it('combines project filters with existing filters', async () => {
     insert('wrong-tag', 1, { namespace: '/code/api', eventAt: SINCE });
     insert('wrong-project', 0.99, { namespace: '/code/web', eventAt: SINCE, tags: '["keep"]' });
     insert('match', 0.98, { namespace: '/code/api', eventAt: SINCE, tags: '["keep"]' });
-    expect((await brain.search('query', { namespace: '/code/api', since: SINCE, until: UNTIL, tags: ['keep'] })).map((m) => m.id)).toEqual(['match']);
+    expect(await retrieve(mode, { namespace: '/code/api', since: SINCE, until: UNTIL, tags: ['keep'] })).toEqual(['match']);
   });
 
   it.each(['filter', 'isolated'] as const)('only narrows configured %s scope', async (namespaceMode) => {
@@ -140,13 +141,13 @@ describe('search project filters', () => {
     brain = new NeuralBrain({ dbPath: join(directory, 'test.db'), namespaceMode, namespace: '/code/api' });
     await brain.initialize();
 
-    expect((await brain.search('query', { namespace: '/code/api' })).map((m) => m.id)).toEqual(['own']);
-    expect(await brain.search('query', { namespace: '/code/web' })).toEqual([]);
-    expect((await brain.search('query', { global: true })).map((m) => m.id)).toEqual(namespaceMode === 'filter' ? ['global'] : []);
+    expect(await retrieve(mode, { namespace: '/code/api' })).toEqual(['own']);
+    expect(await retrieve(mode, { namespace: '/code/web' })).toEqual([]);
+    expect(await retrieve(mode, { global: true })).toEqual(namespaceMode === 'filter' ? ['global'] : []);
     if (namespaceMode === 'filter') {
-      expect((await brain.search('query', { namespace: '/code/web', crossNamespace: true })).map((m) => m.id)).toEqual(['foreign']);
+      expect(await retrieve(mode, { namespace: '/code/web', crossNamespace: true })).toEqual(['foreign']);
     } else {
-      await expect(brain.search('query', { namespace: '/code/web', crossNamespace: true })).rejects.toThrow(/cross-namespace/);
+      await expect(retrieve(mode, { namespace: '/code/web', crossNamespace: true })).rejects.toThrow(/cross-namespace/);
     }
   });
 });

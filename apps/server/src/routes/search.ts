@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { OutgoingHttpHeaders } from 'node:http';
 import { brain, realtime } from '../index.js';
-import type { MemoryType } from '@engram-ai-memory/core';
-import { strictQueryString } from '../lib/strictBody.js';
+import type { MemoryType, RecallOptions } from '@engram-ai-memory/core';
+import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
 
 const filterProperties = {
   since: { type: 'string', format: 'date-time' },
@@ -156,6 +156,57 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         crossNamespace: req.body.crossNamespace,
       });
       return result;
+    },
+  });
+
+  // POST /api/recall/explain — preview the same plan without committing it
+  app.post<{ Body: RecallOptions & { query: string } }>('/recall/explain', {
+    schema: {
+      tags: ['search'],
+      summary: 'Preview recall context, ranking and budget without writes',
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['query'],
+        properties: {
+          query: { type: 'string', minLength: 1 },
+          maxTokens: { type: 'integer', default: 2000, minimum: 1, maximum: 32000 },
+          types: { type: 'array', items: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] } },
+          sources: { type: 'array', items: { type: 'string' } },
+          ...filterProperties,
+          crossNamespace: { type: 'boolean', default: false },
+          namespace: { type: 'string' },
+          global: { type: 'boolean', const: true },
+        },
+      },
+    },
+    preValidation: [
+      strictObjectBody(
+        ['query', 'maxTokens', 'types', 'sources', 'since', 'until', 'tags', 'crossNamespace', 'namespace', 'global'],
+        ['types', 'sources', 'tags'],
+      ),
+      validateFilterBody,
+      async (req, reply) => {
+        const body = req.body;
+        if (typeof body.query !== 'string'
+          || (body.maxTokens !== undefined && typeof body.maxTokens !== 'number')
+          || (body.crossNamespace !== undefined && typeof body.crossNamespace !== 'boolean')
+          || (body.namespace !== undefined && typeof body.namespace !== 'string')
+          || (body.global !== undefined && body.global !== true)
+          || [body.types, body.sources].some((values) => values?.some((value) => typeof value !== 'string'))) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'Invalid recall explain field type.' });
+        }
+        if (body.namespace !== undefined && body.global === true) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'namespace and global cannot be used together.' });
+        }
+      },
+    ],
+    handler: async (req, reply) => {
+      if (brain.getNamespaceMode() === 'isolated' && req.body.crossNamespace) {
+        return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
+      }
+      const { query, ...options } = req.body;
+      return brain.explainRecall(query, options);
     },
   });
 
