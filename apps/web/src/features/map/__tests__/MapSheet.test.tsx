@@ -43,7 +43,7 @@ const mc = (status: string, overrides: Partial<MemoryRecord> = {}) =>
   memory({ type: 'episodic', source: 'mission-control', content: `[Mission Control] ${status} — task "x" finished.`, ...overrides });
 const reflection = (kind: string) => memory({ source: 'reflection', content: '# Trend Analysis', tags: `["reflection","reflection:${kind}"]` });
 
-const props = { loading: false, error: null, onRetry: vi.fn(), onLoadMore: vi.fn(), loadingMore: false, onStore: vi.fn() };
+const props = { loading: false, error: null, onRetry: vi.fn(), onLoadMore: vi.fn(), loadingMore: false, onStore: vi.fn(), onRegion: vi.fn() };
 
 beforeEach(() => {
   seq = 0;

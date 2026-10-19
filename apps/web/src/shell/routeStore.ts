@@ -5,7 +5,7 @@ import { create } from 'zustand';
  * `#/recall?q=sync`; `?m=<id>` opens a memory over any route. An unknown path
  * lands on the map.
  */
-export type RouteName = 'map' | 'recall' | 'review' | 'timeline' | 'insights' | 'settings' | 'welcome' | 'plates';
+export type RouteName = 'map' | 'recall' | 'review' | 'timeline' | 'insights' | 'settings' | 'welcome';
 
 export interface Route {
   name: RouteName;
@@ -14,7 +14,7 @@ export interface Route {
   params: Record<string, string>;
 }
 
-const NAMES: readonly RouteName[] = ['map', 'recall', 'review', 'timeline', 'insights', 'settings', 'welcome', 'plates'];
+const NAMES: readonly RouteName[] = ['map', 'recall', 'review', 'timeline', 'insights', 'settings', 'welcome'];
 
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#/, '');

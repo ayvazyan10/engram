@@ -30,7 +30,7 @@ describe('Rail', () => {
     ]);
   });
 
-  it('marks the current destination, and keeps Map current on the plates and Settings on the onboarding', () => {
+  it('marks the current destination, and keeps Settings current on the onboarding', () => {
     render(<Rail reviewCount={0} />);
     expect(screen.getByRole('link', { name: 'Map' })).toHaveAttribute('aria-current', 'page');
 
@@ -38,8 +38,6 @@ describe('Rail', () => {
     expect(screen.getByRole('link', { name: 'Insights' })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: 'Map' })).not.toHaveAttribute('aria-current');
 
-    at('#/plates');
-    expect(screen.getByRole('link', { name: 'Map' })).toHaveAttribute('aria-current', 'page');
     at('#/welcome');
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
   });

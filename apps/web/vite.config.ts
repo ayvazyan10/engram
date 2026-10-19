@@ -26,21 +26,16 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // W16: the object form matches module ids by substring against
-        // every group in listed order, and React's own modules are pulled
-        // in (as a dependency) while Rollup is resolving whichever
-        // three/@react-three group it visits first — the result was a
-        // ~500 KB 'react-three' chunk that silently contained React itself,
-        // and a "react" chunk() that came out at 1 byte. A function gives
-        // deterministic, ordered control instead: react/react-dom/scheduler
-        // are matched FIRST and unconditionally, before three or
-        // @react-three ever get a chance to claim them.
+        // React in its own long-cached chunk. The map's d3 modules get one of
+        // their own: Rollup moves a manual chunk's dependencies into it, so
+        // without this the d3 modules recharts shares with the map would land
+        // in 'charts' and drag recharts into the first load. recharts and the
+        // d3 modules only it uses stay lazy, with Insights.
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
           if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react-vendor';
-          if (id.includes('node_modules/three/')) return 'three';
-          if (id.includes('node_modules/@react-three/')) return 'react-three';
-          if (id.includes('node_modules/recharts/') || id.includes('node_modules/d3-')) return 'charts';
+          if (/node_modules\/(d3-(array|color|contour|delaunay|dispatch|drag|ease|interpolate|selection|timer|transition|zoom)|delaunator|robust-predicates|internmap)\//.test(id)) return 'd3';
+          if (id.includes('node_modules/recharts/')) return 'charts';
           return undefined;
         },
       },

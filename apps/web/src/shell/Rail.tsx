@@ -18,9 +18,9 @@ export const INSIGHTS: NavItem = { name: 'insights', label: 'Insights', icon: 'i
 export const REVIEW: NavItem = { name: 'review', label: 'Review', icon: 'review', href: '#/review', hint: 'Contradictions, duplicates and fading memories' };
 export const SETTINGS: NavItem = { name: 'settings', label: 'Settings', icon: 'settings', href: '#/settings' };
 
-/** The plates and onboarding are reached from inside Map and Settings. */
+/** The onboarding is reached from inside Settings. */
 export function isCurrent(item: RouteName, route: RouteName): boolean {
-  return item === route || (item === 'map' && route === 'plates') || (item === 'settings' && route === 'welcome');
+  return item === route || (item === 'settings' && route === 'welcome');
 }
 
 /** One destination: icon over its word, the Review count on its corner. */

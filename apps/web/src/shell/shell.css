@@ -588,46 +588,6 @@ button.at-scope:hover,
   filter: none;
 }
 
-/* ─── The plates, until F3 replaces them with the map ────────────────────── */
-
-.at-plates {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-  border-top: 1px solid var(--rule);
-}
-
-.at-plates-side {
-  width: 260px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid;
-  overflow: hidden;
-}
-
-.at-plate {
-  /* The plates' own dark ground, which shares these names with Atlas. */
-  --rule: #1f2b2c;
-  --ink: #e9efed;
-  --ink-2: #a6b7b4;
-  --ink-3: #7d8f8c;
-  flex: 1;
-  position: relative;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.at-plates-inspector {
-  width: 252px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid;
-  overflow: hidden;
-}
-
 /* ─── Command palette ────────────────────────────────────────────────────── */
 
 .at-pal-scrim {

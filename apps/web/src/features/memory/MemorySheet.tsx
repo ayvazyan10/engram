@@ -12,6 +12,8 @@ import { projectLabel } from '../../lib/projects.js';
 import MemoryEdit from './MemoryEdit.js';
 import { TYPE_NAME, TypeMark, isReflection } from './MemoryRow.js';
 import { deferAction } from './deferredAction.js';
+import { useMapStore } from '../map/mapStore.js';
+import type { MapNode } from '../../lib/api.js';
 import './memory.css';
 
 /** One edge of the open memory, with the memory at its other end. */
@@ -51,28 +53,17 @@ const CONTENT_FOLD = 420;
 const CONTENT_FOLDED = 400;
 const SHOWN_CONTRADICTIONS = 3;
 const SHOWN_CONNECTIONS = 6;
-const DAY_MS = 86_400_000;
 /** The sheet's exit, in step with --dur-out. */
 const EXIT_MS = 180;
 
 /**
- * The server's own retention score (DecayEngine.computeRetention):
- * importance × recency × access, where recency halves every half-life since
- * the last recall (or since it was stored) and access starts at 0.3 and
- * grows with the log of the recall count. `daysLeft` is how long until it
- * crosses the archive threshold with no recall; negative once it has.
+ * Days until a retention score crosses the archive threshold with no recall.
+ * Retention halves every half-life, so it is the half-life times the number
+ * of halvings between the two; negative once it is below.
  */
-export function retentionOf(
-  memory: Pick<MemoryRecord, 'importance' | 'createdAt' | 'lastAccessedAt' | 'accessCount'>,
-  policy: DecayPolicy,
-  now = Date.now()
-): { retention: number; daysLeft: number } {
-  const since = Date.parse(memory.lastAccessedAt ?? memory.createdAt);
-  const ageDays = Number.isFinite(since) ? Math.max(0, (now - since) / DAY_MS) : 0;
-  const ceiling = Math.min(1, Math.max(0, memory.importance)) * Math.min(1, 0.3 + (0.7 * Math.log10((memory.accessCount ?? 0) + 1)) / 3);
-  const retention = ceiling * Math.pow(2, -ageDays / policy.halfLifeDays);
-  const daysLeft = ceiling > 0 ? policy.halfLifeDays * Math.log2(ceiling / policy.archiveThreshold) - ageDays : -ageDays;
-  return { retention, daysLeft };
+export function daysLeft(retention: number, policy: DecayPolicy): number {
+  if (!(retention > 0)) return -Infinity;
+  return policy.halfLifeDays * Math.log2(retention / policy.archiveThreshold);
 }
 
 /** Which memory a resolution archives, by the server's rule
@@ -107,7 +98,7 @@ function percent(n: number): string {
 
 let policyRequest: Promise<DecayPolicy> | null = null;
 /** The decay policy changes rarely; one request serves every sheet. */
-function loadPolicy(): Promise<DecayPolicy> {
+export function loadPolicy(): Promise<DecayPolicy> {
   policyRequest ??= api.getDecayPolicy().catch((err: unknown) => {
     policyRequest = null;
     throw err;
@@ -166,6 +157,11 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
   const known = useServerStats()?.byNamespace.map((b) => b.namespace) ?? [];
   const [detail, setDetail] = useState<Detail>({ id, status: 'loading', node: null, links: [] });
   const [policy, setPolicy] = useState<DecayPolicy | null>(null);
+  // Retention is the server's (on the map payload), not recomputed here.
+  const score = useMapStore((s) => {
+    const i = s.model?.at.get(id);
+    return i === undefined ? undefined : s.model!.nodes[i];
+  });
   const [mode, setMode] = useState<'read' | 'edit'>('read');
   const [expanded, setExpanded] = useState(false);
   const [allLinks, setAllLinks] = useState(false);
@@ -456,7 +452,7 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
 
             <section className="mm-sec" aria-label="Weight">
               <Meter label="Importance" value={memory.importance} />
-              {policy && <Retention memory={memory} policy={policy} />}
+              {policy && score && <Retention score={score} policy={policy} />}
             </section>
 
             <section className="mm-sec">
@@ -605,17 +601,18 @@ function Meter({ label, value, threshold }: { label: string; value: number; thre
   );
 }
 
-function Retention({ memory, policy }: { memory: MemoryRecord; policy: DecayPolicy }) {
-  const { retention, daysLeft } = retentionOf(memory, policy);
+function Retention({ score, policy }: { score: Pick<MapNode, 'retention' | 'protected'>; policy: DecayPolicy }) {
   const threshold = percent(policy.archiveThreshold);
-  const days = Math.ceil(daysLeft);
+  const days = Math.ceil(daysLeft(score.retention, policy));
   return (
     <>
-      <Meter label="Retention" value={retention} threshold={policy.archiveThreshold} />
+      <Meter label="Retention" value={score.retention} threshold={policy.archiveThreshold} />
       <p className="mm-note">
-        {retention >= policy.archiveThreshold
-          ? `Reaches the ${threshold} archive threshold ${days <= 1 ? 'within a day' : `in ${days} days`} unless your AI recalls it.`
-          : `Below the ${threshold} archive threshold. The next decay sweep archives it unless a recall, more importance or a protection rule keeps it.`}
+        {score.protected
+          ? 'Protected: the decay sweep never archives it, whatever its retention.'
+          : score.retention >= policy.archiveThreshold
+            ? `Reaches the ${threshold} archive threshold ${days <= 1 ? 'within a day' : `in ${days} days`} unless your AI recalls it.`
+            : `Below the ${threshold} archive threshold. The next decay sweep archives it unless a recall, more importance or a protection rule keeps it.`}
       </p>
     </>
   );

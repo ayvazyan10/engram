@@ -1,9 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/fonts.css';
-// Before tokens.css: the plates (removed in F3) declare their own --ink and
-// --rule on :root, and the Atlas values must win everywhere else.
-import './styles/plate.css';
 import './styles/tokens.css';
 import './styles/global.css';
 import { initTheme } from './shell/theme.js';

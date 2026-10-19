@@ -15,7 +15,8 @@ describe('parseHash', () => {
     expect(parseHash('#/recall?q=sync%20key')).toEqual({ name: 'recall', sub: null, params: { q: 'sync key' } });
     expect(parseHash('#/welcome').name).toBe('welcome');
     expect(parseHash('#/settings').name).toBe('settings');
-    expect(parseHash('#/plates').name).toBe('plates');
+    // The plates are gone; an old link to them lands on the map.
+    expect(parseHash('#/plates').name).toBe('map');
   });
 
   it('opens a memory over any route with ?m=', () => {

@@ -34,7 +34,6 @@ const DESTINATIONS: { label: string; icon: IconName; to: string; key?: string; k
   { label: 'Insights: reflections', icon: 'insight', to: '/insights/reflections', keywords: ['patterns'] },
   { label: 'Settings', icon: 'settings', to: '/settings', key: 's', keywords: ['version', 'appearance'] },
   { label: 'Connect an AI', icon: 'plug', to: '/welcome', keywords: ['onboarding', 'setup', 'mcp', 'claude', 'cursor'] },
-  { label: 'Plates (old 3D views)', icon: 'plates', to: '/plates', keywords: ['3d', 'graph', 'links'] },
 ];
 
 const MODES: { mode: ColourMode; label: string; icon: IconName; done: string }[] = [
@@ -44,8 +43,8 @@ const MODES: { mode: ColourMode; label: string; icon: IconName; done: string }[]
 ];
 
 /**
- * Plain word matching: cmdk's default fuzzy score ranked "Plates (old 3D
- * views)" above "Dark mode" for "dark". Every typed word must appear; a
+ * Plain word matching: cmdk's default fuzzy score ranked a command that
+ * merely held the letters d-a-r-k above "Dark mode" for "dark". Every typed word must appear; a
  * command whose name starts with the first word ranks first, then one whose
  * name holds it, then one that matches by keyword only.
  */

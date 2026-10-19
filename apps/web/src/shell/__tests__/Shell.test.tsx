@@ -6,33 +6,18 @@ import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useRouteStore, parseHash } from '../routeStore.js';
 import { useAuthStore } from '../../store/authStore.js';
-import { useViewStore, VIEWS, DEFAULT_VIEW_ID } from '../../store/viewStore.js';
+import { useMapStore } from '../../features/map/mapStore.js';
+import { payload } from '../../features/map/__tests__/payload.js';
 import { api } from '../../lib/api.js';
-import type { LayoutResponse, EdgeSummary } from '../../lib/api.js';
-import type { ObsData } from '../../lib/plate/contract.js';
 
-/**
- * The plate itself is stubbed. This file asserts what the shell PASSES and
- * when it fetches; what a plate does with a measured box belongs to
- * plates/__tests__/PlateSurface.test.tsx, and what each plate draws is not a
- * jsdom question at all — two of the five want a WebGL context.
- */
-vi.mock('../../components/plates/PlateSurface.js', () => ({
-  default: (p: { data: ObsData | null; error: string | null; onRetry: () => void }) => (
-    <div data-testid="plate" onClick={p.onRetry}>
-      {JSON.stringify({
-        memories: p.data?.stats.memories ?? null,
-        links: p.data?.links.length ?? null,
-        error: p.error,
-      })}
-    </div>
-  ),
-}));
+/** The map's canvas draws only, and jsdom cannot draw; the map's own tests
+ *  cover what it is handed. */
+vi.mock('../../features/map/MapCanvas.js', () => ({ default: () => <canvas data-testid="map-canvas" /> }));
 vi.mock('../../hooks/useWebSocket.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../hooks/useWebSocket.js')>()),
   useWebSocket: () => {},
 }));
-// The three non-plate views belong to a different change; stub them so this
+// The views F6 replaces belong to a different change; stub them so this
 // file asserts what the shell PASSES rather than what they happen to render.
 vi.mock('../../components/views/TimelineView.js', () => ({
   default: (p: ViewProps) => <div data-testid="timeline">{describeProps(p)}</div>,
@@ -53,10 +38,7 @@ vi.mock('../../lib/api.js', () => ({
     storeMemory: vi.fn(),
     search: vi.fn(),
     recall: vi.fn(),
-    // The plate data layer's three calls. They are `api` methods, so they are
-    // stubbed alongside every other call the layout makes — there is no second
-    // entry point that could carry a different key or a different timeout.
-    getGraphLayout: vi.fn(),
+    getMap: vi.fn(),
     getGraphEdges: vi.fn(),
     getDecayPolicy: vi.fn(),
     // The memory sheet fetches the selected memory's neighbourhood, and these
@@ -72,8 +54,7 @@ vi.mock('../../lib/api.js', () => ({
   },
 }));
 
-const getGraphLayout = vi.mocked(api.getGraphLayout);
-const getGraphEdges = vi.mocked(api.getGraphEdges);
+const getMap = vi.mocked(api.getMap);
 const getDecayPolicy = vi.mocked(api.getDecayPolicy);
 
 interface ViewProps {
@@ -88,10 +69,6 @@ function describeProps(p: ViewProps): string {
     error: p.error,
     onRetry: typeof p.onRetry,
   });
-}
-
-function plateProps(): { memories: number | null; links: number | null; error: string | null } {
-  return JSON.parse(screen.getByTestId('plate').textContent ?? '{}');
 }
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -109,48 +86,6 @@ function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   };
 }
 
-function layoutResponse(ids: string[], overrides: Partial<LayoutResponse> = {}): LayoutResponse {
-  return {
-    method: 'pca3',
-    fingerprint: `m:${ids.length}`,
-    generatedAt: '2026-09-04T00:00:00.000Z',
-    halfExtent: 42,
-    count: ids.length,
-    projected: ids.length,
-    unprojected: 0,
-    explainedVariance: [0.24, 0.09, 0.05],
-    embeddingModel: 'Xenova/all-MiniLM-L6-v2',
-    computeMs: 12,
-    nodes: ids.map((id, i) => ({
-      id,
-      type: 'semantic' as const,
-      label: `label ${id}`,
-      importance: 0.8,
-      source: null,
-      accessCount: i,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      lastAccessedAt: null,
-      x: i, y: i, z: i,
-      projected: true,
-    })),
-    ...overrides,
-  };
-}
-
-function edgeResponse(overrides: Partial<EdgeSummary> = {}): EdgeSummary {
-  return {
-    total: 0,
-    stored: 0,
-    matching: 0,
-    returned: 0,
-    truncated: false,
-    minStrength: 0,
-    limit: 20000,
-    edges: [],
-    ...overrides,
-  };
-}
-
 /** Routes the way a link or the rail does. */
 function go(to: string) {
   useRouteStore.getState().navigate(to);
@@ -162,36 +97,28 @@ function resetAll() {
   useMemoryStore.setState({
     records: [], loadedCount: 0, projectFilter: undefined, searchQuery: '', searchResults: [], weakerResults: [], hiddenIds: new Set(),
   });
-  useNeuralStore.setState({
-    neurons: [], connections: [], contradictionPairs: [], contradictionIds: new Set(),
-    selectedNeuronId: null, hoveredNeuronId: null, isConnected: false,
-  });
-  go('/plates');
+  useNeuralStore.setState({ contradictionPairs: [], selectedNeuronId: null, isConnected: false });
+  useMapStore.setState({ status: 'loading', payload: null, model: null, scopeKey: null, arrivals: new Map(), regionId: null, panel: 'recent' });
+  go('/');
   useAuthStore.setState({ locked: false, hadKey: false });
-  useViewStore.getState().setView(DEFAULT_VIEW_ID);
   vi.mocked(api.listMemories).mockReset();
   vi.mocked(api.getContradictions).mockReset();
-  getGraphLayout.mockReset();
-  getGraphEdges.mockReset();
+  getMap.mockReset();
   getDecayPolicy.mockReset();
   vi.mocked(api.getContradictions).mockResolvedValue({ count: 0, contradictions: [] });
-  getGraphLayout.mockResolvedValue(layoutResponse(['a']));
-  getGraphEdges.mockResolvedValue(edgeResponse());
+  getMap.mockResolvedValue(payload());
   getDecayPolicy.mockResolvedValue({ halfLifeDays: 7, archiveThreshold: 0.05 });
 }
 
 describe('Shell effect wiring (W12)', () => {
   beforeEach(resetAll);
 
-  it('refetches contradictions, the projection and the edge set when new memories arrive', async () => {
+  it('refetches contradictions and the map when a memory arrives, so it lands on the map', async () => {
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<Shell />);
     await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalled());
-
-    const layoutCalls = getGraphLayout.mock.calls.length;
-    const edgeCalls = getGraphEdges.mock.calls.length;
+    await waitFor(() => expect(getMap).toHaveBeenCalledTimes(1));
 
     // Simulates a socket 'memory:stored' broadcast adding a new record.
     act(() => {
@@ -199,43 +126,23 @@ describe('Shell effect wiring (W12)', () => {
     });
 
     await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalledTimes(layoutCalls + 1));
-    await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalledTimes(edgeCalls + 1));
+    await waitFor(() => expect(getMap).toHaveBeenCalledTimes(2));
   });
 
-  /** The effect used to key on the loaded record count, which went 0 -> N
-   *  when the first page landed: every cold load asked for all three twice. */
-  it('loads the plate data exactly once on a cold load', async () => {
-    vi.mocked(api.listMemories).mockResolvedValueOnce({
-      count: 3,
-      memories: [record({ id: 'a' }), record({ id: 'b' }), record({ id: 'c' })],
-    });
-
-    render(<Shell />);
-    await waitFor(() => expect(useMemoryStore.getState().records).toHaveLength(3));
-    await waitFor(() => expect(plateProps().memories).toBe(1));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(getGraphLayout).toHaveBeenCalledTimes(1);
-    expect(getGraphEdges).toHaveBeenCalledTimes(1);
-    expect(getDecayPolicy).toHaveBeenCalledTimes(1);
-  });
-
-  it('pages the list with the server offset, without refetching the plate data', async () => {
+  it('loads the map once on a cold load, and not again when the list pages', async () => {
     vi.mocked(api.stats).mockResolvedValue({ total: 3, byType: { semantic: 3 }, bySource: {} });
     vi.mocked(api.listMemories)
       .mockResolvedValueOnce({ count: 2, memories: [record({ id: 'a' }), record({ id: 'b' })] })
       .mockResolvedValueOnce({ count: 1, memories: [record({ id: 'c' })] });
 
     render(<Shell />);
-    await waitFor(() => expect(plateProps().memories).toBe(1));
-    act(() => go('/'));
+    expect(await screen.findByRole('application', { name: 'Memory map, 5 memories in 2 regions' })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
 
     await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['a', 'b', 'c']));
     expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, offset: 2 });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(getGraphLayout).toHaveBeenCalledTimes(1);
+    expect(getMap).toHaveBeenCalledTimes(1);
     vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
   });
 
@@ -249,6 +156,7 @@ describe('Shell effect wiring (W12)', () => {
     act(() => useMemoryStore.getState().setProjectFilter('/code/api'));
     await waitFor(() => expect(api.listMemories).toHaveBeenCalledTimes(2));
     expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, namespace: '/code/api' });
+    await waitFor(() => expect(getMap).toHaveBeenLastCalledWith('/code/api'));
 
     // The scope is global now: the timeline lists the same project.
     act(() => go('/timeline'));
@@ -262,7 +170,7 @@ describe('Shell effect wiring (W12)', () => {
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<Shell />);
-    await waitFor(() => expect(api.getGraphLayout).toHaveBeenCalled());
+    await waitFor(() => expect(getMap).toHaveBeenCalled());
     const before = vi.mocked(api.stats).mock.calls.length;
 
     act(() => {
@@ -271,34 +179,19 @@ describe('Shell effect wiring (W12)', () => {
     await waitFor(() => expect(vi.mocked(api.stats).mock.calls.length).toBe(before + 1));
   });
 
-  it('asks for the whole edge set once, not one graph request per important memory', async () => {
-    vi.mocked(api.listMemories).mockResolvedValueOnce({
-      count: 3,
-      memories: [record({ id: 'a' }), record({ id: 'b' }), record({ id: 'c' })],
-    });
-
-    render(<Shell />);
-    await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    // The old implementation fired thirty GET /graph/:id requests here.
-    expect(getGraphEdges.mock.calls.length).toBeLessThanOrEqual(2);
-  });
-
-  it('does not refire the plate fetches on every return to the plate surface when nothing changed', async () => {
+  it('does not reload the map on every return to it when nothing changed', async () => {
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<Shell />);
-    await waitFor(() => expect(api.getGraphEdges).toHaveBeenCalled());
-    const before = getGraphEdges.mock.calls.length;
+    await waitFor(() => expect(getMap).toHaveBeenCalled());
 
     for (let i = 0; i < 5; i++) {
       act(() => go('/timeline'));
-      act(() => go('/plates'));
+      act(() => go('/'));
     }
 
     await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(getGraphEdges.mock.calls.length).toBe(before);
+    expect(getMap).toHaveBeenCalledTimes(1);
   });
 
   it('does not refetch contradictions merely because an existing record was edited', async () => {
@@ -316,65 +209,22 @@ describe('Shell effect wiring (W12)', () => {
   });
 });
 
-describe('Shell plate sourcing', () => {
+describe('Shell map loading', () => {
   beforeEach(resetAll);
 
-  it('builds the node set from the projection, not from the 200-row memory page', async () => {
+  it('says a failed map on the map, and charts it again on Try again', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c', 'd', 'e']));
+    getMap.mockRejectedValueOnce(new Error('offline'));
 
     render(<Shell />);
-    await waitFor(() => expect(useNeuralStore.getState().neurons).toHaveLength(5));
-    expect(useMemoryStore.getState().records).toHaveLength(1);
+    expect(await screen.findByText('Could not chart the map: offline')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('application', { name: /Memory map/ })).toBeInTheDocument();
   });
 
-  /** One response set, two consumers: the plate and `neuralStore.neurons`. If
-   *  these ever split, the inspector and the plate stop describing the same
-   *  store. */
-  it('derives the plate data from the same responses that fill the inspector', async () => {
+  /** StrictMode runs every effect twice; the second load supersedes the first. */
+  it('loads the map under StrictMode', async () => {
     vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c']));
-    getGraphEdges.mockResolvedValue(
-      edgeResponse({
-        total: 1,
-        stored: 4,
-        matching: 1,
-        returned: 1,
-        edges: [{ id: 'e1', sourceId: 'a', targetId: 'b', relationship: 'relates_to', strength: 0.95 }],
-      })
-    );
-
-    render(<Shell />);
-    await waitFor(() => expect(plateProps().memories).toBe(3));
-    expect(plateProps().links).toBe(1);
-    expect(useNeuralStore.getState().neurons).toHaveLength(3);
-    expect(useNeuralStore.getState().connections).toHaveLength(1);
-  });
-
-  /**
-   * The fallback sphere is gone with the scene key that used to confess it. A
-   * plate is an argument about this store's real shape, so a failed load says
-   * so — it must not read as "the store is empty".
-   */
-  it('states a failed load on the plate instead of drawing an id-derived sphere', async () => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 2, memories: [record({ id: 'a' }), record({ id: 'b' })] });
-    getGraphLayout.mockRejectedValue(new Error('offline'));
-
-    render(<Shell />);
-    await waitFor(() => expect(plateProps().error).toBe('offline'));
-    expect(plateProps().memories).toBeNull();
-    expect(useNeuralStore.getState().neurons).toHaveLength(0);
-  });
-
-  /**
-   * The dev server renders under StrictMode, which runs every effect, cleans
-   * it up, and runs it again. The first run's fetch is discarded by its
-   * cleanup; the "already fetched" guard used to be set before the fetch, so
-   * the second run skipped and the plates sat on "Reading the store" forever.
-   */
-  it('loads the plates under StrictMode, where the first effect run is thrown away', async () => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b']));
 
     render(
       <StrictMode>
@@ -382,48 +232,15 @@ describe('Shell plate sourcing', () => {
       </StrictMode>
     );
 
-    await waitFor(() => expect(plateProps().memories).toBe(2));
-    expect(useNeuralStore.getState().neurons).toHaveLength(2);
-  });
-
-  it('retries the load when the plate asks it to', async () => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    getGraphLayout.mockRejectedValue(new Error('offline'));
-
-    render(<Shell />);
-    await waitFor(() => expect(plateProps().error).toBe('offline'));
-
-    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b']));
-    fireEvent.click(screen.getByTestId('plate'));
-
-    await waitFor(() => expect(plateProps().memories).toBe(2));
-    expect(plateProps().error).toBeNull();
-  });
-
-  /** The whole point of loading the plate data once: five plates, one store. */
-  it('switching plates neither refetches nor drops the selection', async () => {
-    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record({ id: 'a' })] });
-    getGraphLayout.mockResolvedValue(layoutResponse(['a', 'b', 'c']));
-
-    render(<Shell />);
-    await waitFor(() => expect(plateProps().memories).toBe(3));
-    act(() => useNeuralStore.getState().selectNeuron('b'));
-    const calls = getGraphLayout.mock.calls.length;
-
-    for (const view of VIEWS) act(() => useViewStore.getState().setView(view.id));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(getGraphLayout.mock.calls.length).toBe(calls);
-    expect(useNeuralStore.getState().selectedNeuronId).toBe('b');
-    expect(plateProps().memories).toBe(3);
+    expect(await screen.findByRole('application', { name: 'Memory map, 5 memories in 2 regions' })).toBeInTheDocument();
   });
 });
 
 /**
- * Escape is the host's. Three components used to want it — the search field,
- * the modal, and two plates each with their own window listener — and a plate's
- * listener quietly wiped the reader's selection every time the search field
- * was cleared.
+ * Escape is the host's. Several components used to want it — the search
+ * field, the modal, and the old plates with their own window listeners — and
+ * one of those listeners quietly wiped the reader's selection every time the
+ * search field was cleared.
  */
 describe('Shell owns Escape', () => {
   beforeEach(() => {
@@ -584,22 +401,23 @@ describe('Shell on a phone', () => {
     window.matchMedia = originalMatchMedia;
   });
 
-  it('shows the plate on a phone', async () => {
+  it('shows the map on a phone, above its bottom sheet', async () => {
     render(<Shell />);
-    expect(await screen.findByTestId('plate')).toBeInTheDocument();
+    expect(await screen.findByRole('application', { name: /Memory map/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Raise or lower the list' })).toBeInTheDocument();
   });
 });
 
 describe('Shell Home', () => {
   beforeEach(resetAll);
 
-  it('opens on the map: search and the recent memories, not a plate', async () => {
+  it('opens on the map: search, the map and the recent memories', async () => {
     go('/');
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<Shell />);
     expect(await screen.findByRole('heading', { name: 'Recent memories' })).toBeInTheDocument();
-    expect(screen.queryByTestId('plate')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('map-canvas')).toBeInTheDocument();
   });
 
   it('opens on the first-run onboarding when the store is empty, once', async () => {

@@ -1,6 +1,7 @@
 /**
- * Home: the floating search field and the side sheet over the map's ground.
- * Specs from the Atlas direction's Home and phone mockups (dir-a, mocks 1, 6).
+ * Home: the map, the floating search field and lens switch over it, and the
+ * side sheet. Specs from the Atlas direction's Home, Map and phone mockups
+ * (dir-a, mocks 1, 4, 6).
  */
 
 .mp-view {
@@ -11,7 +12,7 @@
   overflow: hidden;
 }
 
-/* Until the map is drawn: quiet contours and one line saying so. */
+/* Until the map is drawn (or when it cannot be): quiet contours and one line saying so. */
 .mp-ground {
   position: absolute;
   inset: 0 400px 0 0;
@@ -29,6 +30,10 @@
   stroke-width: 1.2;
 }
 
+.mp-ground .at-btn {
+  margin-top: var(--s-1);
+}
+
 .mp-ground p {
   margin: 0;
   max-width: 34ch;
@@ -42,15 +47,28 @@
   color: var(--ink-2);
 }
 
-/* ─── Search field ───────────────────────────────────────────────────────── */
+/* ─── Search field and lens switch ─────────────────────────────────────────── */
 
-.mp-field {
+.mp-top {
   position: absolute;
   left: var(--s-5);
   top: 18px;
   z-index: 6;
-  width: 440px;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-4);
   max-width: calc(100% - 400px - 40px);
+  pointer-events: none;
+}
+
+.mp-top > * {
+  pointer-events: auto;
+}
+
+.mp-field {
+  flex: 0 1 auto;
+  width: 440px;
+  min-width: 0;
   background: var(--raised);
   border: 1px solid var(--rule);
   border-radius: var(--r-float);
@@ -393,6 +411,577 @@
   margin: 0;
 }
 
+/* ─── The map ────────────────────────────────────────────────────────────── */
+
+.mp-map {
+  position: absolute;
+  inset: 0;
+  outline: none;
+  touch-action: none;
+}
+
+/* Focus on the map is the ring on the focused memory, plus this inset edge. */
+.mp-map:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--focus);
+}
+
+.mp-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  cursor: grab;
+}
+
+.mp-canvas:active {
+  cursor: grabbing;
+}
+
+.mp-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Place names: expanded italic, set on a halo of paper so contours never cut them. */
+.mp-lbl {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-style: italic;
+  font-stretch: 125%;
+  font-weight: 560;
+  letter-spacing: 0.035em;
+  line-height: 1.25;
+  white-space: nowrap;
+  text-align: center;
+  text-shadow: 0 0 3px var(--paper), 0 0 6px var(--paper), 0 0 10px var(--paper);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: color var(--dur-hover) linear, background-color var(--dur-hover) linear;
+}
+
+.mp-lbl[data-big] {
+  font-size: 15px;
+}
+
+.mp-lbl small {
+  display: block;
+  font-size: 11.5px;
+  font-style: normal;
+  font-stretch: 75%;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.mp-lbl:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.mp-lbl[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  text-shadow: none;
+}
+
+.mp-lbl[aria-pressed="true"] small {
+  color: var(--paper);
+}
+
+.mp-tip {
+  position: absolute;
+  z-index: 12;
+  max-width: 280px;
+  padding: 8px 10px;
+  border-radius: var(--r-control);
+  background: var(--ink);
+  color: var(--on-ink);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  line-height: 1.4;
+  pointer-events: none;
+  animation: mp-tip-in var(--dur-hover) linear;
+}
+
+.mp-tip b {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 2px;
+  font-weight: 640;
+}
+
+.mp-tip span {
+  opacity: 0.78;
+  font-stretch: 87%;
+}
+
+@keyframes mp-tip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ─── Lens switch ────────────────────────────────────────────────────────── */
+
+.mp-lens {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-float);
+  box-shadow: var(--shadow);
+}
+
+.mp-lens button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--dur-hover) linear, background-color var(--dur-hover) linear;
+}
+
+.mp-lens button:hover {
+  color: var(--ink);
+  background: var(--wash);
+}
+
+.mp-lens button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+
+/* ─── Legend, zoom, Time scrubber ────────────────────────────────────────── */
+
+.mp-legend {
+  position: absolute;
+  left: var(--s-5);
+  bottom: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  max-width: calc(100% - 400px - 120px);
+  padding: 8px 12px;
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.mp-legend ul {
+  display: flex;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.mp-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mp-legend p {
+  margin: 0;
+  max-width: 330px;
+  font-stretch: 87%;
+  line-height: 1.3;
+  color: var(--ink-3);
+}
+
+.mp-fault-mark {
+  fill: none;
+  stroke: var(--fault);
+  stroke-width: 1.6;
+  stroke-dasharray: 3.5 2.5;
+}
+
+.mp-zoom {
+  position: absolute;
+  right: calc(400px + 16px);
+  bottom: 16px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+/* The memory sheet is wider than the list sheet; the zoom steps out from under it. */
+.at-shell:has(.mm-sheet) .mp-zoom {
+  right: calc(440px + 16px);
+}
+
+.mp-zoom button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 19px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.mp-zoom button + button {
+  border-top: 1px solid var(--rule);
+}
+
+.mp-zoom button:hover {
+  background: var(--wash);
+}
+
+.mp-zoom button:focus-visible {
+  outline-offset: -3px;
+}
+
+.mp-scrub {
+  position: absolute;
+  left: var(--s-5);
+  bottom: 16px;
+  z-index: 4;
+  box-sizing: border-box;
+  width: min(620px, calc(100% - 400px - 110px));
+  padding: 9px 12px 8px;
+  background: var(--scrim);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  animation: mp-rise var(--dur-in) var(--ease-out);
+}
+
+.mp-scrub svg {
+  display: block;
+  width: 100%;
+  height: 26px;
+}
+
+.mp-scrub rect {
+  fill: color-mix(in srgb, var(--ink-3) 45%, transparent);
+  transition: fill var(--dur-hover) linear;
+}
+
+.mp-scrub rect[data-in="true"] {
+  fill: var(--ink);
+}
+
+/* Today is on the right, as on the bars: the slider counts days back from it. */
+.mp-scrub input {
+  direction: rtl;
+  display: block;
+  width: 100%;
+  margin: 3px 0 2px;
+  accent-color: var(--ink);
+}
+
+.mp-scrub-l {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-2);
+  font-size: 12px;
+  font-stretch: 87%;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+.mp-scrub-l b {
+  font-weight: 640;
+  color: var(--ink);
+}
+
+@keyframes mp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ─── Sheet: list modes, regions ─────────────────────────────────────────── */
+
+.mp-panels {
+  display: inline-flex;
+  gap: 2px;
+  margin-top: 12px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--wash);
+}
+
+.mp-panels button {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mp-panels button:hover {
+  color: var(--ink);
+}
+
+.mp-panels button[aria-pressed="true"] {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(15, 42, 38, 0.12);
+}
+
+.mp-body .mm-row[data-hover] {
+  background: var(--wash);
+}
+
+.mp-region {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 13px 18px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear;
+}
+
+.mp-region:hover {
+  background: var(--wash);
+}
+
+.mp-region:focus-visible {
+  outline-offset: -2px;
+}
+
+.mp-region-h {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mp-region-n {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-style: italic;
+  font-stretch: 125%;
+  font-weight: 560;
+  letter-spacing: 0.02em;
+}
+
+.mp-region-h b {
+  font-stretch: 75%;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Size as a bar: solid for what was written, hollow for reflections. */
+.mp-region-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  margin: 8px 0 6px;
+}
+
+.mp-region-bar i {
+  flex-basis: 0;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.mp-region-bar i.hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.2px var(--ink-2);
+}
+
+.mp-region .mm-row-m {
+  margin-top: 0;
+}
+
+.mp-rd-h {
+  padding: 12px 18px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mp-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 6px -8px;
+}
+
+.mp-rd-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.mp-rd-title h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 23px;
+  font-style: italic;
+  font-stretch: 125%;
+  font-weight: 440;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.mp-rd-title .mm-quiet {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+}
+
+.mp-rd-h p {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+
+.mp-rename {
+  display: grid;
+  gap: 6px;
+}
+
+.mp-rename label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.mp-rename input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  font-style: italic;
+  font-stretch: 125%;
+}
+
+.mp-rename span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: 4px;
+}
+
+.mp-rename .mm-quiet {
+  margin: 0;
+}
+
+.mp-rd-types {
+  padding: 14px 18px 8px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.mp-meter {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.mp-meter > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mp-meter-bar {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--wash);
+}
+
+.mp-meter-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+}
+
+.mp-meter-bar i[data-type="semantic"] {
+  background: var(--sem);
+}
+
+.mp-meter-bar i[data-type="episodic"] {
+  background: var(--epi);
+}
+
+.mp-meter-bar i[data-type="procedural"] {
+  background: var(--pro);
+}
+
+.mp-meter b {
+  text-align: right;
+  font-stretch: 75%;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+p.mp-more {
+  margin: 0;
+}
+
 @media (max-width: 720px) {
   .mp-ground {
     inset: 0 0 56% 0;
@@ -408,13 +997,6 @@
     font-size: 13.5px;
   }
 
-  .mp-field {
-    left: 12px;
-    right: 12px;
-    top: 12px;
-    width: auto;
-    max-width: none;
-  }
 
   .mp-q {
     height: 46px;
@@ -430,7 +1012,7 @@
     top: auto;
     left: 0;
     width: auto;
-    height: 56%;
+    height: 46%;
     border-left: 0;
     border-top: 1px solid var(--rule);
     border-radius: var(--r-sheet) var(--r-sheet) 0 0;
@@ -507,5 +1089,90 @@
   .mp-spin {
     animation: none;
     border-top-color: var(--ink-2);
+  }
+}
+
+/* Phone: the map above the bottom sheet; the lens switch and the fit button
+   sit just above its edge, so the top keeps only the search field. */
+@media (max-width: 720px) {
+  .mp-top {
+    position: static;
+  }
+
+  .mp-field {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    z-index: 6;
+    width: auto;
+  }
+
+  .mp-lens {
+    position: absolute;
+    left: 12px;
+    bottom: calc(var(--mp-sheet-h, 0px) + 12px);
+    z-index: 5;
+    padding: 3px;
+  }
+
+  .mp-lens button {
+    min-height: 30px;
+    padding: 0 11px;
+    font-size: 13px;
+  }
+
+  .mp-legend {
+    display: none;
+  }
+
+  /* Pinch and double-tap zoom; only the way back to the whole map stays. */
+  .mp-zoom {
+    right: 12px;
+    bottom: calc(var(--mp-sheet-h, 0px) + 12px);
+  }
+
+  .mp-zoom button:not(:last-child) {
+    display: none;
+  }
+
+  .mp-zoom button {
+    width: 38px;
+    height: 38px;
+  }
+
+  /* The scrubber sits above the lens switch. */
+  .mp-scrub {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    bottom: calc(var(--mp-sheet-h, 0px) + 60px);
+  }
+
+  .mp-lbl {
+    font-size: 11.5px;
+  }
+
+  .mp-lbl[data-big] {
+    font-size: 12.5px;
+  }
+
+  .mp-lbl small {
+    display: none;
+  }
+
+  .mp-tip {
+    max-width: min(280px, calc(100vw - 24px));
+  }
+
+  .mp-panels {
+    margin-top: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-tip,
+  .mp-scrub {
+    animation: none;
   }
 }

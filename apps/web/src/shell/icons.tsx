@@ -25,8 +25,9 @@ const PATHS = {
   close: (<path d="M6 6l12 12M18 6L6 18" />),
   edit: (<path d="M14.5 5.5l4 4L9 19H5v-4z" />),
   archive: (<><path d="M4 6.5h16v3H4z" /><path d="M5.5 9.5v9h13v-9M10 13h4" /></>),
+  fault: (<><path d="M3 15c3-1 4-5 7-5s3 3 5 3 4-3 6-4" strokeDasharray="2.6 2.4" /><path d="M3 19.5h18" opacity=".5" /></>),
+  back: (<path d="M14.5 6l-6 6 6 6" />),
   plug: (<><path d="M9 3.5v4M15 3.5v4" /><path d="M6.5 7.5h11v3a5.5 5.5 0 01-11 0z" /><path d="M12 16v4.5" /></>),
-  plates: (<><path d="M3.5 8.5L12 4l8.5 4.5L12 13z" /><path d="M3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5" opacity=".55" /></>),
 } satisfies Record<string, ReactElement>;
 
 export type IconName = keyof typeof PATHS;

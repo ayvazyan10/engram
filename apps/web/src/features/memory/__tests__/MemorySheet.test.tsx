@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import MemorySheet, { predictLoser, resetPolicyCache, retentionOf } from '../MemorySheet.js';
+import MemorySheet, { daysLeft, predictLoser, resetPolicyCache } from '../MemorySheet.js';
+import { useMapStore } from '../../map/mapStore.js';
+import { buildModel } from '../../map/lib/model.js';
+import { node, payload } from '../../map/__tests__/payload.js';
 import Toasts, { useToasts } from '../../../shell/Toasts.js';
 import { useNeuralStore } from '../../../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js';
@@ -27,7 +30,6 @@ vi.mock('../../../lib/api.js', () => ({
   },
 }));
 
-const DAY = 86_400_000;
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
   return {
@@ -82,6 +84,7 @@ function renderSheet() {
 
 beforeEach(() => {
   resetPolicyCache();
+  mapScore(0.2);
   useNeuralStore.setState({ selectedNeuronId: null, contradictionPairs: [{ sourceId: 'a', targetId: 'b', confidence: 0.9 }] });
   useMemoryStore.setState({ records: [record(), other, neighbour], searchResults: [], weakerResults: [], hiddenIds: new Set() });
   useToasts.setState({ toast: null, visible: false });
@@ -99,34 +102,22 @@ afterEach(() => {
   flushDeferred();
 });
 
-describe('retentionOf', () => {
+describe('daysLeft', () => {
   const policy = { halfLifeDays: 7, archiveThreshold: 0.05 };
-  const now = Date.parse('2026-10-15T00:00:00.000Z');
 
-  it('is importance × recency × access, the server formula', () => {
-    const fresh = retentionOf({ importance: 0.8, createdAt: '2026-10-15T00:00:00.000Z', lastAccessedAt: null, accessCount: 0 }, policy, now);
-    expect(fresh.retention).toBeCloseTo(0.8 * 0.3, 5);
-    const week = retentionOf({ importance: 0.8, createdAt: '2026-10-08T00:00:00.000Z', lastAccessedAt: null, accessCount: 0 }, policy, now);
-    expect(week.retention).toBeCloseTo(0.8 * 0.3 * 0.5, 5);
-  });
-
-  it('counts from the last recall when there is one, and recalls raise the access factor', () => {
-    const r = retentionOf(
-      { importance: 1, createdAt: '2026-01-01T00:00:00.000Z', lastAccessedAt: '2026-10-15T00:00:00.000Z', accessCount: 9 },
-      policy,
-      now
-    );
-    expect(r.retention).toBeCloseTo(0.3 + (0.7 * 1) / 3, 5);
-  });
-
-  it('says how many days are left before the archive threshold, negative once past it', () => {
-    const r = retentionOf({ importance: 0.8, createdAt: '2026-10-15T00:00:00.000Z', lastAccessedAt: null, accessCount: 0 }, policy, now);
-    // 0.24 · 2^(-t/7) = 0.05  →  t = 7 · log2(4.8)
-    expect(r.daysLeft).toBeCloseTo(7 * Math.log2(4.8), 5);
-    const old = retentionOf({ importance: 0.8, createdAt: new Date(now - 60 * DAY).toISOString(), lastAccessedAt: null, accessCount: 0 }, policy, now);
-    expect(old.daysLeft).toBeLessThan(0);
+  it('counts the halvings left before the archive threshold, negative once past it', () => {
+    expect(daysLeft(0.2, policy)).toBeCloseTo(14, 5);
+    expect(daysLeft(0.05, policy)).toBe(0);
+    expect(daysLeft(0.025, policy)).toBeCloseTo(-7, 5);
+    expect(daysLeft(0, policy)).toBe(-Infinity);
   });
 });
+
+/** The retention the sheet shows is the server's, read off the map payload. */
+function mapScore(retention: number, protectedMemory = false) {
+  const p = payload({ nodes: [node('a', { retention, protected: protectedMemory })] });
+  useMapStore.setState({ payload: p, model: buildModel(p) });
+}
 
 describe('predictLoser', () => {
   const older = { id: 'old', createdAt: '2026-01-01T00:00:00Z', importance: 0.9 };
@@ -152,9 +143,22 @@ describe('MemorySheet: reading', () => {
     expect(within(sheet).getByText(/Sync encryption is optional/)).toBeInTheDocument();
     expect(within(sheet).getByRole('meter', { name: 'Importance' })).toHaveAttribute('aria-valuenow', '75');
     expect(await within(sheet).findByRole('meter', { name: 'Retention' })).toBeInTheDocument();
-    expect(within(sheet).getByText(/archive threshold/)).toBeInTheDocument();
+    expect(within(sheet).getByRole('meter', { name: 'Retention' })).toHaveAttribute('aria-valuenow', '20');
+    expect(within(sheet).getByText(/archive threshold in 14 days/)).toBeInTheDocument();
     expect(within(sheet).getByText(/^3 times, last/)).toBeInTheDocument();
     expect(within(sheet).getByText('sync encryption')).toBeInTheDocument();
+  });
+
+  it('says a protected memory is never archived, one below the threshold is next, and shows none off the map', async () => {
+    mapScore(0.0001, true);
+    renderSheet();
+    open();
+    const sheet = await screen.findByRole('dialog', { name: /semantic memory/i });
+    expect(await within(sheet).findByText(/Protected: the decay sweep never archives it/)).toBeInTheDocument();
+    act(() => mapScore(0.01));
+    expect(within(sheet).getByText(/Below the 5% archive threshold/)).toBeInTheDocument();
+    act(() => useMapStore.setState({ model: null }));
+    expect(within(sheet).queryByRole('meter', { name: 'Retention' })).not.toBeInTheDocument();
   });
 
   it('takes focus when it opens and gives it back to what opened it when it closes', async () => {

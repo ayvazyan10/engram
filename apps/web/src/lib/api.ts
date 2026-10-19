@@ -1,6 +1,5 @@
 import { getStoredApiKey } from './apiKey.js';
 import { useAuthStore } from '../store/authStore.js';
-import type { SceneNodeInput } from '../store/viewStore.js';
 import type { AnalyticsData } from '../store/analyticsStore.js';
 
 const BASE = '/api';
@@ -88,22 +87,53 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-/**
- * GET /api/graph/layout — every memory's 3D coordinate, projected from its
- * embedding server-side.
- */
-export interface LayoutResponse {
-  method: 'pca3' | 'fallback';
+/** One memory on the map, as `GET /api/map` places it. `x` and `y` lie in
+ *  [-1, 1]; `retention` and `protected` are the server's decay verdict. */
+export interface MapNode {
+  id: string;
+  x: number;
+  y: number;
+  type: 'episodic' | 'semantic' | 'procedural';
+  importance: number;
+  retention: number;
+  protected: boolean;
+  createdAt: string;
+  lastAccessedAt: string | null;
+  namespace: string | null;
+  source: string | null;
+  isReflection: boolean;
+  regionId: string;
+  degree: number;
+  contradictCount: number;
+  label: string;
+}
+
+/** A named region of the map. Its id is its medoid memory's, so it stays put
+ *  across recomputes; `name` is the server's automatic name. */
+export interface MapRegion {
+  id: string;
+  name: string;
+  autoName: string;
+  count: number;
+  x: number;
+  y: number;
+  reflectionShare: number;
+  contradictions: number;
+  newThisWeek: number;
+  topTags: string[];
+}
+
+/** GET /api/map. A 503 `{ error: 'map not ready', retryAfterMs }` means the
+ *  first layout is still being computed; ask again after that delay. */
+export interface MapPayload {
   fingerprint: string;
   generatedAt: string;
-  halfExtent: number;
-  count: number;
-  projected: number;
-  unprojected: number;
-  explainedVariance: number[];
-  embeddingModel: string | null;
   computeMs: number;
-  nodes: SceneNodeInput[];
+  method: 'pca2+knn' | 'fallback';
+  explainedVariance: [number, number];
+  embeddingModel: string | null;
+  nodes: MapNode[];
+  regions: MapRegion[];
 }
 
 /** GET /api/graph/edges — the edge set plus the counts the scene key needs to
@@ -184,26 +214,20 @@ export const api = {
   getGraph: (id: string, depth = 1) =>
     request<{ node: unknown; connections: Array<{ id: string; sourceId: string; targetId: string; relationship: string; strength: number }>; neighbors: unknown[] }>(`/graph/${id}?depth=${depth}`),
 
-  /**
-   * The scene's own two calls. They live in this object rather than beside the
-   * canvas so there is one place that owns the request contract — key header,
-   * timeout, 401 -> unlock gate, error-body parsing. The canvas had its own
-   * copy of all four while this file was being rewritten; a second entry point
-   * is a second thing to keep in step, which is why `request` stays private
-   * instead of being exported for callers to wrap themselves.
-   */
-  getGraphLayout: () => request<LayoutResponse>('/graph/layout'),
+  /** The map for one scope: a path is one project, `null` the global
+   *  memories, and leaving it out every memory. */
+  getMap: (namespace?: string | null) => {
+    const q = new URLSearchParams();
+    if (typeof namespace === 'string') q.set('namespace', namespace);
+    if (namespace === null) q.set('global', 'true');
+    const query = q.toString();
+    return request<MapPayload>(`/map${query ? `?${query}` : ''}`);
+  },
 
   /**
-   * Every renderable edge.
-   *
-   * No filter by default: the live store has ~3,100 edges whose endpoints are
-   * both visible (3,099 measured against 651 memories), which is one
-   * `LineSegments` draw call and perfectly legible.
-   * The response reports `total`/`stored` regardless, so the scene key can
-   * state what is on screen and what is not — the previous client asked for the
-   * top 30 memories' neighbourhoods and rendered 67 edges out of thousands with
-   * no hint that anything was missing.
+   * Every edge between live memories, ids only. The map's Faults lens draws
+   * the `contradicts` ones from here: GET /contradictions carries both
+   * memories' text with each pair, about 1.8 KB a pair, where this is ids.
    */
   getGraphEdges: (minStrength = 0) =>
     request<EdgeSummary>(`/graph/edges?minStrength=${minStrength}`),
@@ -242,12 +266,8 @@ export const api = {
   /**
    * GET /api/decay/policy — the server's own decay configuration.
    *
-   * Every plate computes each memory's retention from this half-life, so it
-   * has to be the server's rather than a constant the client picked: a client
-   * default would draw a decay curve the store is not actually on, and it
-   * would keep drawing it after the server's policy changed. There is
-   * deliberately no fallback — see lib/plate/data.ts, which fails the load
-   * rather than guessing.
+   * The memory sheet and the map read the archive threshold from here, so it
+   * is the server's rather than a constant the client picked.
    */
   getDecayPolicy: () =>
     request<{ halfLifeDays: number; archiveThreshold: number }>('/decay/policy'),

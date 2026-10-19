@@ -7,6 +7,8 @@ import { formatRelative } from '../../lib/dates.js';
 import { useScopeChoices } from '../../shell/ScopeSwitch.js';
 import { Icon } from '../../shell/icons.js';
 import { MemoryRow } from '../memory/MemoryRow.js';
+import { useMapStore, type SheetPanel } from './mapStore.js';
+import RegionsPanel from './RegionsPanel.js';
 import './map.css';
 
 /** A run of machine-written memories this long or longer folds into one line. */
@@ -103,21 +105,35 @@ interface Props {
   onLoadMore: () => void;
   loadingMore: boolean;
   onStore: () => void;
+  /** Opens a region on the map (and here), or closes it with null. */
+  onRegion: (id: string | null) => void;
 }
 
+const PANELS: { panel: SheetPanel; label: string }[] = [
+  { panel: 'recent', label: 'Recent' },
+  { panel: 'regions', label: 'Regions' },
+];
+
 /** Phone: the sheet rests at one of three heights (share of the space under the field). */
-const SNAPS = [0.3, 0.56, 1] as const;
+const SNAPS = [0.3, 0.46, 1] as const;
 
 /**
  * The Map's side sheet (a draggable bottom sheet on a phone), the list twin
  * of the map. Recent: the newest memories, machine streams folded, loading
- * older ones on scroll. Results: what the search found, then any weaker
- * matches, and always the way to ask what the AI would be told instead.
+ * older ones on scroll. Regions: the map's places, each a button. Results:
+ * what the search found (the pins on the map), then any weaker matches, and
+ * always the way to ask what the AI would be told instead. Pointing at a row
+ * rings its memory on the map, and pointing at a mark marks its row.
  */
-export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingMore, onStore }: Props) {
+export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingMore, onStore, onRegion }: Props) {
   const { records, searchQuery, searchResults, weakerResults, isSearching, projectFilter, hiddenIds } = useMemoryStore();
   const openId = useNeuralStore((s) => s.selectedNeuronId);
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
+  const panel = useMapStore((s) => s.panel);
+  const regionCount = useMapStore((s) => s.model?.regions.length ?? 0);
+  const hoverId = useMapStore((s) => s.hoverId);
+  const setHover = useMapStore((s) => s.setHover);
+  const setPanel = useMapStore((s) => s.setPanel);
   const stats = useServerStats();
   const choices = useScopeChoices();
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
@@ -154,6 +170,18 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
     return () => observer.disconnect();
   }, [more, loadingMore, loading, onLoadMore]);
 
+  // The row of the memory under the pointer (here or on the map) is marked,
+  // and kept in view when the pointer is on the map.
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.querySelectorAll('[data-hover]').forEach((el) => el.removeAttribute('data-hover'));
+    const el = hoverId ? [...body.querySelectorAll<HTMLElement>('[data-id]')].find((e) => e.dataset.id === hoverId) : undefined;
+    if (!el) return;
+    el.setAttribute('data-hover', '');
+    if (!body.matches(':hover')) el.scrollIntoView({ block: 'nearest' });
+  }, [hoverId, panel, searchQuery]);
+
   const row = (record: MemoryRecord, query = '') => (
     <MemoryRow
       key={record.id}
@@ -169,7 +197,7 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
   const onListKey = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.key === 'j' || event.key === 'ArrowDown' ? 1 : event.key === 'k' || event.key === 'ArrowUp' ? -1 : 0;
     if (!step || !bodyRef.current) return;
-    const stops = [...bodyRef.current.querySelectorAll<HTMLElement>('.mm-row, .mp-group > button')];
+    const stops = [...bodyRef.current.querySelectorAll<HTMLElement>('.mm-row, .mp-group > button, .mp-region, .mp-back')];
     const at = stops.indexOf(document.activeElement as HTMLElement);
     if (at === -1) return;
     event.preventDefault();
@@ -210,16 +238,32 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
     sheet.style.height = '';
   };
 
-  const head = searchQuery ? resultsHead(searchQuery, strong.length, weaker.length) : 'Recent memories';
-  const count = searchQuery ? `${strong.length + weaker.length} found` : `${total.toLocaleString('en-US')} memories`;
+  const regions = !searchQuery && panel === 'regions';
+  const head = searchQuery
+    ? resultsHead(searchQuery, strong.length, weaker.length)
+    : regions
+      ? `${regionCount} regions`
+      : 'Recent memories';
+  const count = searchQuery
+    ? `${strong.length + weaker.length} found`
+    : regions
+      ? `${regionCount} regions`
+      : `${total.toLocaleString('en-US')} memories`;
   const lede = searchQuery
     ? isSearching
       ? 'Searching…'
-      : `In ${scopeName}.`
-    : `${total.toLocaleString('en-US')} in ${scopeName}. Machine-written streams are folded into one line.`;
+      : `In ${scopeName}. Pins mark where they sit on the map.`
+    : regions
+      ? 'Found from where memories sit. Pick one to fly there.'
+      : `${total.toLocaleString('en-US')} in ${scopeName}. Machine-written streams are folded into one line.`;
 
   return (
-    <section ref={sheetRef} className="mp-sheet" data-snap={snap} aria-label={searchQuery ? 'Search results' : 'Recent memories'}>
+    <section
+      ref={sheetRef}
+      className="mp-sheet"
+      data-snap={snap}
+      aria-label={searchQuery ? 'Search results' : regions ? 'Regions' : 'Recent memories'}
+    >
       <button
         type="button"
         className="mp-grab"
@@ -245,10 +289,28 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
           </button>
         </div>
         <p aria-live="polite">{lede}</p>
+        {!searchQuery && (
+          <div className="mp-panels" role="group" aria-label="List">
+            {PANELS.map((p) => (
+              <button key={p.panel} type="button" aria-pressed={panel === p.panel} onClick={() => setPanel(p.panel)}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
 
-      <div ref={bodyRef} className="mp-body" aria-busy={isSearching || loading} onKeyDown={onListKey}>
-        {searchQuery ? (
+      <div
+        ref={bodyRef}
+        className="mp-body"
+        aria-busy={isSearching || loading}
+        onKeyDown={onListKey}
+        onPointerOver={(e) => setHover((e.target as HTMLElement).closest<HTMLElement>('[data-id]')?.dataset.id ?? null)}
+        onPointerLeave={() => setHover(null)}
+      >
+        {regions ? (
+          <RegionsPanel onRegion={onRegion} />
+        ) : searchQuery ? (
           <>
             {strong.map((r) => row(r, searchQuery))}
             {weaker.length > 0 && (

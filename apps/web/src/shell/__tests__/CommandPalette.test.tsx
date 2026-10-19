@@ -163,7 +163,7 @@ describe('matchCommand', () => {
     expect(matchCommand('Dark mode', 'dark')).toBe(1);
     expect(matchCommand('Match system colours', 'colours')).toBe(0.8);
     expect(matchCommand('Light mode', 'theme', ['theme'])).toBe(0.5);
-    expect(matchCommand('Plates (old 3D views)', 'dark', ['3d', 'graph'])).toBe(0);
+    expect(matchCommand('Store a memory', 'dark', ['remember', 'add'])).toBe(0);
     expect(matchCommand('Insights: reflections', 'insights refl')).toBe(1);
     expect(matchCommand('Insights: reflections', 'insights numbers')).toBe(0);
   });

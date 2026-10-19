@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import type { UITemplate } from '../store/templateStore.js';
-import { resetPlateColors } from '../lib/plate/contract.js';
 
 /**
  * Mirrors the active template's colours onto `document.documentElement` as
@@ -10,16 +9,6 @@ import { resetPlateColors } from '../lib/plate/contract.js';
  * etc. into a `style` prop by hand. The surface and text roles are mirrored
  * too: a keycap or a placeholder drawn purely in CSS still has to sit on the
  * right ground in every template.
- *
- * It also drops the plate contract's resolved-colour cache on every run. That
- * cache reads custom properties off this same element once and keeps them, for
- * canvas and WebGL which cannot read a variable — so a template switch that
- * rewrites properties under it would leave every mark on the plate painted in
- * whatever was resolved first. The plate tokens are not template-dependent
- * today, but this hook is the one place that rewrites root custom properties,
- * and it is also the earliest point at which the stylesheet is known to have
- * applied; making it the invalidation point costs one call and removes a whole
- * class of stale-colour bug.
  */
 export function useThemeVars(template: UITemplate): void {
   useEffect(() => {
@@ -37,6 +26,5 @@ export function useThemeVars(template: UITemplate): void {
     root.setProperty('--ec-panel-bg', template.panelBg);
     root.setProperty('--ec-card-bg', template.cardBg);
     root.setProperty('--ec-input-bg', template.inputBg);
-    resetPlateColors();
   }, [template]);
 }

@@ -6,24 +6,21 @@ import ScopeSwitch from './ScopeSwitch.js';
 import CommandPalette, { GO_KEYS } from './CommandPalette.js';
 import Toasts, { showToast } from './Toasts.js';
 import { useRouteStore, type Route } from './routeStore.js';
-import PlateSurface from '../components/plates/PlateSurface.js';
 import StoreMemoryModal from '../components/ui/StoreMemoryModal.js';
 import UnlockGate from '../components/ui/UnlockGate.js';
 // The map is the landing view, so it is in the main chunk rather than split.
 import MapView from '../features/map/MapView.js';
+import { loadMap } from '../features/map/mapStore.js';
 import RecallView from '../features/recall/RecallView.js';
 import MemorySheet from '../features/memory/MemorySheet.js';
 import Onboarding from '../components/views/Onboarding.js';
 import SettingsView from '../features/settings/SettingsView.js';
 import { useNeuralStore } from '../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../store/memoryStore.js';
-import { sceneLayout, type SceneNodeInput } from '../store/viewStore.js';
 import { useTemplateStore } from '../store/templateStore.js';
 import { useAuthStore } from '../store/authStore.js';
 import { api, ApiError } from '../lib/api.js';
-import { loadPlateData } from '../lib/plate/data.js';
 import { refreshServerStats } from '../lib/serverStats.js';
-import type { ObsData } from '../lib/plate/contract.js';
 import { useWebSocket, asMemoryRecord } from '../hooks/useWebSocket.js';
 import { useThemeVars } from '../hooks/useThemeVars.js';
 import './shell.css';
@@ -46,18 +43,17 @@ const TITLES: Record<Route['name'], string> = {
   insights: 'Insights',
   settings: 'Settings',
   welcome: 'Connect an AI',
-  plates: 'Plates',
 };
 
 /**
  * The Atlas shell: rail (desktop) or bottom nav (phone), the scope and command
  * bar, the routed screen, the palette, toasts, the store dialog and the unlock
  * gate. It also owns the loads every screen shares (the memory list, the
- * contradiction pairs, the plate data) so moving between routes refetches
- * nothing. The screens F2–F6 replace are mounted here unchanged.
+ * contradiction pairs, the map) so moving between routes refetches nothing.
+ * The screens F4–F6 replace are mounted here unchanged.
  */
 export default function Shell() {
-  const { neurons, setNeurons, reconcileNeurons, setConnections, setContradictionPairs } = useNeuralStore();
+  const setContradictionPairs = useNeuralStore((s) => s.setContradictionPairs);
   const { setRecords, appendRecords, storeChanges, projectFilter } = useMemoryStore();
   const route = useRouteStore((s) => s.route);
   const navigate = useRouteStore((s) => s.navigate);
@@ -69,14 +65,6 @@ export default function Shell() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // The plates read GET /graph/layout (every memory, placed by its embedding),
-  // not the memory page; they are loaded only while the plates route is open.
-  const [sceneNodes, setSceneNodes] = useState<SceneNodeInput[] | null>(null);
-  const [plateData, setPlateData] = useState<ObsData | null>(null);
-  const [plateError, setPlateError] = useState<string | null>(null);
-  const [plateAttempt, setPlateAttempt] = useState(0);
-  const [firstLoad, setFirstLoad] = useState(true);
-  const onPlates = route.name === 'plates';
 
   useThemeVars(t);
   useWebSocket();
@@ -140,57 +128,11 @@ export default function Shell() {
       .catch(() => {});
   }, [storeChanges, setContradictionPairs]);
 
-  // One load feeds the plate and the inspector (three requests). The guard is
-  // earned when a load LANDS: a run whose cleanup fired first (StrictMode, or
-  // leaving the plates mid-load) discarded its response, so the next must fetch.
-  const sceneFetchedForRef = useRef(-1);
+  // The map, for the scope: again when a memory joins or leaves the store, so
+  // an arrival lands on the map (the server places it by its neighbours).
   useEffect(() => {
-    if (!onPlates) return;
-    if (sceneFetchedForRef.current === storeChanges) return;
-
-    let cancelled = false;
-    loadPlateData()
-      .then(({ data, layout, edges }) => {
-        if (cancelled) return;
-        sceneFetchedForRef.current = storeChanges;
-        setPlateData(data);
-        setPlateError(null);
-        setSceneNodes(layout.nodes);
-        setConnections(
-          edges.edges.map((e) => ({ id: e.id, sourceId: e.sourceId, targetId: e.targetId, relationship: e.relationship, strength: e.strength }))
-        );
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 401) return;
-        setPlateError(err instanceof Error ? err.message : 'Could not reach Engram API');
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [storeChanges, onPlates, plateAttempt, setConnections]);
-
-  const retryPlate = useCallback(() => {
-    setPlateError(null);
-    setPlateAttempt((n) => n + 1);
-  }, []);
-
-  useEffect(() => {
-    if (!sceneNodes || sceneNodes.length === 0 || !onPlates) return;
-    // One layout, the projection as the server computed it; reconcile rather
-    // than replace so memories stored during the session appear.
-    const positions = sceneLayout(sceneNodes);
-    if (firstLoad || neurons.length === 0) {
-      setNeurons(positions.map((p) => ({ ...p, activation: 0, tx: p.x, ty: p.y, tz: p.z })));
-      setFirstLoad(false);
-    } else {
-      reconcileNeurons(positions);
-    }
-  // firstLoad/neurons.length only pick a branch and are updated here; the
-  // setters are stable Zustand actions.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sceneNodes, onPlates]);
+    void loadMap(projectFilter);
+  }, [projectFilter, storeChanges]);
 
   // `?m=<id>` and the selected memory are one value: a link opens the memory,
   // and selecting or closing one rewrites the link in place.
@@ -311,10 +253,6 @@ export default function Shell() {
             />
           ) : route.name === 'recall' ? (
             <RecallView onStore={openStore} />
-          ) : route.name === 'plates' ? (
-            <div className="at-plate">
-              <PlateSurface data={plateData} error={plateError} onRetry={retryPlate} />
-            </div>
           ) : route.name === 'welcome' ? (
             <div className="at-scroll">
               <Onboarding onRefresh={loadMemories} onDone={() => navigate('/')} />
