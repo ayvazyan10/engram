@@ -1251,7 +1251,7 @@ function parseFactLines(input: string, tag: string): ImportMemory[] {
 }
 
 function parseChatgpt(input: string): ImportData {
-  if (!/^[\[{]/.test(input)) {
+  if (!/^[[{]/.test(input)) {
     return { memories: parseFactLines(input, 'import:chatgpt'), parseFailures: 0 };
   }
   const entries: unknown = JSON.parse(input);

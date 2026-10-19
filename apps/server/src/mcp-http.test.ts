@@ -85,6 +85,7 @@ describe('Streamable HTTP MCP', () => {
   it('stores and recalls a memory in the REST server brain', async () => {
     // Keep this transport test offline; storage, indexing and recall remain real.
     // Core is built CommonJS, so spy on the module its internal require() uses.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- must be the CJS instance core uses
     const embedder = require(path.join(path.dirname(require.resolve('@engram-ai-memory/core')),
       'embedding/Embedder.js')) as typeof import('../../../packages/core/dist/embedding/Embedder.js');
     vi.spyOn(embedder, 'embed').mockImplementation(async () =>

@@ -27,6 +27,15 @@ export default defineConfig({
         'src/components/canvas/NeuralCanvas.tsx',
         'src/components/canvas/NeuronMesh.tsx',
         'src/components/canvas/ConnectionLine.tsx',
+        // The five plates paint a 2D canvas, which jsdom does not implement
+        // (getContext returns null), so for the same reason as the WebGL
+        // scene above their drawing code cannot run here. PlateSurface, the
+        // shared wrapper, stays measured.
+        'src/components/plates/MemoryMatrix.tsx',
+        'src/components/plates/OverviewAndDetail.tsx',
+        'src/components/plates/MemoryRiver.tsx',
+        'src/components/plates/AxesAndChords.tsx',
+        'src/components/plates/LaidOutByLink.tsx',
       ],
       thresholds: { lines: 80, functions: 80, statements: 80, branches: 70 },
     },
