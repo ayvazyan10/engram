@@ -828,6 +828,11 @@
     overflow-y: auto;
   }
 
+  /* The page scrolls as a whole; no part may shrink under its content. */
+  .rv > * {
+    flex: none;
+  }
+
   .rv-head {
     padding: var(--s-2) var(--s-4) var(--s-3);
   }
