@@ -85,6 +85,7 @@ const HEAVY_PATHS: readonly string[] = [
   '/api/memory/bulk/archive',
   '/api/memory/bulk/tag',
   '/api/recall',
+  '/api/recall/explain',
   '/api/recall/stream',
   '/api/search',
 ];

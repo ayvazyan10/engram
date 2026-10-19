@@ -2,13 +2,16 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import type { FastifyInstance } from 'fastify';
+import { getDb, schema } from '@engram-ai-memory/core';
+import { sql } from 'drizzle-orm';
+import { tiersFor } from '../security/rateLimit.js';
 
-vi.mock('@engram-ai-memory/core', () => import('../../../../packages/core/src/index.ts'));
-vi.mock('../../../../packages/core/src/embedding/Embedder.ts', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../../../packages/core/src/embedding/Embedder.ts')>(),
-  embed: async () => new Float32Array(384).fill(1),
-}));
+// Built core is CommonJS; spy on its require() export so the real dist path
+// uses deterministic embeddings without replacing core with source modules.
+const embedder: typeof import('../../../../packages/core/dist/embedding/Embedder.js') =
+  createRequire(import.meta.url)('../../../../packages/core/dist/embedding/Embedder.js');
 
 const directory = mkdtempSync(join(tmpdir(), 'engram-rest-filters-'));
 const filters = { since: '2026-01-01T00:00:00Z', until: '2026-01-31T23:59:59Z', tags: ['project', 'release'] };
@@ -19,6 +22,7 @@ let projectId: string;
 const globalIds: string[] = [];
 
 beforeAll(async () => {
+  vi.spyOn(embedder, 'embed').mockImplementation(async () => new Float32Array(384).fill(1));
   vi.stubEnv('ENGRAM_DB_PATH', join(directory, 'test.db'));
   vi.stubEnv('ENGRAM_SYNC_URL', '');
   vi.stubEnv('ENGRAM_DECAY_INTERVAL', '0');
@@ -48,6 +52,7 @@ afterAll(async () => {
   brain?.shutdown();
   rmSync(directory, { recursive: true, force: true });
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe('POST /api/search project filters', () => {
@@ -78,12 +83,12 @@ describe('POST /api/search project filters', () => {
   );
 });
 
-describe.each(['/api/search', '/api/recall'])('POST %s filters', (url) => {
+describe.each(['/api/search', '/api/recall', '/api/recall/explain'])('POST %s filters', (url) => {
   it('accepts and applies the date window and all tags', async () => {
     const response = await app.inject({ method: 'POST', url, payload: { query: 'query', ...filters } });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect((body.results ?? body.memories).map((memory: { id: string }) => memory.id)).toEqual([matchingId]);
+    expect((body.results ?? body.memories ?? body.items).map((memory: { id: string }) => memory.id)).toEqual([matchingId]);
   });
 
   it.each([{ since: 'yesterday' }, { until: '2026-01-15' }, { tags: 'project' }, { tags: [1] }, { since: [filters.since] }])(
@@ -110,4 +115,88 @@ it('rejects malformed SSE dates before opening the stream', async () => {
   const response = await app.inject({ method: 'GET', url: '/api/recall/stream?query=query&since=yesterday' });
   expect(response.statusCode).toBe(400);
   expect(response.json()).toMatchObject({ error: 'Bad Request' });
+});
+
+describe('POST /api/recall/explain', () => {
+  const url = '/api/recall/explain';
+
+  it('returns exact recall context and leaves access statistics and audit rows unchanged', async () => {
+    const db = getDb();
+    const before = db.select().from(schema.memories).all();
+    const audits = db.select().from(schema.contextAssemblies).all();
+    const changes = db.get(sql`SELECT total_changes() AS n`);
+    const hook = vi.spyOn(brain.getPluginRegistry(), 'runHook');
+    const response = await app.inject({ method: 'POST', url, payload: { query: 'query', ...filters } });
+    expect(response.statusCode).toBe(200);
+    const explanation = response.json();
+    expect(explanation).toMatchObject({
+      budget: { maxTokens: 2000, usedTokens: 2 }, candidates: 1,
+      items: [{ id: matchingId, rank: 1, position: 1, section: 'events', via: 'vector', chars: 8, tokens: 2, included: true }],
+    });
+    expect(explanation.context.slice(explanation.items[0].offset)).toMatch(/^• \[/);
+    expect(db.select().from(schema.memories).all()).toEqual(before);
+    expect(db.select().from(schema.contextAssemblies).all()).toEqual(audits);
+    expect(db.get(sql`SELECT total_changes() AS n`)).toEqual(changes);
+    expect(hook).not.toHaveBeenCalled();
+    hook.mockRestore();
+    const recall = await app.inject({ method: 'POST', url: '/api/recall', payload: { query: 'query', ...filters } });
+    expect(explanation.context).toBe(recall.json().context);
+  });
+
+  it('supports exact project and global scope, combined with type and source filters', async () => {
+    const project = await app.inject({ method: 'POST', url, payload: { query: 'query', namespace: '/code/api', types: ['episodic'] } });
+    expect(project.statusCode).toBe(200);
+    expect(project.json().items.map((item: { id: string }) => item.id)).toEqual([projectId]);
+    const global = await app.inject({ method: 'POST', url, payload: { query: 'query', global: true } });
+    expect(global.statusCode).toBe(200);
+    expect(global.json().items.map((item: { id: string }) => item.id).sort()).toEqual([...globalIds].sort());
+    const empty = await app.inject({ method: 'POST', url, payload: { query: 'query', types: ['semantic'] } });
+    expect(empty.json()).toMatchObject({ context: '', items: [], candidates: 0, budget: { maxTokens: 2000, usedTokens: 0 } });
+    // Source-null records retain recall's existing pass-through semantics.
+    const source = await app.inject({ method: 'POST', url, payload: { query: 'query', sources: ['missing'], ...filters } });
+    expect(source.json().items.map((item: { id: string }) => item.id)).toEqual([matchingId]);
+  });
+
+  it('reports budget omissions and rejects isolated cross-namespace requests', async () => {
+    const response = await app.inject({ method: 'POST', url, payload: { query: 'query', maxTokens: 1 } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.some((item: { reason?: string }) => item.reason === 'over_budget')).toBe(true);
+    const mode = vi.spyOn(brain, 'getNamespaceMode').mockReturnValue('isolated');
+    try {
+      const rejected = await app.inject({ method: 'POST', url, payload: { query: 'query', crossNamespace: true } });
+      expect(rejected.statusCode).toBe(400);
+      expect(rejected.json().error).toMatch(/cross-namespace/);
+    } finally {
+      mode.mockRestore();
+    }
+  });
+
+  it.each([
+    {}, { query: '' }, { query: 12 }, { query: null }, { query: ['query'] },
+    { maxTokens: 0 }, { maxTokens: 32001 }, { maxTokens: 1.5 }, { maxTokens: '20' },
+    { unknown: true }, { types: 'semantic' }, { types: ['unknown'] }, { types: [1] },
+    { sources: 'source' }, { sources: [1] }, { namespace: null }, { namespace: 1 },
+    { global: false }, { global: 'true' }, { namespace: '/code/api', global: true },
+    { namespace: '', global: true }, { crossNamespace: 'true' },
+  ])('rejects malformed bodies %j', async (invalid) => {
+    const payload = Object.keys(invalid).length === 0 ? {} : { query: 'query', ...invalid };
+    const response = await app.inject({ method: 'POST', url, payload });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('shares recall’s heavy rate-limit tier and budget', async () => {
+    expect(tiersFor('POST', url)).toEqual(tiersFor('POST', '/api/recall'));
+    vi.stubEnv('ENGRAM_RATE_LIMIT_HEAVY_MAX', '1');
+    const limitedApp = await (await import('../index.ts')).buildApp();
+    try {
+      const first = await limitedApp.inject({ method: 'POST', url, payload: { query: 'query' } });
+      expect(first.statusCode).toBe(200);
+      const second = await limitedApp.inject({ method: 'POST', url: '/api/recall', payload: { query: 'query' } });
+      expect(second.statusCode).toBe(429);
+      expect(second.json().message).toContain("'heavy'");
+    } finally {
+      await limitedApp.close();
+      vi.stubEnv('ENGRAM_RATE_LIMIT_HEAVY_MAX', undefined);
+    }
+  });
 });

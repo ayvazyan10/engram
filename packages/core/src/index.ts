@@ -15,7 +15,7 @@ export { ProceduralMemory } from './memory/ProceduralMemory.js';
 
 // Retrieval
 export { ContextAssembler } from './retrieval/ContextAssembler.js';
-export type { RecallOptions, RecallResult, RecalledMemory, RecallChunk, RecallStreamComplete, RecallPhase } from './retrieval/ContextAssembler.js';
+export type { RecallOptions, RecallResult, RecallExplanation, RecallPlan, RouteItem, RecalledMemory, RecallChunk, RecallStreamComplete, RecallPhase } from './retrieval/ContextAssembler.js';
 export { VectorSearch } from './retrieval/VectorSearch.js';
 export {
   scoreMemory,

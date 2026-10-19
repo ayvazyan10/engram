@@ -47,7 +47,7 @@ import { PluginRegistry } from './plugins/PluginRegistry.js';
 import type { EngramPlugin, PluginInfo } from './plugins/PluginRegistry.js';
 import { assertValidImportance, clampImportance } from './retrieval/ImportanceScorer.js';
 import { ContextAssembler, FILTER_CANDIDATE_MULTIPLIER, hasRecallFilters, matchesMemoryFilters } from './retrieval/ContextAssembler.js';
-import type { RecallOptions, RecallResult, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
+import type { RecallOptions, RecallResult, RecallExplanation, RecallChunk, RecallStreamComplete } from './retrieval/ContextAssembler.js';
 import { VectorSearch } from './retrieval/VectorSearch.js';
 import { hybridSearch } from './retrieval/HybridSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
@@ -1224,6 +1224,17 @@ export class NeuralBrain {
     });
 
     return result;
+  }
+
+  /** Preview recall without access-statistic, audit or plugin-hook writes. */
+  async explainRecall(query: string, options?: RecallOptions): Promise<RecallExplanation> {
+    this.assertInitialized();
+    await this.syncIndexFromStore();
+    const { context, latencyMs, budget, items, candidates } = await this.assembler.plan(query, {
+      ...options,
+      crossNamespace: this.resolveCrossNamespace(options?.crossNamespace),
+    });
+    return { context, latencyMs, budget, items, candidates };
   }
 
   /**

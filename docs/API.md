@@ -57,7 +57,7 @@ Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback
 | Tier | Default limit | Applies to |
 |---|---|---|
 | `global` | 1000 / 60s | Every `/api/*` request |
-| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, and `GET /api/recall/stream`. `GET /api/memory` is a plain list and stays global-only |
+| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, and `GET /api/recall/stream`. `GET /api/memory` is a plain list and stays global-only |
 | `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild` |
 
 Window and limits are configurable — see [CONFIGURATION.md](CONFIGURATION.md#security). Set a tier's limit to `0` to disable it, or `ENGRAM_RATE_LIMIT_DISABLED=true` to turn the limiter off entirely.
@@ -660,6 +660,63 @@ You have access to relevant memories from your knowledge base:
 
 User: {user_message}
 ```
+
+---
+
+### `POST /api/recall/explain`
+
+Preview the exact context that recall would assemble, with ranking, context positions and budget decisions. Uses the same retrieval, graph expansion, filters and hybrid-search setting as `/api/recall`. Embeds the query but performs no database writes: access counts, last-access timestamps and recall audit rows stay unchanged, and recall plugin hooks are not called. Uses the same `heavy` rate-limit tier as `/api/recall` (300 requests per 60 seconds by default, shared with other heavy endpoints).
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | yes | Nonempty recall query |
+| `maxTokens` | integer | — | 1–32000, default 2000 |
+| `types` | string[] | — | `episodic`, `semantic`, `procedural` |
+| `sources` | string[] | — | Restrict sources; source-null memories still pass, as in recall |
+| `since`, `until` | string | — | Inclusive ISO date-time bounds on `eventAt`, falling back to `createdAt` |
+| `tags` | string[] | — | Require every exact tag |
+| `namespace` | string | — | Narrow to this exact project within the configured access scope |
+| `global` | boolean | — | Must be `true`; narrow to NULL namespaces; mutually exclusive with `namespace` |
+| `crossNamespace` | boolean | — | Default false; allow cross-project retrieval in filter mode; forbidden in isolated mode |
+
+**Request**
+```json
+{ "query": "How do we deploy?", "maxTokens": 1500, "namespace": "/code/api" }
+```
+
+**Response `200`**
+```typescript
+{
+  context: string;
+  latencyMs: number;
+  budget: { maxTokens: number; usedTokens: number };
+  candidates: number;
+  items: Array<{
+    id: string;
+    rank: number;
+    position: number | null;
+    offset: number | null;
+    section: 'knowledge' | 'patterns' | 'events';
+    type: 'semantic' | 'procedural' | 'episodic';
+    source: string | null;
+    via: 'vector' | 'graph';
+    similarity: number;
+    score: number;
+    chars: number;
+    tokens: number;
+    included: boolean;
+    reason?: 'over_budget';
+  }>;
+}
+```
+
+`items` are in score order; `rank` starts at 1. Included items have a one-based `position` in the context text (knowledge, patterns, then events; score order within each section). `offset` is the zero-based JavaScript string offset (UTF-16 code units) of the item's bullet in `context`. Both are null for omitted items. `via: 'vector'` includes hybrid retrieval hits when enabled; `graph` identifies expansion-only hits.
+
+`chars` counts the rendered summary, or content when summary is null; `tokens = ceil(chars / 4)`. `budget.usedTokens = ceil(sum of included chars / 4)`, excluding headings, citations and other formatting, exactly as recall budgets today. Recall always includes its top memory, so used tokens can exceed the requested budget. Oversized later items get `included: false, reason: 'over_budget'`; smaller lower-ranked items may still fit. With filters, recall also caps inclusion at its existing topK of 20; candidates beyond that cap are omitted without an over-budget reason. `candidates` counts all scored candidates after filters, before budget/topK selection. No matches returns empty context/items and zero used tokens/candidates.
+
+**Errors:** `400` for malformed or unknown body fields, conflicting project filters, or isolated-mode cross-namespace access; `401` for missing/invalid authentication when configured; `429` when rate limited.
 
 ---
 
