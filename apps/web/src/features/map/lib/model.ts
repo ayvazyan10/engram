@@ -3,6 +3,7 @@ import type { MapNode, MapPayload, MapRegion } from '../../../lib/api.js';
 import { boundsOf, toLayout, type Rect } from './project.js';
 import { terrain, type TerrainLevel } from './terrain.js';
 import { buildIndex } from './hitTest.js';
+import { toPlainText } from '../../../lib/plainText.js';
 
 /**
  * A payload made ready to draw, once per payload: layout positions in typed
@@ -36,7 +37,8 @@ export function buildModel(payload: Pick<MapPayload, 'nodes' | 'regions'>): MapM
     at.set(node.id, i);
   });
   return {
-    nodes: payload.nodes,
+    // Labels are cut from the memory's text, Markdown and all; shown plain.
+    nodes: payload.nodes.map((node) => ({ ...node, label: toPlainText(node.label) })),
     at,
     xs,
     ys,

@@ -32,6 +32,8 @@ const DEFAULT_THRESHOLD = 0.05;
 /** Room kept clear of the legend along the bottom of a desktop map. */
 const LEGEND_ROOM = 56;
 const PHONE_ROOM = 52;
+/** And of the Time scrubber above it. */
+const PHONE_SCRUB_ROOM = 64;
 const NO_AREA: Rect = { left: 0, top: 0, right: 0, bottom: 0 };
 
 /**
@@ -48,6 +50,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
   const reduced = useMediaQuery('(prefers-reduced-motion: reduce)');
   const phone = useMediaQuery('(max-width: 720px)');
+  const timeLens = lens === 'time';
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
   const [area, setArea] = useState<Rect>(NO_AREA);
   const [tip, setTip] = useState<{ id: string; at: [number, number] } | null>(null);
@@ -84,7 +87,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
         s && s.width > 0 ? { left: s.left - box.left, top: s.top - box.top, right: s.right - box.left, bottom: s.bottom - box.top } : null;
       const next = visibleArea(box.width, box.height, sheetRect, top);
       // Keep clear of the legend (desktop) or the lens switch (phone) along the bottom.
-      next.bottom = Math.max(next.top + 1, next.bottom - (phone ? PHONE_ROOM : LEGEND_ROOM));
+      next.bottom = Math.max(next.top + 1, next.bottom - (phone ? PHONE_ROOM + (timeLens ? PHONE_SCRUB_ROOM : 0) : LEGEND_ROOM));
       view.style.setProperty('--mp-sheet-h', `${sheetRect && sheetRect.top > box.height / 3 ? box.height - sheetRect.top : 0}px`);
       setArea((prev) =>
         prev.left === next.left && prev.top === next.top && prev.right === next.right && prev.bottom === next.bottom ? prev : next
@@ -98,7 +101,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
     const fieldEl = view.querySelector('.mp-field');
     if (fieldEl) observer.observe(fieldEl);
     return () => observer.disconnect();
-  }, [phone]);
+  }, [phone, timeLens]);
 
   const hits = useMemo(
     () => (searchQuery ? new Set([...searchResults, ...weakerResults].map((r) => r.id)) : null),

@@ -128,7 +128,8 @@ export function describeNode(node: MapNode, region: string | null): string {
     node.protected ? 'protected' : null,
     node.contradictCount > 0 ? `${node.contradictCount} ${node.contradictCount === 1 ? 'contradiction' : 'contradictions'}` : null,
   ].filter(Boolean);
-  return `${kind}${region ? `, ${region}` : ''}: ${text}${extra.length ? `. ${extra.join(', ')}.` : ''}`;
+  const more = extra.join(', ');
+  return `${kind}${region ? `, ${region}` : ''}: ${text}${more ? `. ${more.charAt(0).toUpperCase()}${more.slice(1)}.` : ''}`;
 }
 
 /** The legend's honesty line: how far to trust a distance on this map. */

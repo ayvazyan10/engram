@@ -114,7 +114,7 @@ describe('words', () => {
     const long = node('b', { isReflection: true, protected: true, contradictCount: 2, label: 'x'.repeat(100) });
     const said = describeNode(long, null);
     expect(said.startsWith('Semantic reflection: ')).toBe(true);
-    expect(said).toContain('…. protected, 2 contradictions.');
+    expect(said).toContain('…. Protected, 2 contradictions.');
     expect(describeNode(node('c', { contradictCount: 1 }), null)).toContain('1 contradiction.');
   });
 

@@ -246,9 +246,7 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
       : 'Recent memories';
   const count = searchQuery
     ? `${strong.length + weaker.length} found`
-    : regions
-      ? `${regionCount} regions`
-      : `${total.toLocaleString('en-US')} memories`;
+    : `${total.toLocaleString('en-US')} memories`;
   const lede = searchQuery
     ? isSearching
       ? 'Searching…'

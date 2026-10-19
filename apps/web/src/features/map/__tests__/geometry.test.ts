@@ -196,5 +196,9 @@ describe('buildModel', () => {
     expect(model.anchors.get('r2')![0]).toBeGreaterThan(LAYOUT_SIZE / 2);
     expect(model.bounds).not.toBeNull();
     expect(regionMembers(model, 'r2')).toEqual([3, 4]);
+    const marked = payload();
+    marked.nodes[0] = { ...marked.nodes[0]!, label: '# Trend **Analysis**' };
+    expect(buildModel(marked).nodes[0]!.label).toBe('Trend Analysis');
+    expect(marked.nodes[0]!.label).toBe('# Trend **Analysis**');
   });
 });

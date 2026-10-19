@@ -1141,12 +1141,17 @@ p.mp-more {
     height: 38px;
   }
 
-  /* The scrubber sits above the lens switch. */
+  /* The scrubber sits above the lens switch; the bars need more room than a phone has. */
   .mp-scrub {
     left: 12px;
     right: 12px;
     width: auto;
     bottom: calc(var(--mp-sheet-h, 0px) + 60px);
+    padding: 6px 10px;
+  }
+
+  .mp-scrub svg {
+    display: none;
   }
 
   .mp-lbl {
