@@ -75,6 +75,7 @@ const WHOLE_STORE_PATHS: readonly string[] = [
   '/api/index/rebuild',
   '/api/index/save',
   '/api/sync/trigger',
+  '/api/map/rebuild',
 ];
 
 /** Paths that embed text or run a vector search on every call. */

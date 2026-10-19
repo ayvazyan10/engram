@@ -58,7 +58,7 @@ Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback
 |---|---|---|
 | `global` | 1000 / 60s | Every `/api/*` request |
 | `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, and `GET /api/recall/stream`. `GET /api/memory` is a plain list and stays global-only |
-| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger` |
+| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild` |
 
 Window and limits are configurable — see [CONFIGURATION.md](CONFIGURATION.md#security). Set a tier's limit to `0` to disable it, or `ENGRAM_RATE_LIMIT_DISABLED=true` to turn the limiter off entirely.
 
@@ -74,7 +74,7 @@ Sent with `Retry-After` (seconds), `X-RateLimit-Limit`, `X-RateLimit-Remaining: 
 
 ### Single-flight whole-store operations
 
-The seven whole-store routes above hold a process-wide guard: starting one while the same operation is running returns `409` rather than interleaving two passes over the store.
+The whole-store routes above hold a process-wide guard: starting one while the same operation is running returns `409` rather than interleaving two passes over the store.
 
 ```json
 {
@@ -1354,6 +1354,72 @@ Get details for a specific plugin.
 Unregister a plugin.
 
 **Response `204`** — no body.
+
+---
+
+## Atlas Map
+
+### `GET /api/map`
+
+Returns a cached 2D map of live memories visible to this brain. Coordinates lie in `[-1, 1]`. PCA-2 is refined with a deterministic force layout over existing `relates_to` links with strength ≥ 0.5; `fallback` indicates insufficient usable embeddings.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `namespace` | string | Exact project namespace, intersected with the brain's configured scope |
+| `global` | `true` | Select only memories with a null namespace, as on `GET /api/memory` |
+
+Unknown query parameters and invalid values return `400`. Combining `namespace` and `global=true` intersects both filters and returns an empty map.
+
+**Response `200`**
+```json
+{
+  "fingerprint": "m:1:…",
+  "generatedAt": "2026-10-19T12:00:00.000Z",
+  "computeMs": 12.4,
+  "method": "fallback",
+  "explainedVariance": [0, 0],
+  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "nodes": [{
+    "id": "memory-id", "x": 0.2, "y": -0.3,
+    "type": "semantic", "importance": 0.7, "retention": 0.42,
+    "protected": false, "createdAt": "2026-10-18T12:00:00.000Z",
+    "lastAccessedAt": null, "namespace": null, "source": "rest-api",
+    "isReflection": false, "regionId": "memory-id",
+    "degree": 0, "contradictCount": 0, "label": "Database connections"
+  }],
+  "regions": [{
+    "id": "memory-id", "name": "database · connections",
+    "autoName": "database · connections", "count": 1,
+    "x": 0.2, "y": -0.3, "reflectionShare": 0,
+    "contradictions": 0, "newThisWeek": 1, "topTags": ["database"]
+  }]
+}
+```
+
+`method` is `pca2+knn` or `fallback`; `explainedVariance` contains the two PCA variance fractions. `embeddingModel`, `source`, `namespace` and `lastAccessedAt` can be null. Labels are at most 80 characters. Retention and protection use core's active decay policy and are refreshed on each response. `degree` counts incident live connections; `contradictCount` counts incident contradiction edges.
+
+Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. The ID is the member nearest the region centroid (the squared-distance medoid). Names use the top two TF-IDF terms from tags and concepts within the visible scope, ignoring `reflection*` and `mc:*` tags. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
+
+The layout is cached per project scope. New memories below the recompute threshold are placed at their similarity-weighted neighbour centroid without moving existing points. Unlinked inserts use deterministic fallback positions. A full layout runs when the count changes by at least 10% relative to its last full run, or on rebuild; recomputes use previous positions and Procrustes alignment. `generatedAt` and `computeMs` describe the last layout update, not the current request.
+
+**Response `503`** — first computation in progress, or the map computation slot is busy for another scope. Retry after the indicated delay.
+```json
+{ "error": "map not ready", "retryAfterMs": 250 }
+```
+
+An empty store returns `nodes: []`, `regions: []`, `method: "fallback"`, and zero explained variance after the first computation.
+
+---
+
+### `POST /api/map/rebuild`
+
+Force and await a full map recomputation. Accepts the same optional `namespace` / `global=true` query as `GET /api/map`; the body may be omitted or `{}`. Unknown body fields return `400`.
+
+**Response `204`** — rebuilt successfully, no body.
+
+Uses the `whole-store` rate tier and `runExclusive('map')`. Concurrent map computation returns `409`; normal authentication and `429` rate limits apply.
 
 ---
 

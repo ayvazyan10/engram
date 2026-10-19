@@ -119,11 +119,13 @@ function absoluteDelta(a: Float64Array, b: Float64Array): number {
 function leadingEigenvector(
   rows: readonly Float64Array[],
   basis: readonly Float64Array[],
-  k: number
+  k: number,
+  iterations = MAX_ITERATIONS,
+  tolerance = TOLERANCE
 ): { vector: Float64Array; value: number } {
   let w = seedVector((rows[0] as Float64Array).length, k);
   let value = 0;
-  for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+  for (let iteration = 0; iteration < iterations; iteration++) {
     const next = covMultiply(rows, w);
     deflate(next, basis);
     const norm = magnitude(next);
@@ -132,7 +134,7 @@ function leadingEigenvector(
     scaleInPlace(next, 1 / norm);
     const delta = absoluteDelta(next, w);
     w = next;
-    if (delta < TOLERANCE) break;
+    if (delta < tolerance) break;
   }
   canonicalizeSign(w);
   return { vector: w, value };
@@ -231,4 +233,26 @@ export function fitToBox(coords: readonly Vec3[], halfExtent: number): Vec3[] {
   const scale = halfExtent / pivot;
   const clamp = (v: number): number => Math.max(-halfExtent, Math.min(halfExtent, v * scale));
   return coords.map(([x, y, z]): Vec3 => [clamp(x), clamp(y), clamp(z)]);
+}
+
+export type Vec2 = readonly [number, number];
+
+/** Two components for Atlas. A bounded deterministic fit keeps 5k×384 inputs
+ * within the interactive CPU budget; projection still includes every row. */
+export function pca2(vectors: readonly Float32Array[]): {
+  coords: Vec2[]; explained: Vec2;
+} | null {
+  if (vectors.length < 3) return null;
+  const dim = vectors[0]!.length;
+  if (!dim || vectors.some((v) => v.length !== dim)) return null;
+  const rows = centeredRows(vectors, dim);
+  const fit = subsample(rows, 512);
+  const variance = fit.reduce((sum, row) => sum + dot(row, row), 0) / fit.length;
+  if (!(variance > 0)) return null;
+  const first = leadingEigenvector(fit, [], 0, 48, 1e-5);
+  const second = leadingEigenvector(fit, [first.vector], 1, 48, 1e-5);
+  return {
+    coords: rows.map((row) => [dot(row, first.vector), dot(row, second.vector)]),
+    explained: [first.value / variance, second.value / variance],
+  };
 }

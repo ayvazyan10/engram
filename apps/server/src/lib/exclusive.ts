@@ -16,6 +16,7 @@
 
 /** Operations that must never overlap with themselves. */
 export type ExclusiveOperation =
+  | 'map'
   | 'consolidate'
   | 'embeddings-backfill'
   | 'index-rebuild'
