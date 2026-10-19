@@ -170,10 +170,10 @@ export const api = {
       body: JSON.stringify({ query, maxTokens }),
     }),
 
-  search: (query: string, topK = 10, types?: string[]) =>
+  search: (query: string, topK = 10, types?: string[], namespace?: string | null) =>
     request<{ count: number; results: unknown[] }>('/search', {
       method: 'POST',
-      body: JSON.stringify({ query, topK, types }),
+      body: JSON.stringify({ query, topK, types, namespace: namespace ?? undefined, global: namespace === null ? true : undefined }),
     }),
 
   // depth is explicit: the server defaults to 2, and the 3D view only draws

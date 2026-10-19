@@ -88,3 +88,15 @@ describe('memoryStore addRecord under a project filter', () => {
     expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['b', 'a']);
   });
 });
+
+describe('memoryStore search results', () => {
+  it('keeps the server response as given under a project filter', () => {
+    useMemoryStore.getState().setProjectFilter('/code/api');
+    const results = [makeRecord({ id: 'server-hit' })];
+    useMemoryStore.getState().setSearchResults(results);
+    expect(useMemoryStore.getState().searchResults).toEqual(results);
+    useMemoryStore.getState().setProjectFilter(null);
+    // SearchBar requests the replacement; the store does not narrow old hits.
+    expect(useMemoryStore.getState().searchResults).toEqual(results);
+  });
+});

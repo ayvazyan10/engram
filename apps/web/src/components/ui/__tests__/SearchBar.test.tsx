@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import SearchBar from '../SearchBar.js';
 import { useMemoryStore } from '../../../store/memoryStore.js';
 import { api, ApiError } from '../../../lib/api.js';
@@ -44,6 +44,7 @@ function resetStore() {
     currentContext: '',
     recallLatencyMs: null,
     highlightedIds: new Set(),
+    projectFilter: undefined,
   });
 }
 
@@ -137,6 +138,59 @@ describe('SearchBar race conditions and error handling (W4)', () => {
     // The query never committed — no stale "semantic recall active" label
     // pointing at a query whose results never arrived.
     expect(useMemoryStore.getState().searchQuery).toBe('');
+  });
+});
+
+describe('SearchBar project filtering', () => {
+  beforeEach(() => {
+    resetStore();
+    vi.mocked(api.search).mockReset();
+    vi.mocked(api.recall).mockReset().mockResolvedValue({ context: '', memories: [], latencyMs: 1 });
+  });
+
+  it.each(['/code/api', null, undefined])('passes the picked project %j on the first search', async (filter) => {
+    useMemoryStore.getState().setProjectFilter(filter);
+    vi.mocked(api.search).mockResolvedValueOnce({ count: 0, results: [] });
+    render(<SearchBar />);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'deploy' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(useMemoryStore.getState().searchQuery).toBe('deploy'));
+    expect(api.search).toHaveBeenCalledWith('deploy', 20, undefined, filter);
+  });
+
+  it('does not search when the project changes without an active query', () => {
+    render(<SearchBar />);
+    act(() => useMemoryStore.getState().setProjectFilter('/code/api'));
+    expect(api.search).not.toHaveBeenCalled();
+  });
+
+  it('restarts an in-flight query for the new project and ignores its old response', async () => {
+    const first = deferred<{ count: number; results: unknown[] }>();
+    vi.mocked(api.search).mockReturnValueOnce(first.promise).mockResolvedValueOnce({ count: 1, results: [{ id: 'new' }] });
+    render(<SearchBar />);
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'deploy' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    // An unsubmitted edit must not become the refreshed query.
+    fireEvent.change(input, { target: { value: 'draft' } });
+    act(() => useMemoryStore.getState().setProjectFilter('/code/api'));
+    await waitFor(() => expect(useMemoryStore.getState().searchResults).toEqual([{ id: 'new' }]));
+    expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, '/code/api');
+    await act(async () => first.resolve({ count: 1, results: [{ id: 'old' }] }));
+    expect(useMemoryStore.getState().searchResults).toEqual([{ id: 'new' }]);
+    expect(useMemoryStore.getState().searchQuery).toBe('deploy');
+  });
+
+  it('does not restore a cleared search when its project refresh finishes', async () => {
+    useMemoryStore.setState({ searchQuery: 'deploy' });
+    const pending = deferred<{ count: number; results: unknown[] }>();
+    vi.mocked(api.search).mockReturnValueOnce(pending.promise);
+    render(<SearchBar />);
+    act(() => useMemoryStore.getState().setProjectFilter(null));
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+    await act(async () => pending.resolve({ count: 1, results: [{ id: 'stale' }] }));
+    expect(useMemoryStore.getState()).toMatchObject({ searchQuery: '', searchResults: [], isSearching: false });
   });
 });
 

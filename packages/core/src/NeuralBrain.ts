@@ -262,6 +262,10 @@ export interface SearchOptions extends Pick<RecallOptions, 'since' | 'until' | '
   threshold?: number;
   types?: MemoryType[];
   sources?: string[];
+  /** Narrow results to this exact namespace without changing access scope. */
+  namespace?: string;
+  /** Narrow results to memories whose namespace is NULL. */
+  global?: true;
   /** If true, search across all namespaces (only meaningful when brain has a namespace configured) */
   crossNamespace?: boolean;
 }
@@ -1248,7 +1252,8 @@ export class NeuralBrain {
     const queryVec = await embed(query);
     const crossNamespace = this.resolveCrossNamespace(options.crossNamespace);
     const topK = options.topK ?? 10;
-    const candidateLimit = hasRecallFilters(options) ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const filtered = hasRecallFilters(options) || options.namespace !== undefined || options.global === true;
+    const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
     const results = this.config.hybridSearch
       ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, options.threshold ?? 0.3,
         options.types, this.activeNamespace, crossNamespace, this.namespaceMode === 'filter')
@@ -1273,6 +1278,8 @@ export class NeuralBrain {
       const m = byId.get(result.id);
       if (!m || !matchesMemoryFilters(m, options)) continue;
       if (options.sources && m.source && !options.sources.includes(m.source)) continue;
+      if (options.namespace !== undefined && m.namespace !== options.namespace) continue;
+      if (options.global === true && m.namespace !== null) continue;
       // Namespace filtering (defense in depth — vector search already filters)
       if (this.activeNamespace && !crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
       // Preserve cosine similarity as the public score even when RRF orders candidates.

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { api, ApiError } from '../../lib/api.js';
 import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
@@ -16,30 +16,25 @@ export default function SearchBar({ large = false, placeholder = 'Ask your memor
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // W4: bumped once per search kicked off, and captured per-call so a
-  // response can tell whether a newer search has since superseded it. Two
-  // requests in flight at once shouldn't be reachable now that `loading`
-  // gates the start of a new one below (Enter used to bypass that gate —
-  // only the button had `disabled={loading}` — which is what let it happen
-  // in the first place), but this makes "the newest request always wins"
-  // true regardless of *how* a second one got started, rather than relying
-  // solely on that gate never being bypassed again.
+  // A project change can supersede an in-flight search; only the newest
+  // request may commit its results or clear the loading state.
   const latestRequestId = useRef(0);
-  const { setSearchResults, setSearching, setContext, setSearchQuery, setHighlightedIds, searchQuery } = useMemoryStore();
+  const pendingQuery = useRef<string | null>(null);
+  const { setSearchResults, setSearching, setContext, setSearchQuery, setHighlightedIds, searchQuery, projectFilter } = useMemoryStore();
+  const previousProject = useRef(projectFilter);
   const t = useTemplateStore((s) => s.activeTemplate);
 
   const hasQuery = searchQuery.length > 0;
 
-  const handleSearch = useCallback(async () => {
-    const query = input.trim();
-    if (!query || loading) return;
+  const runSearch = useCallback(async (query: string) => {
     const requestId = ++latestRequestId.current;
+    pendingQuery.current = query;
     setLoading(true);
     setSearching(true);
     setError(null);
     try {
       const [searchRes, recallRes] = await Promise.all([
-        api.search(query, 20),
+        api.search(query, 20, undefined, useMemoryStore.getState().projectFilter),
         api.recall(query, RECALL_MAX_TOKENS),
       ]);
       if (requestId !== latestRequestId.current) return; // superseded — drop it
@@ -65,13 +60,33 @@ export default function SearchBar({ large = false, placeholder = 'Ask your memor
       );
     } finally {
       if (requestId === latestRequestId.current) {
+        pendingQuery.current = null;
         setLoading(false);
         setSearching(false);
       }
     }
-  }, [input, loading, setSearchResults, setSearching, setContext, setSearchQuery, setHighlightedIds]);
+  }, [setSearchResults, setSearching, setContext, setSearchQuery, setHighlightedIds]);
+
+  const handleSearch = useCallback(() => {
+    const query = input.trim();
+    if (query && !loading) void runSearch(query);
+  }, [input, loading, runSearch]);
+
+  useEffect(() => {
+    if (previousProject.current === projectFilter) return;
+    previousProject.current = projectFilter;
+    const query = pendingQuery.current ?? searchQuery;
+    if (!query) return;
+    setSearchResults([]);
+    setHighlightedIds(new Set());
+    void runSearch(query);
+  }, [projectFilter, searchQuery, runSearch, setSearchResults, setHighlightedIds]);
 
   const handleClear = useCallback(() => {
+    ++latestRequestId.current;
+    pendingQuery.current = null;
+    setLoading(false);
+    setSearching(false);
     setInput('');
     setError(null);
     setSearchQuery('');
@@ -81,7 +96,7 @@ export default function SearchBar({ large = false, placeholder = 'Ask your memor
     setContext('', null);
     setHighlightedIds(new Set());
     inputRef.current?.focus();
-  }, [setSearchQuery, setSearchResults, setContext, setHighlightedIds]);
+  }, [setSearchQuery, setSearchResults, setContext, setHighlightedIds, setSearching]);
 
   // Right pattern for a custom (non-:focus-visible) focus treatment: outline
   // is compensated for by a computed border + box-shadow, never just removed

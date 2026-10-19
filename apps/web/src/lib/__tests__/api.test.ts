@@ -205,6 +205,19 @@ describe('lib/api endpoint coverage', () => {
     expect(JSON.parse(init?.body as string)).toEqual({ query: 'hello', topK: 5, types: ['semantic'] });
   });
 
+  it.each([
+    ['/code/api', { namespace: '/code/api' }],
+    [null, { global: true }],
+    [undefined, {}],
+  ] as const)('search() sends the project filter %j in the body', async (filter, fields) => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { count: 0, results: [] }));
+    await api.search('hello', 20, undefined, filter);
+    const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(url).toBe('/api/search');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init?.body as string)).toEqual({ query: 'hello', topK: 20, ...fields });
+  });
+
   it('getGraph() defaults depth to 1', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { node: null, connections: [], neighbors: [] }));
     await api.getGraph('mem-1');

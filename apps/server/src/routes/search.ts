@@ -37,6 +37,8 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       until?: string;
       tags?: string[];
       crossNamespace?: boolean;
+      namespace?: string;
+      global?: true;
     };
   }>('/search', {
     schema: {
@@ -59,10 +61,22 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
           sources: { type: 'array', items: { type: 'string' } },
           ...filterProperties,
           crossNamespace: { type: 'boolean', default: false },
+          namespace: { type: 'string' },
+          global: { type: 'boolean', const: true },
         },
       },
     },
-    preValidation: validateFilterBody,
+    preValidation: [validateFilterBody, async (req, reply) => {
+      const body = req.body;
+      if (!body || typeof body !== 'object') return;
+      if ((body.namespace !== undefined && typeof body.namespace !== 'string')
+        || (body.global !== undefined && body.global !== true)) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'namespace must be a string and global must be true.' });
+      }
+      if (body.namespace !== undefined && body.global === true) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'namespace and global cannot be used together.' });
+      }
+    }],
     handler: async (req, reply) => {
       if (brain.getNamespaceMode() === 'isolated' && req.body.crossNamespace) {
         return reply.code(400).send({ error: 'cross-namespace access is not allowed in isolated mode' });
@@ -77,6 +91,8 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         until: req.body.until,
         tags: req.body.tags,
         crossNamespace: req.body.crossNamespace,
+        namespace: req.body.namespace,
+        global: req.body.global,
       });
       return {
         count: memories.length,

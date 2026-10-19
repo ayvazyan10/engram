@@ -54,14 +54,8 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
     );
   }
 
-  // Search follows the picked project too. /api/search takes no project
-  // filter, so its answer is narrowed here, the way addRecord narrows
-  // arrivals; a pick made while results are up applies to them at once.
-  const list = searchQuery
-    ? projectFilter === undefined
-      ? searchResults
-      : searchResults.filter((r) => (r.namespace ?? null) === projectFilter)
-    : records;
+  // /api/search applies the picked project before returning its top results.
+  const list = searchQuery ? searchResults : records;
   // A filtered list counts against its own bucket, not the whole store.
   const buckets = stats?.byNamespace ?? [];
   const known = buckets.map((b) => b.namespace);

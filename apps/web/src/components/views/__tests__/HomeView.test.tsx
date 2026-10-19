@@ -11,6 +11,8 @@ vi.mock('../../../lib/api.js', () => ({
     stats: vi.fn().mockResolvedValue({ total: 2, byType: {}, bySource: {} }),
     getGraph: vi.fn().mockResolvedValue({ node: null, connections: [], neighbors: [] }),
     getContradictions: vi.fn().mockResolvedValue([]),
+    search: vi.fn().mockResolvedValue({ count: 0, results: [] }),
+    recall: vi.fn().mockResolvedValue({ context: '', memories: [], latencyMs: 1 }),
   },
 }));
 
@@ -267,7 +269,7 @@ describe('HomeView: projects', () => {
     expect(within(card).queryByText('api')).not.toBeInTheDocument();
   });
 
-  it('scopes search results to the picked project, and keeps the picker up while they show', async () => {
+  it('requests new search results for the picked project and keeps the picker up', async () => {
     vi.mocked(api.stats).mockResolvedValue(MIXED);
     useMemoryStore.setState({
       searchQuery: 'deploy',
@@ -280,17 +282,28 @@ describe('HomeView: projects', () => {
     renderHome();
     expect(screen.getByText('3 found')).toBeInTheDocument();
 
+    // This result was not in the original topK: it must come from the server.
+    vi.mocked(api.search).mockResolvedValueOnce({ count: 1, results: [record({ id: 'new-api', content: 'New API hit.', namespace: API })] });
     fireEvent.click(await screen.findByRole('button', { name: 'Project: All projects' }));
     fireEvent.click(screen.getByRole('button', { name: /^api\b/ }));
+    expect(await screen.findByText('New API hit.')).toBeInTheDocument();
+    expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, API);
     expect(screen.getByText('1 found')).toBeInTheDocument();
-    expect(screen.getByText('Deploy api with pnpm.')).toBeInTheDocument();
     expect(screen.queryByText('Deploy web from main.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Project: api' })).toBeInTheDocument();
 
+    vi.mocked(api.search).mockResolvedValueOnce({ count: 1, results: [record({ id: 'new-global', content: 'New global hit.', namespace: null })] });
     fireEvent.click(screen.getByRole('button', { name: 'Project: api' }));
     fireEvent.click(screen.getByRole('button', { name: /^Global/ }));
-    expect(screen.getByText('Deploy only on weekdays.')).toBeInTheDocument();
-    expect(screen.queryByText('Deploy api with pnpm.')).not.toBeInTheDocument();
+    expect(await screen.findByText('New global hit.')).toBeInTheDocument();
+    expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, null);
+    expect(screen.queryByText('New API hit.')).not.toBeInTheDocument();
+
+    vi.mocked(api.search).mockResolvedValueOnce({ count: 1, results: [record({ id: 'all', content: 'All projects hit.', namespace: WEB })] });
+    fireEvent.click(screen.getByRole('button', { name: 'Project: Global' }));
+    fireEvent.click(screen.getByRole('button', { name: /^All projects/ }));
+    expect(await screen.findByText('All projects hit.')).toBeInTheDocument();
+    expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, undefined);
   });
 
   it('says which project a search found nothing in', async () => {
@@ -298,10 +311,20 @@ describe('HomeView: projects', () => {
     useMemoryStore.setState({
       projectFilter: WEB,
       searchQuery: 'deploy',
-      searchResults: [record({ id: 'r-api', content: 'Deploy api with pnpm.', namespace: API })],
+      searchResults: [],
     });
     renderHome();
     expect(await screen.findByText(/Nothing matched in web\. Try other words, or pick All projects\./)).toBeInTheDocument();
+  });
+
+  it('renders the server search results without another project filter', () => {
+    useMemoryStore.setState({
+      projectFilter: API,
+      searchQuery: 'deploy',
+      searchResults: [record({ id: 'server-hit', content: 'Server search result.' })],
+    });
+    renderHome();
+    expect(screen.getByText('Server search result.')).toBeInTheDocument();
   });
 
   it('adds nothing when the store holds global memories only', async () => {

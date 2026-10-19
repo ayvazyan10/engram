@@ -51,7 +51,7 @@ interface MemoryState {
    * through the list does not refetch them and the cold load fetches once.
    */
   storeChanges: number;
-  /** Drives the list's query (AppLayout reloads when it changes). */
+  /** AppLayout reloads the list and SearchBar refreshes active search when this changes. */
   projectFilter: ProjectFilter;
 
   setProjectFilter: (filter: ProjectFilter) => void;

@@ -113,3 +113,40 @@ describe.each(['recall', 'stream'])('%s graph filters', (mode) => {
       .toEqual(['neighbor-keep', 'seed']);
   });
 });
+
+describe('search project filters', () => {
+  it.each([{ namespace: '/code/api' }, { global: true as const }])('fills topK past leading nonmatches for %j', async (filter) => {
+    insert('other-1', 1, { namespace: '/code/web' });
+    insert('other-2', 0.99, { namespace: '/code/web' });
+    for (let i = 0; i < 3; i++) {
+      insert(`match-${i}`, 0.98 - i / 100, { namespace: 'namespace' in filter ? filter.namespace : null });
+    }
+    expect((await brain.search('query', { topK: 2 })).map((m) => m.id)).toEqual(['other-1', 'other-2']);
+    expect((await brain.search('query', { topK: 2, ...filter })).map((m) => m.id)).toEqual(['match-0', 'match-1']);
+  });
+
+  it('combines project filters with existing filters', async () => {
+    insert('wrong-tag', 1, { namespace: '/code/api', eventAt: SINCE });
+    insert('wrong-project', 0.99, { namespace: '/code/web', eventAt: SINCE, tags: '["keep"]' });
+    insert('match', 0.98, { namespace: '/code/api', eventAt: SINCE, tags: '["keep"]' });
+    expect((await brain.search('query', { namespace: '/code/api', since: SINCE, until: UNTIL, tags: ['keep'] })).map((m) => m.id)).toEqual(['match']);
+  });
+
+  it.each(['filter', 'isolated'] as const)('only narrows configured %s scope', async (namespaceMode) => {
+    insert('own', 1, { namespace: '/code/api' });
+    insert('foreign', 0.99, { namespace: '/code/web' });
+    insert('global', 0.98);
+    brain.shutdown();
+    brain = new NeuralBrain({ dbPath: join(directory, 'test.db'), namespaceMode, namespace: '/code/api' });
+    await brain.initialize();
+
+    expect((await brain.search('query', { namespace: '/code/api' })).map((m) => m.id)).toEqual(['own']);
+    expect(await brain.search('query', { namespace: '/code/web' })).toEqual([]);
+    expect((await brain.search('query', { global: true })).map((m) => m.id)).toEqual(namespaceMode === 'filter' ? ['global'] : []);
+    if (namespaceMode === 'filter') {
+      expect((await brain.search('query', { namespace: '/code/web', crossNamespace: true })).map((m) => m.id)).toEqual(['foreign']);
+    } else {
+      await expect(brain.search('query', { namespace: '/code/web', crossNamespace: true })).rejects.toThrow(/cross-namespace/);
+    }
+  });
+});

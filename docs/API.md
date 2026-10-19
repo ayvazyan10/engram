@@ -572,6 +572,10 @@ Semantic vector search across all memories. Returns memories ranked by cosine si
 | `threshold` | number 0–1 | — | Minimum similarity score, default 0.3 |
 | `types` | string[] | — | Filter to specific memory types |
 | `sources` | string[] | — | Filter to specific sources |
+| `namespace` | string | — | Narrow results to one exact project path |
+| `global` | true | — | Narrow results to memories with namespace NULL |
+
+Omit both project fields for all results allowed by the brain's current scope. Sending both `namespace` and `global` returns `400`. These filters only narrow results; configured namespace isolation and `crossNamespace` behavior are unchanged.
 
 **Request**
 ```json
