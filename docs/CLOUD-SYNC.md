@@ -142,7 +142,7 @@ See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported
 
 The passphrase is passed **byte-for-byte and never trimmed** — trimming would derive a different key and orphan every row already encrypted.
 
-The MCP server validates `ENGRAM_SYNC_MODE` and `ENGRAM_SYNC_INTERVAL` and refuses to start on a bad value. The REST API server does not: an unrecognised mode silently disables the scheduler, and a non-numeric interval produces `NaN`, which degenerates into a sync attempt roughly every millisecond.
+Both the MCP server and the REST API server validate `ENGRAM_SYNC_MODE` and `ENGRAM_SYNC_INTERVAL` and refuse to start on a bad value — an unrecognised mode, or an interval that is not a number of at least 1, is a startup error rather than a silent fallback.
 
 ---
 
@@ -202,7 +202,7 @@ ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase" engram start
 
 - **pgvector search disabled.** Encrypted embeddings are random bytes from Postgres's point of view, so semantic search can never run server-side against them. This is by design, not a missing feature — Engram doesn't rely on server-side vector search anyway; semantic search always runs locally against SQLite + the local vector index, plaintext, on every device.
 - **No passphrase recovery.** The passphrase is never stored anywhere, only verified via the sentinel. If it's lost, encrypted rows in Postgres are permanently unreadable — there is no reset or recovery path. Local SQLite data is unaffected either way, since sync only ever encrypts the copy that leaves the device.
-- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is — the encrypted-value check looks for the `enc:v1:` / `enc:v2:` prefix and leaves unprefixed values alone. On pull, a row that fails to decrypt (wrong passphrase, corrupted ciphertext, or data encrypted under a different key) is skipped with a warning rather than aborting the whole sync — it stays on the server and simply isn't applied locally until it can be decrypted.
+- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is — the encrypted-value check looks for the `enc:v1:` / `enc:v2:` prefix and leaves unprefixed values alone. On pull, a row that fails to decrypt (wrong passphrase, corrupted ciphertext, or data encrypted under a different key) is dropped from the page with a warning, but the pull cursor is pinned before it: the same page is re-pulled every cycle, and later rows in that table do not arrive until the row is fixed or removed.
 - **Metadata is not authenticated.** Timestamps, `archived_at`, `device_id` and `namespace` stay outside the binding for the reason given above, so a Postgres operator can still reorder or re-attribute rows even though they cannot read or move content. Closing that needs a per-row MAC column, which does not exist yet.
 
 ---
@@ -249,7 +249,7 @@ curl http://localhost:4901/api/sync/status
 
 Copying a database to another machine — a backup restore, a disk clone, a plain `cp` — used to duplicate the device id onto both installations. The pull filter is "not written by me", so with a shared id every row from the twin looks like an echo of this device's own push and is skipped, **in both directions**: the two installations sit there exchanging nothing while `engram cloud status` reports no error, because nothing failed.
 
-Each installation now also records a fingerprint of the database file its id was minted for — hostname, resolved path, and the file's device and inode numbers. A fingerprint that no longer matches means this file is not the one the id belongs to, and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction so nothing pending is stranded. `mv` within one filesystem preserves all four components, so an ordinary relocation is not mistaken for a copy.
+Each installation now also records a fingerprint of the database file its id was minted for — hostname, resolved path, and the file's device and inode numbers. A fingerprint that no longer matches means this file is not the one the id belongs to, and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction so nothing pending is stranded. Because the resolved path is part of the fingerprint, `mv` to a new path re-mints the id too — even within one filesystem, where device and inode are preserved.
 
 A spurious re-mint costs one new UUID and a log line; a missed collision is silent data divergence, which is why the check errs toward re-minting. `resetDeviceId()` in `@engram-ai-memory/core` triggers the same recovery explicitly.
 
