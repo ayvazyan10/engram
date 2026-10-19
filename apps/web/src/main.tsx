@@ -1,13 +1,19 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/fonts.css';
+// Before tokens.css: the plates (removed in F3) declare their own --ink and
+// --rule on :root, and the Atlas values must win everywhere else.
+import './styles/plate.css';
 import './styles/tokens.css';
 import './styles/global.css';
-import './styles/plate.css';
+import { initTheme } from './shell/theme.js';
 import App from './App.js';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Root element not found');
+
+// Before the first render: the old views read the bridged template on mount.
+initTheme();
 
 createRoot(root).render(
   <StrictMode>

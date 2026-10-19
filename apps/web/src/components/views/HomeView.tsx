@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useRouteStore } from '../../shell/routeStore.js';
 import { useMemoryStore } from '../../store/memoryStore.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useTemplateStore } from '../../store/templateStore.js';
@@ -8,7 +9,6 @@ import { COMPACT_QUERY, useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { GLYPH, RADIUS, SPACE, STATUS, TYPE, WEIGHT, withAlpha } from '../../lib/tokens.js';
 import SearchBar from '../ui/SearchBar.js';
 import MemoryCard from '../ui/MemoryCard.js';
-import ProjectPicker from '../ui/ProjectPicker.js';
 import NeuronInspector from '../ui/NeuronInspector.js';
 import Onboarding from './Onboarding.js';
 import WhatAiKnows from './WhatAiKnows.js';
@@ -36,9 +36,10 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
   const stats = useServerStats();
   const isCompact = useMediaQuery(COMPACT_QUERY);
   const [onboarding, setOnboarding] = useState(false);
-  /** Two lenses on the one search box: the memories it matches, or the
-   *  context block an AI would be handed for the same words. */
-  const [lens, setLens] = useState<'memories' | 'ai'>('memories');
+  /** Two lenses on the one search box: the memories it matches (Map), or the
+   *  context block an AI would be handed for the same words (Recall). */
+  const lens = useRouteStore((s) => s.route.name) === 'recall' ? 'ai' : 'memories';
+  const navigate = useRouteStore((s) => s.navigate);
 
   // An empty filtered list is not an empty store: no onboarding for it.
   const empty = !loading && !error && records.length === 0 && !searchQuery && projectFilter === undefined;
@@ -95,16 +96,13 @@ export default function HomeView({ loading, error, onRetry, onLoadMore, loadingM
                 role="tab"
                 aria-selected={lens === l.id}
                 className="ec-hover-tint"
-                onClick={() => setLens(l.id)}
+                onClick={() => navigate(l.id === 'ai' ? '/recall' : '/')}
                 style={{ ...segmentBase, ...segmentState(t, lens === l.id) }}
               >
                 {l.label}
               </button>
             ))}
           </div>
-          {/* The picker scopes the recent list and the search results alike,
-              so it stays up while a search is. */}
-          {lens === 'memories' && <ProjectPicker />}
           </div>
 
           {lens === 'ai' ? (

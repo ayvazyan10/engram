@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import StatusBar from '../StatusBar.js';
 import StoreMemoryModal from '../StoreMemoryModal.js';
 import UnlockGate from '../UnlockGate.js';
 import { useTemplateStore, TEMPLATES } from '../../../store/templateStore.js';
@@ -20,25 +19,10 @@ const rgb = (hex: string) => {
 // in them was a Neural-only hex literal; UnlockGate needed the same check.
 // These assert the *rendered* style actually tracks the active template,
 // not just that the import exists.
-describe('theming (V5) — StatusBar / StoreMemoryModal / UnlockGate read the active template', () => {
+describe('theming (V5) — StoreMemoryModal / UnlockGate read the active template', () => {
   afterEach(() => {
     cleanup();
     useTemplateStore.setState({ activeTemplate: neural! });
-  });
-
-  it('StatusBar brand mark colour changes with the template (was a hardcoded #1e3050)', () => {
-    useTemplateStore.setState({ activeTemplate: neural! });
-    const { unmount } = render(<StatusBar />);
-    const neuralColor = screen.getByText('Engram').style.color;
-    unmount();
-
-    useTemplateStore.setState({ activeTemplate: midnight! });
-    render(<StatusBar />);
-    const midnightColor = screen.getByText('Engram').style.color;
-
-    expect(neuralColor).not.toBe('');
-    expect(midnightColor).not.toBe('');
-    expect(midnightColor).not.toBe(neuralColor);
   });
 
   // The fill is the template's solid `accentStrong` — the shade the store

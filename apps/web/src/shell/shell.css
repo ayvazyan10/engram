@@ -1,0 +1,913 @@
+/**
+ * The Atlas shell: rail, bottom nav, the scope and command bar, the palette,
+ * popovers and toasts. Every value comes from tokens.css; the component specs
+ * are the Atlas direction's (design/build/dir-a.html).
+ */
+
+.at-shell {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.at-shell :focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.at-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.at-shell kbd {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-stretch: 87%;
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 5px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--ink-2);
+  background: var(--surface);
+  line-height: 1;
+}
+
+/* ─── Rail (desktop) ─────────────────────────────────────────────────────── */
+
+.at-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  padding: 14px 0 12px;
+  background: var(--surface);
+  border-right: 1px solid var(--rule);
+  z-index: 5;
+  min-height: 0;
+}
+
+.at-logo {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: var(--r-control);
+  color: var(--ink);
+}
+
+.at-rail-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  flex: 1;
+}
+
+.at-nav {
+  position: relative;
+  box-sizing: border-box;
+  width: 60px;
+  padding: 8px 0 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 560;
+  font-stretch: 87%;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear, color var(--dur-hover) linear;
+}
+
+.at-nav svg {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.at-nav[aria-current="page"] {
+  background: var(--wash);
+  color: var(--ink);
+}
+
+@media (hover: hover) {
+  .at-nav:hover {
+    background: var(--wash);
+    color: var(--ink);
+  }
+}
+
+.at-nav[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.at-badge {
+  position: absolute;
+  top: 3px;
+  right: 9px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--fault);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-stretch: 75%;
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.at-live {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-stretch: 87%;
+  color: var(--ink-3);
+}
+
+.at-live i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink-3);
+}
+
+.at-live[data-on="true"] i {
+  background: var(--pro);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pro) 22%, transparent);
+}
+
+/* ─── Stage: the bar over the routed screen ──────────────────────────────── */
+
+.at-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.at-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 60px;
+  padding: 0 var(--s-6);
+  min-width: 0;
+}
+
+.at-where {
+  display: none;
+  font-size: 17px;
+  font-weight: 560;
+  font-style: italic;
+  font-stretch: 125%;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+
+.at-main {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.at-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.at-wait {
+  padding: var(--s-6);
+  color: var(--ink-3);
+}
+
+.at-cmd {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 34px;
+  padding: 0 var(--s-2);
+  border: 0;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color var(--dur-hover) linear, color var(--dur-hover) linear;
+}
+
+.at-cmd:hover {
+  background: var(--wash);
+  color: var(--ink);
+}
+
+.at-cmd-keys {
+  display: inline-flex;
+  gap: 3px;
+}
+
+/* ─── Scope switch and popovers ──────────────────────────────────────────── */
+
+.at-scope-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.at-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(280px, 100%);
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-control);
+  background: var(--raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--dur-hover) linear;
+}
+
+.at-scope svg {
+  flex: none;
+  color: var(--ink-2);
+}
+
+button.at-scope:hover,
+.at-scope[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--ink) 4%, var(--raised));
+}
+
+.at-scope-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.at-scope-fixed {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-width: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.at-scope-fixed .at-scope {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.at-pop {
+  position: absolute;
+  z-index: 20;
+  list-style: none;
+  min-width: 250px;
+  padding: 6px;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  animation: at-pop-in var(--dur-in) var(--ease-out);
+}
+
+.at-scope-pop {
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(320px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  transform-origin: top left;
+}
+
+.at-opt {
+  box-sizing: border-box;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-4);
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.at-opt:hover,
+.at-opt:focus-visible,
+.at-opt[aria-selected="true"],
+.at-opt[aria-current="page"] {
+  background: var(--wash);
+}
+
+.at-opt[aria-selected="true"],
+.at-opt[aria-current="page"] {
+  font-weight: 640;
+}
+
+.at-opt:focus-visible {
+  outline-offset: -2px;
+}
+
+.at-opt-main {
+  min-width: 0;
+}
+
+.at-opt em {
+  display: block;
+  margin-top: 1px;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+
+.at-opt small {
+  flex: none;
+  font-size: 13px;
+  font-weight: 400;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
+@keyframes at-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* ─── Tabs (Insights) ────────────────────────────────────────────────────── */
+
+.at-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--wash);
+}
+
+.at-tabs a {
+  padding: 5px 14px;
+  border-radius: 5px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color var(--dur-hover) linear;
+}
+
+.at-tabs a:hover {
+  color: var(--ink);
+}
+
+.at-tabs a[aria-current="page"] {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* ─── Pages the shell owns (Settings, Review until F5) ───────────────────── */
+
+.at-page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--s-4) var(--s-6) var(--s-12);
+}
+
+.at-display {
+  margin: 0 0 var(--s-6);
+  font-size: 40px;
+  line-height: 1;
+  font-weight: 300;
+  font-style: italic;
+  font-stretch: 125%;
+  letter-spacing: -0.03em;
+}
+
+.at-lede {
+  margin: 0 0 var(--s-4);
+  max-width: 60ch;
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.at-data {
+  font-size: 14px;
+  font-weight: 560;
+  font-stretch: 75%;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.at-section {
+  padding: var(--s-5) 0 var(--s-6);
+  border-top: 1px solid var(--rule);
+}
+
+.at-section h2 {
+  margin: 0 0 var(--s-1);
+  font-size: 16px;
+  font-weight: 640;
+  letter-spacing: -0.005em;
+}
+
+.at-section p {
+  margin: 0 0 var(--s-3);
+  max-width: 62ch;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.at-section p.at-data {
+  color: var(--ink);
+}
+
+.at-seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--wash);
+}
+
+.at-seg-opt {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: 5px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--dur-hover) linear;
+}
+
+.at-seg-opt:hover {
+  color: var(--ink);
+}
+
+.at-seg-opt input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.at-seg-opt:has(input:checked) {
+  background: var(--raised);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.at-seg-opt:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.at-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: var(--ink);
+  color: var(--on-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.at-btn.sec {
+  background: var(--raised);
+  color: var(--ink);
+  border-color: var(--rule);
+  transition: background-color var(--dur-hover) linear;
+}
+
+.at-btn.sec:hover {
+  background: color-mix(in srgb, var(--ink) 4%, var(--raised));
+}
+
+/* ─── The plates, until F3 replaces them with the map ────────────────────── */
+
+.at-plates {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--rule);
+}
+
+.at-plates-side {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid;
+  overflow: hidden;
+}
+
+.at-plate {
+  /* The plates' own dark ground, which shares these names with Atlas. */
+  --rule: #1f2b2c;
+  --ink: #e9efed;
+  --ink-2: #a6b7b4;
+  --ink-3: #7d8f8c;
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.at-plates-inspector {
+  width: 252px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid;
+  overflow: hidden;
+}
+
+/* ─── Command palette ────────────────────────────────────────────────────── */
+
+.at-pal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 110px var(--s-4) var(--s-4);
+  background: var(--scrim);
+  animation: at-fade var(--dur-in) linear;
+}
+
+.at-pal {
+  width: min(560px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--raised);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  animation: at-rise var(--dur-in) var(--ease-out);
+}
+
+.at-pal [cmdk-root] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.at-pal-q {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 54px;
+  padding: 0 var(--s-4);
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-2);
+}
+
+.at-pal-q input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 17px;
+  outline: none;
+}
+
+.at-pal-q input:focus-visible {
+  /* The open palette is the focus; a ring around its one field is noise. */
+  outline: none;
+}
+
+.at-pal-q input::placeholder {
+  color: var(--ink-3);
+}
+
+.at-pal [cmdk-list] {
+  max-height: min(440px, calc(100dvh - 220px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+}
+
+.at-pal [cmdk-group-heading] {
+  padding: 10px 12px 4px;
+  font-size: 12.5px;
+  font-weight: 640;
+  color: var(--ink-3);
+}
+
+.at-pal [cmdk-item] {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 7px;
+  color: var(--ink);
+  font-size: 14.5px;
+  cursor: pointer;
+  scroll-margin: 6px;
+}
+
+.at-pal [cmdk-item] svg {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.at-pal [cmdk-item][data-selected="true"] {
+  background: var(--wash-2);
+}
+
+.at-pal-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.at-pal-current {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-stretch: 87%;
+  color: var(--ink-3);
+}
+
+.at-keys {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.at-pal-current + .at-keys {
+  margin-left: var(--s-2);
+}
+
+.at-pal [cmdk-empty] {
+  padding: 14px 12px;
+  color: var(--ink-3);
+}
+
+@keyframes at-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes at-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ─── Toast ──────────────────────────────────────────────────────────────── */
+
+.at-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--on-ink);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 20px);
+  transition:
+    opacity var(--dur-out) var(--ease-in),
+    transform var(--dur-out) var(--ease-in),
+    visibility 0s linear var(--dur-out);
+}
+
+.at-toast[data-on="true"] {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+  transition:
+    opacity var(--dur-in) var(--ease-out),
+    transform var(--dur-in) var(--ease-out),
+    visibility 0s;
+}
+
+.at-toast:has(button) {
+  padding-right: 10px;
+}
+
+.at-toast button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(127, 127, 127, 0.25);
+  color: var(--on-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ─── Bottom nav (phone) ─────────────────────────────────────────────────── */
+
+.at-tabbar {
+  display: none;
+}
+
+.at-more {
+  position: relative;
+}
+
+.at-more-menu {
+  right: -4px;
+  bottom: calc(100% + 14px);
+  min-width: 210px;
+  transform-origin: bottom right;
+}
+
+.at-more-menu .at-opt {
+  justify-content: flex-start;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.at-more-menu svg {
+  color: var(--ink-2);
+}
+
+@media (max-width: 720px) {
+  .at-shell {
+    grid-template-columns: minmax(0, 1fr);
+    padding-bottom: calc(66px + env(safe-area-inset-bottom));
+  }
+
+  .at-rail {
+    display: none;
+  }
+
+  .at-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9;
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-start;
+    height: calc(66px + env(safe-area-inset-bottom));
+    padding: 8px 4px env(safe-area-inset-bottom);
+    background: var(--raised);
+    border-top: 1px solid var(--rule);
+  }
+
+  .at-tabbar .at-nav {
+    width: 64px;
+  }
+
+  .at-tabbar .at-nav[aria-current="page"]::before {
+    left: 18px;
+    right: 18px;
+    top: -9px;
+    bottom: auto;
+    width: auto;
+    height: 3px;
+  }
+
+  .at-tabbar .at-badge {
+    right: 8px;
+  }
+
+  .at-bar {
+    height: 52px;
+    padding: 0 var(--s-4);
+    justify-content: space-between;
+  }
+
+  /* Pages that open on their own display title need no place name. */
+  .at-bar[data-route="settings"],
+  .at-bar[data-route="review"],
+  .at-bar[data-route="welcome"] {
+    display: none;
+  }
+
+  .at-where {
+    display: block;
+  }
+
+  /* Commands live in More on a phone, and the Insights scope note has no
+     room beside the tabs (nothing on a phone claims a scope there). */
+  .at-cmd,
+  .at-scope-fixed {
+    display: none;
+  }
+
+  .at-page {
+    padding: var(--s-2) var(--s-4) var(--s-10);
+  }
+
+  .at-display {
+    font-size: 34px;
+  }
+
+  .at-pal-scrim {
+    padding-top: var(--s-4);
+  }
+
+  /* No keyboard to press them with. */
+  .at-pal kbd,
+  .at-keys {
+    display: none;
+  }
+
+  .at-toast {
+    bottom: calc(66px + 14px + env(safe-area-inset-bottom));
+  }
+}

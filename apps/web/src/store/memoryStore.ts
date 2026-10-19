@@ -51,7 +51,8 @@ interface MemoryState {
    * through the list does not refetch them and the cold load fetches once.
    */
   storeChanges: number;
-  /** AppLayout reloads the list and SearchBar refreshes active search when this changes. */
+  /** The global project scope. The shell reloads the list and SearchBar
+   *  refreshes an active search when it changes; leaving a route keeps it. */
   projectFilter: ProjectFilter;
 
   setProjectFilter: (filter: ProjectFilter) => void;

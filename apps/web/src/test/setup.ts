@@ -40,3 +40,9 @@ class TestResizeObserver implements ResizeObserver {
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = TestResizeObserver;
 }
+
+// jsdom does not lay out, so it has no scrollIntoView; cmdk keeps the
+// highlighted command in view with it.
+if (typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = () => {};
+}

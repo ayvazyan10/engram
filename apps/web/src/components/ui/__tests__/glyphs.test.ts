@@ -24,7 +24,6 @@ const COMPONENTS_DIR = join(__dirname, '../..');
 const PANEL_DIRS = [
   join(COMPONENTS_DIR, 'ui'),
   join(COMPONENTS_DIR, 'views'),
-  join(COMPONENTS_DIR, 'layout'),
 ];
 
 /** Emoji-presentation-by-default characters that live below the astral
@@ -92,17 +91,5 @@ describe('panel glyphs draw from the registry (L6)', () => {
     }
 
     expect(offenders.sort()).toEqual([...KNOWN_LITERALS].sort());
-  });
-
-  it('the mobile tab bar is covered by that list — it is what this guard was added for', () => {
-    const file = join(COMPONENTS_DIR, 'layout', 'MobileTabBar.tsx');
-    const content = stripComments(readFileSync(file, 'utf-8'));
-
-    for (const [name, glyph] of Object.entries(GLYPH)) {
-      expect(content, `MobileTabBar hard-codes GLYPH.${name}`).not.toContain(glyph);
-    }
-    expect(content).toContain('GLYPH.paneMemories');
-    expect(content).toContain('GLYPH.panePlate');
-    expect(content).toContain('GLYPH.paneInspect');
   });
 });

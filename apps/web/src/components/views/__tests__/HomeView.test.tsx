@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import HomeView from '../HomeView.js';
+import ScopeSwitch from '../../../shell/ScopeSwitch.js';
+import { parseHash, useRouteStore } from '../../../shell/routeStore.js';
 import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js';
 import { useNeuralStore } from '../../../store/neuralStore.js';
 import { resetServerStats } from '../../../lib/serverStats.js';
@@ -37,9 +39,20 @@ function renderHome(onStore: () => void = () => {}) {
   );
 }
 
+/** Home as the shell shows it: the global scope switch sits in the bar above. */
+function renderHomeWithScope() {
+  return render(
+    <>
+      <ScopeSwitch />
+      <HomeView loading={false} error={null} onRetry={() => {}} onLoadMore={() => {}} loadingMore={false} onStore={() => {}} />
+    </>
+  );
+}
+
 describe('HomeView', () => {
   beforeEach(() => {
     resetServerStats();
+    useRouteStore.setState({ route: parseHash('#/') });
     useNeuralStore.setState({ selectedNeuronId: null });
     useMemoryStore.setState({
       records: [record(), record({ id: 'mem-2', type: 'episodic', content: 'Fixed the flaky deploy.', source: 'cursor', tags: '[]' })],
@@ -116,6 +129,7 @@ describe('HomeView: what does my AI know?', () => {
 
   beforeEach(() => {
     resetServerStats();
+    useRouteStore.setState({ route: parseHash('#/') });
     useNeuralStore.setState({ selectedNeuronId: null });
     useMemoryStore.setState({
       records: [record()],
@@ -204,6 +218,7 @@ describe('HomeView: projects', () => {
 
   beforeEach(() => {
     resetServerStats();
+    useRouteStore.setState({ route: parseHash('#/') });
     useNeuralStore.setState({ selectedNeuronId: null });
     useMemoryStore.setState({
       records: [record(), record({ id: 'mem-2', content: 'Fixed the flaky deploy.', namespace: API })],
@@ -237,25 +252,16 @@ describe('HomeView: projects', () => {
     expect(within(inspector).getByText(API)).toBeInTheDocument();
   });
 
-  it('offers All, Global, then each project by count, and picking one sets the filter', async () => {
+  it('lists the scope the switch above it picks', async () => {
     vi.mocked(api.stats).mockResolvedValue(MIXED);
-    renderHome();
+    renderHomeWithScope();
     fireEvent.click(await screen.findByRole('button', { name: 'Project: All projects' }));
-    const options = within(screen.getByRole('group', { name: 'Show memories from' })).getAllByRole('button');
-    expect(options.map((o) => o.textContent)).toEqual([
-      'All projects16',
-      'Global3Shared by every project',
-      `web8${WEB}`,
-      `api5${API}`,
-    ]);
-    expect(options[0]).toHaveAttribute('aria-pressed', 'true');
-
-    fireEvent.click(options[3]!);
+    fireEvent.click(screen.getByRole('option', { name: /^api/ }));
     expect(useMemoryStore.getState().projectFilter).toBe(API);
     expect(screen.getByRole('button', { name: 'Project: api' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Project: api' }));
-    fireEvent.click(screen.getByRole('button', { name: /^Global/ }));
+    fireEvent.click(screen.getByRole('option', { name: /^Global/ }));
     expect(useMemoryStore.getState().projectFilter).toBeNull();
   });
 
@@ -279,13 +285,13 @@ describe('HomeView: projects', () => {
         record({ id: 'r-global', content: 'Deploy only on weekdays.', namespace: null }),
       ],
     });
-    renderHome();
+    renderHomeWithScope();
     expect(screen.getByText('3 found')).toBeInTheDocument();
 
     // This result was not in the original topK: it must come from the server.
     vi.mocked(api.search).mockResolvedValueOnce({ count: 1, results: [record({ id: 'new-api', content: 'New API hit.', namespace: API })] });
     fireEvent.click(await screen.findByRole('button', { name: 'Project: All projects' }));
-    fireEvent.click(screen.getByRole('button', { name: /^api\b/ }));
+    fireEvent.click(screen.getByRole('option', { name: /^api/ }));
     expect(await screen.findByText('New API hit.')).toBeInTheDocument();
     expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, API);
     expect(screen.getByText('1 found')).toBeInTheDocument();
@@ -294,14 +300,14 @@ describe('HomeView: projects', () => {
 
     vi.mocked(api.search).mockResolvedValueOnce({ count: 1, results: [record({ id: 'new-global', content: 'New global hit.', namespace: null })] });
     fireEvent.click(screen.getByRole('button', { name: 'Project: api' }));
-    fireEvent.click(screen.getByRole('button', { name: /^Global/ }));
+    fireEvent.click(screen.getByRole('option', { name: /^Global/ }));
     expect(await screen.findByText('New global hit.')).toBeInTheDocument();
     expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, null);
     expect(screen.queryByText('New API hit.')).not.toBeInTheDocument();
 
     vi.mocked(api.search).mockResolvedValueOnce({ count: 1, results: [record({ id: 'all', content: 'All projects hit.', namespace: WEB })] });
     fireEvent.click(screen.getByRole('button', { name: 'Project: Global' }));
-    fireEvent.click(screen.getByRole('button', { name: /^All projects/ }));
+    fireEvent.click(screen.getByRole('option', { name: /^All projects/ }));
     expect(await screen.findByText('All projects hit.')).toBeInTheDocument();
     expect(api.search).toHaveBeenLastCalledWith('deploy', 20, undefined, undefined);
   });
