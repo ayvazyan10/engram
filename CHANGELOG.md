@@ -9,20 +9,173 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-19
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.8.0, and the Claude Desktop extension bundle 0.8.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.6.0 and `@engram-ai-memory/web` 0.5.0.
+
 ### Added
 
-- **`@engram-ai-memory/mcp`** — `ENGRAM_NAMESPACE_MODE` defaults to `project`: inside a git repository the stdio server and hooks scope to the absolute git top-level path and read that project's memories plus global ones; outside a repository they use the shared pool. An explicit `ENGRAM_NAMESPACE` wins, and `engram setup` writes `project`.
+- **`@engram-ai-memory/core`** — Opt-in hybrid search combines SQLite FTS5 keyword ranking (BM25) with vector results through reciprocal rank fusion in search, recall and streaming recall. Set `hybridSearch: true` or `ENGRAM_HYBRID_SEARCH=1` / `true`; it is **off by default**, preserving vector-only ranking. Migration `0002_memory_fts.sql` populates the index from existing content, concepts and tags, and triggers keep it current even while hybrid search is disabled, so enabling it needs no rebuild. Keyword matches can surface below the cosine threshold; returned search scores remain cosine similarities, and namespace, type and archive restrictions still apply.
+
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/mcp`**, **`@engram-ai-memory/server`** — Search and recall accept inclusive `since` / `until` date bounds and `tags` requiring every supplied tag. Dates use `eventAt`, falling back to `createdAt`; the filters apply to graph expansion and streaming results as well as vector hits. Available through core, `search_memory`, `recall_context`, `POST /api/search`, `POST /api/recall` and `GET /api/recall/stream`.
+
+- **`@engram-ai-memory/core`** — `store()` deduplicates against a live memory of the same type and namespace when similarity reaches `ENGRAM_DEDUP_THRESHOLD` (default `0.97`) and the memories do not contradict. It merges tags and importance into the existing memory and reports `deduplicated` in the result.
+
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/mcp`**, **`@engram-ai-memory/server`** — `NeuralBrain.updateMemory()` and the `update_memory` MCP tool edit a memory in place, re-embedding when content or concept changes. Updates accept a full id or a unique prefix of at least eight characters; `PATCH /api/memory/:id` uses the same core path. The shared MCP tools expose this over both stdio and HTTP.
+
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/mcp`** — Core `forget()` and the MCP `forget` tool accept unique id prefixes of at least eight characters. REST deletion and bulk archive continue to require exact ids.
+
+- **`@engram-ai-memory/core`** — `storeBatch()` embeds a whole batch in one call, then stores each item in order with the same validation, deduplication, linking, contradiction handling and hooks as `store()`.
+
+- **`@engram-ai-memory/core`** — `store({ namespace: null })` explicitly stores a global memory in `filter` mode; `isolated` mode rejects it.
+
 - **`@engram-ai-memory/mcp`** — `store_memory` accepts `global: true` to store a memory for every project (preferences, identity, working style). It is rejected in `isolated` mode.
-- **`@engram-ai-memory/server`** — `GET /api/memory` accepts `namespace=<exact>` and `global=true`.
-- **`@engram-ai-memory/core`**, **`@engram-ai-memory/server`** — `memory_stats` and `GET /api/stats` report `dbPath` and `byNamespace`.
+
+- **`@engram-ai-memory/mcp`** — Client-side session distillation adds `get_distill_tasks` and `complete_distill`, bringing the server to **24 MCP tools**. SessionEnd marks raw summaries `pending-distill`; the connected AI extracts facts, which pass through normal storage before the raw session is archived. Facts discarded by the contradiction policy are reported. SessionStart reminds the client about pending sessions without losing recalled context if the count fails. Engram runs no LLM for distillation.
+
+- **`@engram-ai-memory/mcp`** — A Claude Code plugin bundles the MCP server, SessionStart project/branch recall and SessionEnd capture. Install through `/plugin marketplace add ayvazyan10/engram` followed by `/plugin install engram@engram`; `engram setup` recommends this path. Hooks honor `ENGRAM_DB_PATH` and `ENGRAM_SOURCE`, and session-start recall fails silently after eight seconds or on an error.
+
+- **`@engram-ai-memory/mcp`** — Integration guides include client configurations for VS Code, Codex CLI, Gemini CLI, OpenCode, Zed, Continue and LM Studio.
+
+- **`@engram-ai-memory/server`** — Stateless Streamable HTTP MCP is available at `POST /mcp`, sharing the server's brain, tools and sync notifications. API-key authentication and Host / Origin allowlists cover it; `GET` and `DELETE /mcp` return `405` because there is no standalone event stream or session to delete. HTTP MCP retains the server-wide namespace scope.
+
+- **`@engram-ai-memory/server`** — `GET /api/memory` accepts `namespace=<exact>` for one project or `global=true` for memories with no namespace, combined with the existing list filters.
+
+- **`@engram-ai-memory/server`** — `POST /api/search` accepts `namespace` or `global: true` with the same project meanings as the list route. Supplying both returns `400`; these filters only narrow the brain's permitted scope.
+
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/mcp`**, **`@engram-ai-memory/server`** — Core `stats()`, `memory_stats` and `GET /api/stats` report `dbPath` and `byNamespace`.
+
+- **`@engram-ai-memory/cli`** — `engram import --from markdown|chatgpt|claude <path>` imports Markdown directories and exported memories. Markdown headings become concepts, frontmatter memory files remain whole and `MEMORY.md` link indexes are skipped; ChatGPT input accepts one fact per line or JSON arrays of strings or memory objects. File imports use batches of 1000, report failed batches as skipped and support `--dry-run` previews.
+
+- **`@engram-ai-memory/adapter-ollama`** — `ENGRAM_UPSTREAM` points the memory proxy at any OpenAI-compatible API, including upstreams with a path prefix such as OpenRouter. `OLLAMA_TARGET` remains supported; chat completions work with plain and streaming responses, and `/v1/models` passes through.
+
+- **`@engram-ai-memory/web`** — Home is the default view, with search and recent-memory cards showing type, source, date and tags; cards open the inspector.
+
+- **`@engram-ai-memory/web`** — Empty stores show “Connect your AI in 30 seconds” with copyable configuration for Claude Code, Claude Desktop, Cursor, VS Code and Codex CLI. Onboarding waits for the first memory through socket events or stats polling, including writes from MCP clients.
+
+- **`@engram-ai-memory/web`** — The inspector edits content, concept, importance and tags in place, sends only changed fields and refreshes cards after saving.
+
+- **`@engram-ai-memory/web`** — Home's “What my AI knows” tab shows the exact recall context for a query, with copyable text and memory links on each `[id · date]` citation.
+
+- **`@engram-ai-memory/web`** — Project labels appear on Home cards, inspector details and 3D sidebar rows, with full paths available and parent names disambiguating same-named folders. Global-only stores omit the extra labels.
+
+- **`@engram-ai-memory/web`** — Home's All / Global / project picker shows counts and filters listing and search on the server; changing the project re-runs an active search, and leaving Home resets the picker.
+
+- **`@engram-ai-memory/web`** — The status tooltip shows the database path.
+
+- **`@engram-ai-memory/core`** — `bench:longmemeval` measures retrieval recall@k overall and per question type, with JSON output, `--limit` and `--per-type N` sampling. The latter takes the first N questions of each type and records the sample in the output; [docs/BENCHMARKS.md](docs/BENCHMARKS.md) describes the method and limitations.
 
 ### Changed
 
-- **All packages** — Every component resolves the database through core's `resolveDbPath`, defaulting to `~/.engram/engram.db`; a blank path means the default and `~` is expanded. The old working-directory default is gone, so core, the MCP server, the hooks and the CLI share one database by default.
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/mcp`**, **`@engram-ai-memory/cli`**, **`@engram-ai-memory/server`** — Database resolution uses core's `resolveDbPath`, defaulting to `~/.engram/engram.db`; a blank path means the default and `~` is expanded. The old working-directory default is gone, so entry points share one database by default.
+
+- **`@engram-ai-memory/mcp`** — `ENGRAM_NAMESPACE_MODE` defaults to `project`: inside a git repository the stdio server and hooks scope to the absolute git top-level path and read that project's memories plus global ones; outside a repository they use the shared pool. An explicit `ENGRAM_NAMESPACE` wins, and SessionStart uses the hook payload's working directory.
+
+- **`@engram-ai-memory/cli`** — New configurations and configurations with no namespace mode default to `project`, and `engram setup` writes it. When starting or restarting the REST server, `project` maps to `none` so the dashboard sees every project; explicit `filter` and `isolated` modes retain their behavior.
+
+- **`@engram-ai-memory/core`** — `filter` mode reads its namespace plus global memories in recall, search, stats and tags. `crossNamespace` still permits reading across projects; `isolated` remains restricted to its configured namespace.
+
+- **`@engram-ai-memory/core`** — Recall bullets include `[8-char id · YYYY-MM-DD]` citations, making memories identifiable for updates and forgetting.
+
+- **`@engram-ai-memory/server`** — `POST /api/memory/batch` uses core's batch embedding path. `ENGRAM_BATCH_CONCURRENCY` has been removed because it no longer controls this operation.
+
+- **`@engram-ai-memory/server`** — Memory-list responses omit embedding vectors, reducing the data sent to dashboard and API clients.
+
+- **`@engram-ai-memory/web`** — Five visualization plates replace Cosmos, Neural Net and Clusters: Links, Hotspots, Over time, Communities and Overview. Captions describe what each plate shows, with a “?” method note; plate colors distinguish agreement from contradiction, while memory type remains available as text, glyphs and filters.
+
+- **`@engram-ai-memory/web`** — Dashboard typography and controls have been refreshed, with IBM Plex Sans, Archivo and Spectral served locally for offline use. The standalone `apps/web/observatory` retains the visualization candidates for exploration.
+
+- **`@engram-ai-memory/core`**, **`@engram-ai-memory/server`** — Cloud-sync documentation now describes the implemented behavior: decay fields and reflections sync with memories; indexes, recall audit logs, webhooks, device identity and cursors stay local. It also corrects REST sync validation, explains how undecryptable rows pin the pull cursor and documents that moving a database to a new path re-mints its device id.
 
 ### Fixed
 
 - **`@engram-ai-memory/core`** — A `filter`/`project` client could forget, update, tag or resolve contradictions on another namespace's memories after finding them with `crossNamespace`. Mutations now resolve ids only within its own namespace plus global memories.
+
+- **`@engram-ai-memory/core`** — Local writes no longer hide unseen commits from another process, so a memory stored through MCP remains searchable through the server without a restart.
+
+- **`@engram-ai-memory/core`** — Sync pulls re-index the exact memories they applied even when remote timestamps are older than the newest local row.
+
+- **`@engram-ai-memory/core`** — Initialization clears stale vectors before loading the index, preventing memories removed while a brain was shut down from surviving reinitialization.
+
+- **`@engram-ai-memory/core`** — Decay's backdated updates are included in the first push page's conflict-window overlap, so they still sync to other devices.
+
+- **`@engram-ai-memory/core`** — Re-embedding skips memories archived or edited during the run and uses each memory type's original embedding template, including semantic concepts and procedural triggers/actions.
+
+- **`@engram-ai-memory/core`** — Consolidation skips clusters already archived by another pass instead of consolidating them twice.
+
+- **`@engram-ai-memory/core`** — Duplicate PostgreSQL connection pairs no longer fail every later sync cycle; only the conflicting pair is skipped while other rows continue to push.
+
+- **`@engram-ai-memory/core`** — Decay-policy updates persist in the local database, are shared by processes using it and survive restarts. Nested consolidation updates merge with the existing policy; protection callbacks remain process-local.
+
+- **`@engram-ai-memory/core`** — Forgetting and decay remove recall audit assemblies referencing archived memories, and sweeps prune assemblies older than 30 days.
+
+- **`@engram-ai-memory/core`** — Contradiction detection recognizes changed numbers in otherwise identical statements, such as a port changing from 4901 to 4902.
+
+- **`@engram-ai-memory/core`** — `tsx` is declared as a development dependency for `bench:longmemeval`, so the benchmark runner is available after a normal workspace install.
+
+- **`@engram-ai-memory/server`** — `POST /api/memory` accepts `metadata` and passes only declared fields to core; undeclared `eventAt` or `triggerPattern` fields no longer cause a `500`.
+
+- **`@engram-ai-memory/server`** — Updating an archived memory returns `404` without re-indexing it, and re-embedding an edited memory records the active embedding model.
+
+- **`@engram-ai-memory/server`** — Scheduled decay, manual decay and consolidation share a single-flight guard, preventing overlapping runs.
+
+- **`@engram-ai-memory/server`** — Changing `decayIntervalMs` through the REST decay-policy endpoint reschedules the timer.
+
+- **`@engram-ai-memory/server`** — Streaming recall preserves the CORS and security headers queued by hooks when taking over the raw SSE response.
+
+- **`@engram-ai-memory/mcp`** — The `mcp` binary alias makes bare `npx -y @engram-ai-memory/mcp` installs executable again. Smithery and documented client configurations use the explicit `-p @engram-ai-memory/mcp … engram-mcp` form; local-build examples use absolute paths.
+
+- **`@engram-ai-memory/mcp`** — When `ENGRAM_SOURCE` is unset, stored memories use the connected client's name as their source.
+
+- **`@engram-ai-memory/mcp`** — `store_memory` rejects empty content.
+
+- **`@engram-ai-memory/mcp`** — `get_reflections` is correctly marked read-only for clients.
+
+- **`@engram-ai-memory/mcp`** — Session capture recognizes Claude Code's `type: "assistant"` transcript records and invokes `engram-store-session` through `npx -p`, restoring the session hook.
+
+- **`@engram-ai-memory/desktop-extension`** — The bootstrap launcher verifies the installed MCP package version before trusting its install marker, so a stale or incomplete install is repaired.
+
+- **`@engram-ai-memory/cli`** — Single-record NDJSON imports no longer disappear, imported records preserve `sessionId` and `metadata`, and malformed lines count as skipped and make the command exit `1`.
+
+- **`@engram-ai-memory/cli`** — Registered hook paths are quoted so hooks run when the home directory contains spaces.
+
+- **`@engram-ai-memory/adapter-ollama`** — Upstream mid-body errors no longer crash the proxy; passthrough requests honor timeouts and release the upstream when the client disconnects. Disconnecting during recall no longer starts generation.
+
+- **`@engram-ai-memory/adapter-ollama`** — Missed tool-call retries occur only after user turns and respect `tool_choice: "none"`; memory capture stores only the answer delivered to the client.
+
+- **`@engram-ai-memory/adapter-ollama`** — Requests to Engram send `ENGRAM_API_KEY` as `X-API-Key`, and the first API failure is logged instead of silently losing memory integration.
+
+- **`@engram-ai-memory/web`** — Search results highlight memories on the visualization plates.
+
+- **`@engram-ai-memory/web`** — Clearing search clears the reported recall time.
+
+- **`@engram-ai-memory/web`** — Escape dismisses the archive confirmation without also clearing the selected memory.
+
+- **`@engram-ai-memory/web`** — Plates load once on a cold start and load correctly under the Vite development server's StrictMode lifecycle.
+
+- **`@engram-ai-memory/web`** — The header displays the server-reported version instead of the stale web-package version, and hides it until known.
+
+- **`@engram-ai-memory/web`** — “Load more” pages beyond the newest 200 memories.
+
+- **`@engram-ai-memory/web`** — Type counters cover the whole store instead of just the loaded page.
+
+- **`@engram-ai-memory/web`** — The status bar refreshes when memories change.
+
+- **`@engram-ai-memory/web`** — Inspector connections name and link the memory at the other end and report loading failures.
+
+- **`@engram-ai-memory/web`** — Ctrl/Cmd+Enter submits the store-memory form.
+
+- **`@engram-ai-memory/web`** — Unavailable-server errors use readable messages.
+
+- **`@engram-ai-memory/web`** — Narrow-screen layouts keep the Links coil in view, prevent overlapping Overview bands and keys covering content, and use a single-row mobile header with readable plate captions.
+
+### Security
+
+- **`@engram-ai-memory/server`** — Fixed the percent-encoded `/%61pi` authentication bypass: `/%61pi/memory` previously reached API routes without an API key, Host allowlist enforcement or rate limiting. Guards now use the route matched by the router; encoded OpenAPI paths such as `/%64ocs/json` are protected too.
+
+- **`@engram-ai-memory/server`** — Socket authentication rejects non-string tokens instead of throwing while comparing them.
+
+- **`@engram-ai-memory/server`** — Per-client request rate limiting also covers `/mcp`, closing the gap between the HTTP MCP transport and the REST API.
 
 ## [0.7.0] — 2026-09-04
 
@@ -401,7 +554,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.7.0
 [0.6.5]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.5
 [0.6.4]: https://github.com/ayvazyan10/engram/releases/tag/v0.6.4
