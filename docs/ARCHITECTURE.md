@@ -298,7 +298,7 @@ See [API.md](API.md) for full endpoint reference and [CONFIGURATION.md](CONFIGUR
 
 ## Atlas dashboard (`@engram-ai-memory/web`)
 
-Built with **React 19 + Vite 6**, **Canvas + D3** for the memory map, and **Recharts** loaded on demand for Insights.
+Built with **React 19 + Vite 6**, **Canvas + D3** for the memory map, **three.js** loaded on demand for Sky and Landscape, and **Recharts** loaded on demand for Insights.
 
 ### Views
 
@@ -311,7 +311,9 @@ Built with **React 19 + Vite 6**, **Canvas + D3** for the memory map, and **Rech
 | Insights | Numbers (charts and tables, 7/30/90 days, all projects) and Reflections (reports and cycle status) |
 | Settings | Light/dark/system colour mode, connection steps, server and database health, index and embeddings, and read-only decay and sync status |
 
-`GET /api/map` projects embeddings into two dimensions, refines positions with similarity links and groups memories into named regions. The server caches layouts per scope and supplies retention and protection values. Region renames are saved on the device. Recall uses `POST /api/recall/explain`, which previews context without changing access counts, decay timestamps or audit rows.
+The Map switcher lazily loads **Sky** (a WebGL memory sky), **Landscape** (retention terrain with a Now / +7 / +30 / +90-day decay preview), **River** (braided history by region, with brush-to-zoom and region following) and **Pulse** (recall ranks, inferred graph threads, token budget and exclusions) at `#/?view=sky|landscape|river|pulse`.
+
+`GET /api/map` projects embeddings into two dimensions, refines positions with similarity links and groups memories into named regions. The server caches layouts per scope and supplies retention and protection values. Region renames are saved on the device. Recall and Pulse use `POST /api/recall/explain`, which previews context without changing access counts, decay timestamps or audit rows.
 
 The memory sheet opens over any route with `?m=<id>` for inspection, editing, tags and connections. Archive and memory-sheet contradiction resolutions wait six seconds before being sent, with Undo by button or ⌘Z / Ctrl+Z. Welcome offers client setup instructions and waits for the first memory.
 

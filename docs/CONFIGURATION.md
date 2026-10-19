@@ -621,7 +621,9 @@ The in-memory vector index rebuilds from the database on server start unless a p
 
 Atlas draws its memory map with Canvas and D3. `GET /api/map` computes and caches the layout on the server per project scope; small additions are placed near their neighbours without moving existing points. `POST /api/map/rebuild` forces a full layout. See [Atlas Map](API.md#atlas-map) for cache and rebuild behavior.
 
-Insights and its charts load on demand. After a web build, `pnpm --filter @engram-ai-memory/web check:bundle` enforces gzip JavaScript budgets of 200 KB initially and 125 KB for lazy Insights, including charts.
+The Map switcher at `#/?view=sky|landscape|river|pulse` also offers **Sky** (a WebGL memory sky), **Landscape** (retention terrain with a Now / +7 / +30 / +90-day decay preview), **River** (braided history by region) and **Pulse** (a read-only recall explanation of ranks, graph pulls, token budget and exclusions). All four views load on demand, with three.js loaded only for Sky and Landscape.
+
+Insights and its charts load on demand. After a web build, `pnpm --filter @engram-ai-memory/web check:bundle` enforces gzip JavaScript budgets of 200 KB initially, 125 KB for lazy Insights (including charts) and 220 KB for lazy 3D views (Sky and Landscape).
 
 ---
 

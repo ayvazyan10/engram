@@ -14,10 +14,13 @@ The Atlas dashboard provides a map of memories, search and recall, a memory
 sheet for inspection and editing, review queues, a timeline, insights, settings,
 and an onboarding guide for connecting an AI.
 
+The Map switcher lazily loads **Sky** (a WebGL memory sky), **Landscape** (retention terrain with a Now / +7 / +30 / +90-day decay preview), **River** (braided history by region, with brush-to-zoom and region following) and **Pulse** (a read-only recall explanation of ranks, graph pulls, token budget and exclusions) at `#/?view=sky|landscape|river|pulse`.
+
 ## Tech Stack
 
 - **React 19** + TypeScript
 - **Canvas** + D3 (memory map)
+- **three.js** (lazy Sky and Landscape views)
 - **Recharts** (Insights charts)
 - **Zustand** (State management)
 - **Vite** (Build tooling)

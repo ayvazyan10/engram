@@ -9,6 +9,30 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-20
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.10.0 (republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.10.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.7.0 and `@engram-ai-memory/web` 0.7.0.
+
+### Added
+
+- **`@engram-ai-memory/web`** — The Atlas Map page gains four lazily loaded views of the same memory alongside the existing map, selected through `#/?view=sky|landscape|river|pulse`.
+
+- **`@engram-ai-memory/web`** — Sky renders a WebGL night sky with stars placed by meaning, depth by age, brightness by retention, size by importance and halos for protected memories. Links and contradictions form threads; clicking a star flies to it.
+
+- **`@engram-ai-memory/web`** — Landscape raises WebGL terrain from retention, with the archive threshold as the waterline. A Now / +7 / +30 / +90-day scrubber projects decay forward: protected memories float as buoys while unprotected memories sink toward archival. The scrubber previews decay without archiving memories.
+
+- **`@engram-ai-memory/web`** — River shows memory history as a braided river, with one band per region, square-root widths, particles sized and lit by importance and retention, and contradiction whirlpools. Brush to zoom or follow a region.
+
+- **`@engram-ai-memory/web`** — Pulse explains a recall with candidates on rings by rank, inferred threads for graph pulls, a wave filling the token budget and reasons for each exclusion. It uses the existing read-only `POST /api/recall/explain` endpoint.
+
+### Changed
+
+- **`@engram-ai-memory/web`** — three.js loads in a lazy chunk. `check:bundle` adds a 220 KB gzip budget for Sky and Landscape and keeps three.js out of initial loading; initial JavaScript measures 176.6 KB against the existing 200 KB budget.
+
+### Fixed
+
+- **`@engram-ai-memory/web`** — River reuses cached glow sprites for smooth rendering, and River and Pulse headings clear the view switcher.
+
 ## [0.9.0] — 2026-10-19
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.9.0, and the Claude Desktop extension bundle 0.9.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.7.0 and `@engram-ai-memory/web` 0.6.0.
@@ -610,7 +634,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.10.0
 [0.9.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.9.0
 [0.8.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.8.0
 [0.7.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.7.0

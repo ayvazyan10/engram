@@ -288,7 +288,7 @@ pnpm turbo run test:coverage
 
 ESLint runs from the shared config in `tooling/`. `no-console` is off for the CLI, whose stdout *is* its user interface.
 
-After building the Atlas dashboard, `pnpm --filter @engram-ai-memory/web check:bundle` checks the gzip JavaScript budgets: 200 KB for initial loading and 125 KB for lazy Insights, including charts. It also checks that Insights and charts stay out of the initial imports.
+After building the Atlas dashboard, `pnpm --filter @engram-ai-memory/web check:bundle` checks the gzip JavaScript budgets: 200 KB for initial loading, 125 KB for lazy Insights (including charts) and 220 KB for lazy 3D views (Sky and Landscape). It also checks that Insights, charts, three.js and the 3D views stay out of the initial imports.
 
 ---
 

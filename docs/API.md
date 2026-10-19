@@ -1565,6 +1565,8 @@ The server rescans the live memory, replaces each selected secret span with exac
 
 ## Atlas Map
 
+The dashboard's Map switcher adds four lazy views at `#/?view=sky|landscape|river|pulse`: **Sky** (a WebGL memory sky), **Landscape** (retention terrain with a Now / +7 / +30 / +90-day decay preview), **River** (braided history by region) and **Pulse** (recall ranks, graph pulls, token budget and exclusions). Pulse uses the existing read-only `POST /api/recall/explain` endpoint; these hash routes select dashboard views, not API endpoints.
+
 ### `GET /api/map`
 
 Returns a cached 2D map of live memories visible to this brain. Coordinates lie in `[-1, 1]`. PCA-2 is refined with a deterministic force layout over existing `relates_to` links with strength ≥ 0.5; `fallback` indicates insufficient usable embeddings.

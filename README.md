@@ -438,7 +438,7 @@ cd packages/core && npx tsx scripts/demo.ts
 
 **Atlas views:** Map · Recall · Review · Timeline · Insights · Settings
 
-Explore memories on a map with named regions, Meaning / Faults / Time lenses and search pins. Recall draws the numbered route of what your AI would be told alongside the exact context. Review contradictions, near-duplicates, fading-but-important memories and possible secrets, with Redact for detected secrets. Open any memory to inspect or edit it; archive and memory-sheet contradiction actions offer a six-second Undo. Timeline groups memories by day, Insights holds Numbers and Reflections, and Settings shows connection steps and health. Welcome guides the first connection.
+Explore memories on a map with named regions, Meaning / Faults / Time lenses and search pins. Its switcher adds four lazily loaded views at `#/?view=sky|landscape|river|pulse`: **Sky**, a WebGL night sky arranged by meaning and age; **Landscape**, retention terrain with a Now / +7 / +30 / +90-day decay preview; **River**, braided history by region with brush-to-zoom and region following; and **Pulse**, a read-only recall explanation showing ranks, graph pulls, token budget and exclusions. Recall draws the numbered route of what your AI would be told alongside the exact context. Review contradictions, near-duplicates, fading-but-important memories and possible secrets, with Redact for detected secrets. Open any memory to inspect or edit it; archive and memory-sheet contradiction actions offer a six-second Undo. Timeline groups memories by day, Insights holds Numbers and Reflections, and Settings shows connection steps and health. Welcome guides the first connection.
 
 Use light or dark mode (or follow the system), open commands with **⌘K / Ctrl+K**, and keep the same project scope as you move between memory views. The layout adapts to phones, with keyboard navigation and an accessible list alongside the map.
 
@@ -454,7 +454,7 @@ Use light or dark mode (or follow the system), open commands with **⌘K / Ctrl+
 | Cold startup (1k memories) | ~1.2s | Full DB scan + index build |
 | Cached startup (1k memories) | ~45ms | Persisted index (27x faster) |
 | Storage per memory | ~1.3 KB | FP16 compressed (2x reduction) |
-| Dashboard JS budgets | ≤ 200 KB initial / ≤ 125 KB lazy Insights (gzip) | Canvas map; charts load with Insights; `check:bundle` enforces limits |
+| Dashboard JS budgets | ≤ 200 KB initial / ≤ 125 KB lazy Insights / ≤ 220 KB lazy 3D views (gzip) | Charts load with Insights; three.js loads with Sky / Landscape; `check:bundle` enforces limits |
 
 Embeddings run **locally** using ONNX Runtime WASM — no OpenAI API, no cost, no data leaving your machine.
 
