@@ -27,11 +27,13 @@ export default function RiverCanvas({ model, focus, reduced, onHover, onPick }: 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     for (const c of [el, backing]) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
     const colors: Record<string, string> = {};
+    const sprites: Record<string, HTMLCanvasElement> = {};
     let dark = false, hover: RiverHit | null = null;
     const readColors = () => {
       const style = getComputedStyle(document.documentElement);
       for (const name of ['sem', 'epi', 'pro', 'fault', 'ink', 'ink-3', 'series', 'contour']) colors[name] = style.getPropertyValue(`--${name}`).trim();
       dark = style.colorScheme === 'dark';
+      for (const name of ['sem', 'epi', 'pro']) sprites[name] = glowSprite(colors[name]!);
     };
     const drawBands = () => {
       bg.setTransform(dpr, 0, 0, dpr, 0, 0); bg.clearRect(0, 0, w, h);
@@ -82,10 +84,10 @@ export default function RiverCanvas({ model, focus, reduced, onHover, onPick }: 
       positions = model.particles.map((p) => {
         const pos = particlePosition(p, model, seconds, reduced);
         pos.alpha *= focus && focus !== p.node.regionId ? 0.08 : 1;
-        const color = colors[p.node.type === 'semantic' ? 'sem' : p.node.type === 'episodic' ? 'epi' : 'pro']!;
-        ctx.globalAlpha = pos.alpha; ctx.fillStyle = color;
-        if (dark) { ctx.shadowColor = color; ctx.shadowBlur = p.radius * 3; }
-        ctx.beginPath(); ctx.arc(pos.x, pos.y, p.radius * 0.8, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+        const type = p.node.type === 'semantic' ? 'sem' : p.node.type === 'episodic' ? 'epi' : 'pro';
+        ctx.globalAlpha = pos.alpha;
+        if (dark) { const s = p.radius * 5.2; ctx.drawImage(sprites[type]!, pos.x - s / 2, pos.y - s / 2, s, s); }
+        else { ctx.fillStyle = colors[type]!; ctx.beginPath(); ctx.arc(pos.x, pos.y, p.radius * 0.8, 0, Math.PI * 2); ctx.fill(); }
         if (hover?.kind === 'particle' && hover.id === p.node.id) {
           ctx.strokeStyle = colors.ink!; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(pos.x, pos.y, p.radius + 4, 0, Math.PI * 2); ctx.stroke();
         }
@@ -129,6 +131,23 @@ export default function RiverCanvas({ model, focus, reduced, onHover, onPick }: 
     };
   }, [model, focus, reduced]);
   return <canvas ref={canvas} className="flow-river-canvas" aria-label="Streams of memories over time. Use the region and memory controls below for keyboard access." />;
+}
+
+/**
+ * A glowing light drawn once per colour and stamped with drawImage each frame:
+ * a per-particle shadowBlur made the dark river crawl at a frame or two a second.
+ */
+function glowSprite(color: string) {
+  const size = 64, half = size / 2, sprite = document.createElement('canvas');
+  sprite.width = sprite.height = size;
+  const g = sprite.getContext('2d')!, glow = g.createRadialGradient(half, half, 0, half, half, half);
+  glow.addColorStop(0.14, '#000'); glow.addColorStop(0.32, 'rgba(0,0,0,.35)'); glow.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = glow; g.fillRect(0, 0, size, size);
+  g.globalCompositeOperation = 'source-in'; g.fillStyle = color; g.fillRect(0, 0, size, size);
+  const core = g.createRadialGradient(half, half, 0, half, half, half * 0.14);
+  core.addColorStop(0, '#fff'); core.addColorStop(1, 'rgba(255,255,255,0)');
+  g.globalCompositeOperation = 'source-over'; g.fillStyle = core; g.fillRect(0, 0, size, size);
+  return sprite;
 }
 
 export function RiverOverview({ model, window, onWindow }: { model: RiverModel; window: TimeWindow; onWindow: (window: TimeWindow) => void }) {

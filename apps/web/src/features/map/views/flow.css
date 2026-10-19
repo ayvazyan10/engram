@@ -1,4 +1,5 @@
-.flow-view { box-sizing: border-box; width: 100%; min-width: 0; max-width: 1440px; margin: 0 auto; padding: 20px 16px 28px; color: var(--ink); background: var(--paper); font-family: var(--font); }
+/* The top padding keeps the heading below the Map view switcher, as .v3-heading does. */
+.flow-view { box-sizing: border-box; width: 100%; min-width: 0; max-width: 1440px; margin: 0 auto; padding: 76px 16px 28px; color: var(--ink); background: var(--paper); font-family: var(--font); }
 .flow-view *, .flow-view *::before, .flow-view *::after { box-sizing: border-box; }
 .flow-head h1 { margin: 0 0 6px; font-size: clamp(24px, 3.2vw, 38px); font-weight: 720; font-stretch: 125%; letter-spacing: -.015em; line-height: 1.05; }
 .flow-head > p { max-width: 72ch; margin: 0 0 12px; color: var(--ink-2); font-size: 15px; line-height: 1.45; }
@@ -62,4 +63,4 @@
   :root:not([data-theme="light"]) .flow-radial, :root:not([data-theme="light"]) .flow-river-stage { background: radial-gradient(closest-side, #142a2f 0%, transparent 100%); }
 }
 @media (max-width: 900px) { .flow-pulse-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }.flow-context-list { max-height: none; } }
-@media (max-width: 600px) { .flow-view { padding: 16px 12px 24px; }.flow-head > p { font-size: 14px; }.flow-river-stage { height: 58vh; }.flow-query strong { font-size: 12px; }.flow-query small { font-size: 9px; } }
+@media (max-width: 600px) { .flow-view { padding: 76px 12px 24px; }.flow-head > p { font-size: 14px; }.flow-river-stage { height: 58vh; }.flow-query strong { font-size: 12px; }.flow-query small { font-size: 9px; } }
