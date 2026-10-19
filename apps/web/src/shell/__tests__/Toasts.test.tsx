@@ -47,4 +47,22 @@ describe('Toasts', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Second');
     expect(screen.getByRole('status')).toHaveAttribute('data-on', 'true');
   });
+
+  it('takes the action with Ctrl+Z or ⌘Z while it is up, but leaves a text field its own undo', () => {
+    const undo = vi.fn();
+    render(
+      <>
+        <input aria-label="field" />
+        <Toasts />
+      </>
+    );
+    act(() => showToast('Archived', { label: 'Undo', run: undo }));
+    fireEvent.keyDown(screen.getByLabelText('field'), { key: 'z', ctrlKey: true });
+    expect(undo).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: 'z', metaKey: true });
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status')).toHaveAttribute('data-on', 'false');
+    fireEvent.keyDown(document.body, { key: 'z', ctrlKey: true });
+    expect(undo).toHaveBeenCalledTimes(1);
+  });
 });

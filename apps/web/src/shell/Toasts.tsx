@@ -21,6 +21,7 @@ interface ToastState {
 }
 
 let nextId = 1;
+const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
 export const useToasts = create<ToastState>((set) => ({
   toast: null,
@@ -48,6 +49,23 @@ export default function Toasts() {
     return () => clearTimeout(timer);
   }, [toast, visible, dismiss]);
 
+  // ⌘Z / Ctrl+Z takes the action while its toast is up, so Undo needs no
+  // trip to the bottom of the screen. A text field keeps its own undo.
+  useEffect(() => {
+    const action = visible ? toast?.action : undefined;
+    if (!action) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = Boolean(target && (target.isContentEditable || target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'));
+      if (typing || event.shiftKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return;
+      event.preventDefault();
+      dismiss();
+      action.run();
+    };
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  }, [toast, visible, dismiss]);
+
   return (
     <div className="at-toast" data-on={visible} role="status" aria-live="polite">
       {toast && (
@@ -56,6 +74,8 @@ export default function Toasts() {
           {toast.action && (
             <button
               type="button"
+              aria-keyshortcuts="Control+Z Meta+Z"
+              title={`${toast.action.label} (${MOD_KEY}+Z)`}
               onClick={() => {
                 dismiss();
                 toast.action?.run();
