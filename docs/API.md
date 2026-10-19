@@ -57,8 +57,8 @@ Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback
 | Tier | Default limit | Applies to |
 |---|---|---|
 | `global` | 1000 / 60s | Every `/api/*` request |
-| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, and `GET /api/recall/stream`. `GET /api/memory` is a plain list and stays global-only |
-| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger` |
+| `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, `GET /api/recall/stream`, and `POST /api/memory/:id/redact`. `GET /api/memory` is a plain list and stays global-only |
+| `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild`, and all `GET`/`HEAD /api/review/*` reads |
 
 Window and limits are configurable — see [CONFIGURATION.md](CONFIGURATION.md#security). Set a tier's limit to `0` to disable it, or `ENGRAM_RATE_LIMIT_DISABLED=true` to turn the limiter off entirely.
 
@@ -74,7 +74,7 @@ Sent with `Retry-After` (seconds), `X-RateLimit-Limit`, `X-RateLimit-Remaining: 
 
 ### Single-flight whole-store operations
 
-The seven whole-store routes above hold a process-wide guard: starting one while the same operation is running returns `409` rather than interleaving two passes over the store.
+The whole-store routes above hold a process-wide guard: starting one while the same operation is running returns `409` rather than interleaving two passes over the store.
 
 ```json
 {
@@ -415,6 +415,10 @@ List memories with optional filters.
 |---|---|---|
 | `type` | `episodic` \| `semantic` \| `procedural` | Filter by type |
 | `source` | string | Filter by source |
+| `namespace` | string | Exact namespace; intersects the brain's configured scope |
+| `global` | `true` | Only memories with a null namespace; intersects `namespace` |
+| `before` | ISO date-time | Exclusive `createdAt < before`; timezone offsets normalize to UTC |
+| `tag` | string | Exact tag membership (case-sensitive) |
 | `limit` | integer 1–200 | Default: 50 |
 | `offset` | integer >= 0 | Default: 0 |
 
@@ -663,6 +667,63 @@ User: {user_message}
 
 ---
 
+### `POST /api/recall/explain`
+
+Preview the exact context that recall would assemble, with ranking, context positions and budget decisions. Uses the same retrieval, graph expansion, filters and hybrid-search setting as `/api/recall`. Embeds the query but performs no database writes: access counts, last-access timestamps and recall audit rows stay unchanged, and recall plugin hooks are not called. Uses the same `heavy` rate-limit tier as `/api/recall` (300 requests per 60 seconds by default, shared with other heavy endpoints).
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | yes | Nonempty recall query |
+| `maxTokens` | integer | — | 1–32000, default 2000 |
+| `types` | string[] | — | `episodic`, `semantic`, `procedural` |
+| `sources` | string[] | — | Restrict sources; source-null memories still pass, as in recall |
+| `since`, `until` | string | — | Inclusive ISO date-time bounds on `eventAt`, falling back to `createdAt` |
+| `tags` | string[] | — | Require every exact tag |
+| `namespace` | string | — | Narrow to this exact project within the configured access scope |
+| `global` | boolean | — | Must be `true`; narrow to NULL namespaces; mutually exclusive with `namespace` |
+| `crossNamespace` | boolean | — | Default false; allow cross-project retrieval in filter mode; forbidden in isolated mode |
+
+**Request**
+```json
+{ "query": "How do we deploy?", "maxTokens": 1500, "namespace": "/code/api" }
+```
+
+**Response `200`**
+```typescript
+{
+  context: string;
+  latencyMs: number;
+  budget: { maxTokens: number; usedTokens: number };
+  candidates: number;
+  items: Array<{
+    id: string;
+    rank: number;
+    position: number | null;
+    offset: number | null;
+    section: 'knowledge' | 'patterns' | 'events';
+    type: 'semantic' | 'procedural' | 'episodic';
+    source: string | null;
+    via: 'vector' | 'graph';
+    similarity: number;
+    score: number;
+    chars: number;
+    tokens: number;
+    included: boolean;
+    reason?: 'over_budget';
+  }>;
+}
+```
+
+`items` are in score order; `rank` starts at 1. Included items have a one-based `position` in the context text (knowledge, patterns, then events; score order within each section). `offset` is the zero-based JavaScript string offset (UTF-16 code units) of the item's bullet in `context`. Both are null for omitted items. `via: 'vector'` includes hybrid retrieval hits when enabled; `graph` identifies expansion-only hits.
+
+`chars` counts the rendered summary, or content when summary is null; `tokens = ceil(chars / 4)`. `budget.usedTokens = ceil(sum of included chars / 4)`, excluding headings, citations and other formatting, exactly as recall budgets today. Recall always includes its top memory, so used tokens can exceed the requested budget. Oversized later items get `included: false, reason: 'over_budget'`; smaller lower-ranked items may still fit. With filters, recall also caps inclusion at its existing topK of 20; candidates beyond that cap are omitted without an over-budget reason. `candidates` counts all scored candidates after filters, before budget/topK selection. No matches returns empty context/items and zero used tokens/candidates.
+
+**Errors:** `400` for malformed or unknown body fields, conflicting project filters, or isolated-mode cross-namespace access; `401` for missing/invalid authentication when configured; `429` when rate limited.
+
+---
+
 ### `GET /api/recall/stream`
 
 Server-Sent Events (SSE) endpoint for streaming recall results as they become available. Useful for UIs that want to show progressive recall.
@@ -799,23 +860,31 @@ All fields are optional; only provided fields are updated.
 
 ### `GET /api/contradictions`
 
-List all unresolved contradictions.
+List live unresolved contradiction edges with both memories in scope, ordered by edge ID.
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `limit` | integer 1–1000 | Default: 200 |
+| `offset` | integer >= 0 | Default: 0 |
+| `namespace` | string | Exact namespace for both ends, intersected with the brain's scope |
+| `global` | `true` | Both ends must have a null namespace |
+
+Unknown/repeated query parameters or invalid bounds return 400. Archived memories and tombstoned edges are excluded. `count` is this page's length; `total` is the SQL count before pagination.
 
 **Response `200`**
 ```json
 {
-  "count": 3,
-  "contradictions": [
-    {
-      "id": "contra-uuid",
-      "memoryA": "uuid-1",
-      "memoryB": "uuid-2",
-      "confidence": 0.85,
-      "explanation": "Memory A says user prefers dark mode; Memory B says user prefers light mode",
-      "detectedAt": "2026-03-24T14:30:00.000Z",
-      "resolved": false
-    }
-  ]
+  "count": 1,
+  "total": 3,
+  "contradictions": [{
+    "edgeId": "edge-uuid",
+    "confidence": 0.85,
+    "metadata": {},
+    "source": { "id": "uuid-1", "content": "First fact", "type": "semantic", "importance": 0.7, "createdAt": "2026-03-24T14:30:00.000Z" },
+    "target": { "id": "uuid-2", "content": "Second fact", "type": "semantic", "importance": 0.7, "createdAt": "2026-03-24T14:31:00.000Z" }
+  }]
 }
 ```
 
@@ -1354,6 +1423,188 @@ Get details for a specific plugin.
 Unregister a plugin.
 
 **Response `204`** — no body.
+
+---
+
+## Atlas Review
+
+All Review reads honour `namespace` and `global=true` exactly as the memory list, intersected with the brain's namespace visibility. Pair queues require **both** ends in scope. Archived memories and tombstoned edges are excluded. These endpoints use the existing authentication; all Review GET/HEAD requests consume the `whole-store` and `global` rate tiers because reads share a whole-store scan. Dismiss uses `global`; redact uses `heavy` and `global`. Normal 401/429 responses apply.
+
+### `GET /api/review/summary`
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `namespace` | string | Exact project namespace |
+| `global` | `true` | Only null-namespace memories |
+
+**Response `200`**
+```json
+{ "contradictions": 4, "duplicates": 3, "fading": 2, "secrets": 1, "fingerprint": "sha256-hex" }
+```
+
+Counts exclude dismissals. `secrets` counts memories, not individual findings. The fingerprint covers visible memory data, edges, dismissals, and decay eligibility. The app caches the most recently requested snapshot by this fingerprint; current retention is refreshed on reads.
+
+### `GET /api/review/:queue`
+
+`queue` is `contradictions`, `duplicates`, `fading`, or `secrets`; other values return 404.
+
+**Query parameters**
+
+| Param | Type | Description |
+|---|---|---|
+| `namespace` | string | Exact project namespace |
+| `global` | `true` | Only null-namespace memories |
+| `limit` | integer 1–200 | Default: 50 |
+| `offset` | integer >= 0 | Default: 0 |
+
+**Response `200`**: `{ total: number, items: (PairItem | SingleItem)[] }`. `total` is before pagination, after scope and dismissal filters; an offset past the end returns an empty `items` array. Unknown/repeated query keys or invalid values return 400 on both read endpoints.
+
+```typescript
+type MemoryLite = {
+  id: string;
+  type: 'episodic' | 'semantic' | 'procedural';
+  content: string; concept: string | null; summary: string | null;
+  importance: number; createdAt: string;
+};
+type PairItem = {
+  kind: 'pair'; a: MemoryLite; b: MemoryLite;
+  edgeId: string; strength: number; sharedWordRatio: number;
+};
+type SingleItem = {
+  kind: 'single'; memory: MemoryLite; retention: number;
+  reason: 'fading-but-important' | 'possible-secret';
+  findings?: {
+    rule: string; field: 'content' | 'concept' | 'summary';
+    start: number; end: number; length: number; preview: string;
+  }[];
+};
+```
+
+- `contradictions`: unresolved `contradicts` edges, ordered by edge ID.
+- `duplicates`: existing live `relates_to` edges with strength >= 0.95, ordered by edge ID; no new similarity computation. `sharedWordRatio` is the intersection/union of lowercase word sets in the masked content (0 for empty sets).
+- `fading`: not protected by the current decay policy, importance >= 0.6, and server retention < twice `archiveThreshold`; importance descending, then memory ID.
+- `secrets`: at least one finding in content, concept, or summary, ordered by memory ID. Findings use UTF-16 offsets into the **original** field, with exclusive `end` and `length = end - start`.
+
+Detected spans in **every Review queue's** content, concept, and summary are replaced with `[REDACTED]`. Findings expose only rule, field, offsets, length, and a masked preview (for example `ghp_****Ef12`), never the matched value or surrounding text. Embeddings, tags, source, and arbitrary metadata are omitted from `MemoryLite`.
+
+**Secret rule names**
+
+| Rule | Detects |
+|---|---|
+| `github-token` | `gh[pousr]_` tokens and `github_pat_` tokens |
+| `gitlab-token` | `glpat-` tokens |
+| `aws-access-key` | `AKIA` and `ASIA` access key IDs |
+| `ai-api-key` | OpenAI `sk-` and Anthropic `sk-ant-` style keys |
+| `cloudflare-api-token` | `cfat_` tokens |
+| `cloudflare-tunnel-token` | Base64 JSON tunnel credentials containing string `a`, `t`, and `s` fields |
+| `slack-token` | `xox[abprs]-` tokens |
+| `stripe-key` | `sk_live_` and `rk_live_` keys |
+| `jwt` | Three-part `eyJ…` tokens |
+| `private-key` | PEM private-key blocks, including incomplete blocks through end of field |
+| `url-credentials` | Username/password credentials in URLs |
+| `keyword-assignment` | Password, passwd, passphrase, pass, secret, API key, token, access key, or пароль assignments; values of at least six characters |
+| `keyword-entropy` | 32+ character runs, at least ten distinct characters and entropy >= 3.5 bits/character, within 40 characters of a secret keyword |
+
+Placeholders such as `your-api-key`, `your_api_key`, `xxx`, `<token>`, `${TOKEN}`, `***`, `example`, `sk-...`, `[REDACTED]`, and `user:password@` are excluded. UUIDs are excluded from generic detection; git SHAs and other high-entropy strings require a nearby keyword. Overlapping matches report the specific rule once.
+
+### `POST /api/review/dismiss`
+
+**Request body**
+```json
+{ "queue": "duplicates", "ids": ["uuid-1", "uuid-2"] }
+```
+
+`queue` is `duplicates`, `fading`, or `secrets`. Duplicates require two distinct IDs; single queues require one. IDs must identify live, accessible memories. Returns **204**, with no body; 400 for an invalid body and 404 for unknown, archived, or inaccessible IDs.
+
+Dismissals persist in the existing `local_meta` row `review.dismissed.v1` as queue/ID keys (pair IDs sorted). This is the simplest existing device-local metadata storage: no migration, memory tag pollution, or sync change. Repeating a dismissal is idempotent. Dismissals survive app restarts and memory edits and affect both counts and lists.
+
+Use existing `POST /api/contradictions/resolve` with `keep_both` for “not a contradiction”; `DELETE /api/memory/:id` to keep only the other duplicate; `POST /api/memory/:id/tags` with `pinned` to protect a fading memory; and existing `/api/memory/bulk/archive` and `/api/memory/bulk/tag` for batches (up to 1000 IDs).
+
+### `POST /api/memory/:id/redact`
+
+**Request body**
+```json
+{ "rules": ["github-token", "ai-api-key"] }
+```
+
+Send `{}` for all rules. `rules` is an optional array of rule names from the table above; an empty array selects none. Unknown fields, unknown rule names, duplicate rules, or a non-array `rules` value return 400.
+
+The server rescans the live memory, replaces each selected secret span with exactly `[REDACTED]`, and calls the same core update path as `PATCH /api/memory/:id` for content, concept, and summary. It updates sync timestamps/device attribution, schedules sync, and re-embeds when the normal embedding text changes. It does not archive or purge any rows, including old archived copies. Dismissal does not prevent explicit redaction.
+
+**Response `200`**
+```json
+{ "id": "uuid-1", "redacted": 3 }
+```
+
+`redacted` counts replaced spans across all three fields. No memory text or secret is returned. Missing, archived, inaccessible, or prefix-only IDs return 404; no selected findings returns 409 `{ "error": "Nothing to redact" }`.
+
+---
+
+## Atlas Map
+
+### `GET /api/map`
+
+Returns a cached 2D map of live memories visible to this brain. Coordinates lie in `[-1, 1]`. PCA-2 is refined with a deterministic force layout over existing `relates_to` links with strength ≥ 0.5; `fallback` indicates insufficient usable embeddings.
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `namespace` | string | Exact project namespace, intersected with the brain's configured scope |
+| `global` | `true` | Select only memories with a null namespace, as on `GET /api/memory` |
+
+Unknown query parameters and invalid values return `400`. Combining `namespace` and `global=true` intersects both filters and returns an empty map.
+
+**Response `200`**
+```json
+{
+  "fingerprint": "m:1:…",
+  "generatedAt": "2026-10-19T12:00:00.000Z",
+  "computeMs": 12.4,
+  "method": "fallback",
+  "explainedVariance": [0, 0],
+  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "nodes": [{
+    "id": "memory-id", "x": 0.2, "y": -0.3,
+    "type": "semantic", "importance": 0.7, "retention": 0.42,
+    "protected": false, "createdAt": "2026-10-18T12:00:00.000Z",
+    "lastAccessedAt": null, "namespace": null, "source": "rest-api",
+    "isReflection": false, "regionId": "memory-id",
+    "degree": 0, "contradictCount": 0, "label": "Database connections"
+  }],
+  "regions": [{
+    "id": "memory-id", "name": "database · connections",
+    "autoName": "database · connections", "count": 1,
+    "x": 0.2, "y": -0.3, "reflectionShare": 0,
+    "contradictions": 0, "newThisWeek": 1, "topTags": ["database"]
+  }]
+}
+```
+
+`method` is `pca2+knn` or `fallback`; `explainedVariance` contains the two PCA variance fractions. `embeddingModel`, `source`, `namespace` and `lastAccessedAt` can be null. Labels are at most 80 characters. Retention and protection use core's active decay policy and are refreshed on each response. `degree` counts incident live connections; `contradictCount` counts incident contradiction edges.
+
+Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. The ID is the member nearest the region centroid (the squared-distance medoid). Names use the top two TF-IDF terms from tags and concepts within the visible scope, ignoring `reflection*` and `mc:*` tags. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
+
+The layout is cached per project scope. New memories below the recompute threshold are placed at their similarity-weighted neighbour centroid without moving existing points. Unlinked inserts use deterministic fallback positions. A full layout runs when the count changes by at least 10% relative to its last full run, or on rebuild; recomputes use previous positions and Procrustes alignment. `generatedAt` and `computeMs` describe the last layout update, not the current request.
+
+**Response `503`** — first computation in progress, or the map computation slot is busy for another scope. Retry after the indicated delay.
+```json
+{ "error": "map not ready", "retryAfterMs": 250 }
+```
+
+An empty store returns `nodes: []`, `regions: []`, `method: "fallback"`, and zero explained variance after the first computation.
+
+---
+
+### `POST /api/map/rebuild`
+
+Force and await a full map recomputation. Accepts the same optional `namespace` / `global=true` query as `GET /api/map`; the body may be omitted or `{}`. Unknown body fields return `400`.
+
+**Response `204`** — rebuilt successfully, no body.
+
+Uses the `whole-store` rate tier and `runExclusive('map')`. Concurrent map computation returns `409`; normal authentication and `429` rate limits apply.
 
 ---
 

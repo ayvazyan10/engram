@@ -52,6 +52,7 @@ function insert(id: string, similarity: number, fields: Partial<NewMemory> = {})
 }
 
 async function retrieve(mode: string, query: string, options: RecallOptions = {}): Promise<string[]> {
+  if (mode === 'explain') return (await brain.explainRecall(query, { graphDepth: 0, ...options })).items.filter((item) => item.included).map((item) => item.id);
   if (mode === 'search') return (await brain.search(query, options)).map((memory) => memory.id);
   if (mode === 'recall') return (await brain.recall(query, { graphDepth: 0, ...options })).memories.map((m) => m.id);
   const ids: string[] = [];
@@ -62,7 +63,7 @@ async function retrieve(mode: string, query: string, options: RecallOptions = {}
   return ids;
 }
 
-describe.each(['search', 'recall', 'stream'])('%s hybrid retrieval', (mode) => {
+describe.each(['search', 'recall', 'stream', 'explain'])('%s hybrid retrieval', (mode) => {
   it.each([
     { flag: undefined, env: undefined, enabled: false },
     { flag: undefined, env: '', enabled: false },

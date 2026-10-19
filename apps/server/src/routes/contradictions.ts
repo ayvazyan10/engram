@@ -5,7 +5,7 @@ import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
 
 export const contradictionRoutes: FastifyPluginAsync = async (app) => {
   // GET /api/contradictions — list all unresolved contradictions
-  app.get<{ Querystring: { limit?: number } }>('/contradictions', {
+  app.get<{ Querystring: { limit?: number; offset?: number; namespace?: string; global?: 'true' } }>('/contradictions', {
     schema: {
       tags: ['contradictions'],
       summary: 'List unresolved contradictions',
@@ -17,6 +17,9 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
           // edges, and returning all of them made the dashboard flag nearly
           // every neuron.
           limit: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
+          offset: { type: 'integer', minimum: 0, default: 0 },
+          namespace: { type: 'string' },
+          global: { type: 'string', enum: ['true'] },
         },
       },
     },
@@ -24,11 +27,14 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
     // above documents the contract without enforcing it — an unknown key is
     // stripped in silence and the caller is answered 200 for a request that was
     // plainly a typo. This is what enforces it; see lib/strictBody.ts.
-    preValidation: strictQueryString(['limit']),
+    preValidation: strictQueryString(['limit', 'offset', 'namespace', 'global']),
     handler: async (req) => {
-      const contradictions = await brain.getContradictions(undefined, req.query.limit ?? 200);
+      const { namespace, global, offset = 0, limit = 200 } = req.query;
+      const contradictions = await brain.getContradictions(namespace, limit, offset, global === 'true');
+      const total = await brain.getContradictionCount(namespace, global === 'true');
       return {
         count: contradictions.length,
+        total,
         contradictions: contradictions.map((c) => ({
           edgeId: c.edge.id,
           confidence: c.edge.strength,

@@ -72,6 +72,10 @@ export interface RecallOptions {
   sessionId?: string;
   /** If true, recall across all namespaces regardless of brain's namespace setting */
   crossNamespace?: boolean;
+  /** Narrow to an exact project without widening the brain's access scope. */
+  namespace?: string;
+  /** Narrow to memories whose namespace is NULL. */
+  global?: true;
 }
 
 export interface RecalledMemory {
@@ -93,15 +97,59 @@ export interface RecallResult {
   latencyMs: number;
 }
 
+export interface RouteItem {
+  id: string;
+  /** One-based score order, including omitted candidates. */
+  rank: number;
+  /** One-based context order; null when omitted. */
+  position: number | null;
+  /** Zero-based UTF-16 offset of the bullet in context; null when omitted. */
+  offset: number | null;
+  section: 'knowledge' | 'patterns' | 'events';
+  type: MemoryType;
+  source: string | null;
+  via: 'vector' | 'graph';
+  similarity: number;
+  score: number;
+  /** Summary/content length used by recall's budget, excluding formatting. */
+  chars: number;
+  tokens: number;
+  included: boolean;
+  reason?: 'over_budget';
+}
+
+export interface RecallExplanation {
+  context: string;
+  latencyMs: number;
+  budget: { maxTokens: number; usedTokens: number };
+  items: RouteItem[];
+  /** Number of scored candidates after filters, before budget/topK selection. */
+  candidates: number;
+}
+
+export interface RecallPlan extends RecallExplanation {
+  memories: RecalledMemory[];
+  query: string;
+  queryVec: Float32Array;
+  options: RecallOptions;
+  startTime: number;
+  /** Preserve recall's no-audit fast path when retrieval found no candidates. */
+  hasCandidates: boolean;
+  selected: Array<{ record: Memory; score: number; similarity: number }>;
+}
+
 export const FILTER_CANDIDATE_MULTIPLIER = 4;
 
 export function hasRecallFilters(options: RecallOptions): boolean {
   return options.since !== undefined || options.until !== undefined || options.tags !== undefined
-    || options.sources !== undefined || options.types !== undefined;
+    || options.sources !== undefined || options.types !== undefined
+    || options.namespace !== undefined || options.global === true;
 }
 
 /** Shared by search, recall, and both streaming phases. */
 export function matchesMemoryFilters(memory: Memory, options: RecallOptions): boolean {
+  if (options.namespace !== undefined && memory.namespace !== options.namespace) return false;
+  if (options.global === true && memory.namespace !== null) return false;
   const effectiveDate = new Date(memory.eventAt ?? memory.createdAt).getTime();
   if (options.since !== undefined && effectiveDate < new Date(options.since).getTime()) return false;
   if (options.until !== undefined && effectiveDate > new Date(options.until).getTime()) return false;
@@ -122,6 +170,11 @@ export class ContextAssembler {
   ) {}
 
   async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
+    return this.commit(await this.plan(query, options));
+  }
+
+  /** Select, rank, budget and format using reads and embedding only. */
+  async plan(query: string, options: RecallOptions = {}): Promise<RecallPlan> {
     const startTime = Date.now();
     const {
       maxTokens = 2000,
@@ -130,8 +183,6 @@ export class ContextAssembler {
       threshold = 0.3,
       topK = 20,
       graphDepth = 2,
-      source,
-      sessionId,
       crossNamespace,
     } = options;
 
@@ -155,14 +206,6 @@ export class ContextAssembler {
     );
     for (const neighbor of graphNeighbors) {
       candidateIds.add(neighbor.id);
-    }
-
-    if (candidateIds.size === 0) {
-      return {
-        context: '',
-        memories: [],
-        latencyMs: Date.now() - startTime,
-      };
     }
 
     // Step 4: Load memory records from DB
@@ -217,6 +260,7 @@ export class ContextAssembler {
     const maxChars = maxTokens * 4;
     let totalChars = 0;
     const selected: typeof scored = [];
+    const overBudget = new Set<string>();
 
     for (const item of scored) {
       if (filtered && selected.length >= topK) break;
@@ -225,10 +269,66 @@ export class ContextAssembler {
       // lower-ranked memories can still fill the budget, and always admit the
       // top-scored memory so recall never returns an empty context.
       const charLen = (item.record.summary ?? item.record.content).length;
-      if (selected.length > 0 && totalChars + charLen > maxChars) continue;
+      if (selected.length > 0 && totalChars + charLen > maxChars) {
+        overBudget.add(item.record.id);
+        continue;
+      }
       selected.push(item);
       totalChars += charLen;
     }
+
+    const selectedIds = new Set(selected.map(({ record }) => record.id));
+    const vectorIds = new Set(vectorResults.map(({ id }) => id));
+    const items: RouteItem[] = scored.map(({ record, score, similarity }, index) => {
+      const chars = (record.summary ?? record.content).length;
+      return {
+        id: record.id,
+        rank: index + 1,
+        position: null,
+        offset: null,
+        section: record.type === 'semantic' ? 'knowledge' : record.type === 'procedural' ? 'patterns' : 'events',
+        type: record.type as MemoryType,
+        source: record.source,
+        via: vectorIds.has(record.id) ? 'vector' : 'graph',
+        similarity,
+        score,
+        chars,
+        tokens: Math.ceil(chars / 4),
+        included: selectedIds.has(record.id),
+        ...(overBudget.has(record.id) ? { reason: 'over_budget' as const } : {}),
+      };
+    });
+    const context = formatContext(selected.map((s) => s.record), new Map(items.map((item) => [item.id, item])));
+
+    return {
+      context,
+      memories: selected.map((s) => ({
+        id: s.record.id,
+        type: s.record.type as MemoryType,
+        content: s.record.content,
+        summary: s.record.summary,
+        score: s.score,
+        similarity: s.similarity,
+        source: s.record.source,
+      })),
+      latencyMs: Date.now() - startTime,
+      budget: { maxTokens, usedTokens: Math.ceil(totalChars / 4) },
+      items,
+      candidates: scored.length,
+      query,
+      queryVec,
+      options,
+      startTime,
+      hasCandidates: candidateIds.size > 0,
+      selected,
+    };
+  }
+
+  /** Persist the access statistics and audit row for a completed plan. */
+  async commit(plan: RecallPlan): Promise<RecallResult> {
+    const { context, memories, selected, query, queryVec, startTime, options: { source, sessionId } } = plan;
+    if (!plan.hasCandidates) return { context, memories, latencyMs: plan.latencyMs };
+    const db = getDb();
 
     // Update access counts in DB. These must be awaited: drizzle query builders
     // are lazy, so a bare `void db.update(...)` never sends the statement. The
@@ -252,9 +352,6 @@ export class ContextAssembler {
         })
         .where(inArray(schema.memories.id, accessed.map((s) => s.record.id)));
     }
-
-    // Format context
-    const context = formatContext(selected.map((s) => s.record));
 
     const latencyMs = Date.now() - startTime;
 
@@ -283,19 +380,7 @@ export class ContextAssembler {
 
     await db.insert(schema.contextAssemblies).values(assemblyLog);
 
-    return {
-      context,
-      memories: selected.map((s) => ({
-        id: s.record.id,
-        type: s.record.type as MemoryType,
-        content: s.record.content,
-        summary: s.record.summary,
-        score: s.score,
-        similarity: s.similarity,
-        source: s.record.source,
-      })),
-      latencyMs,
-    };
+    return { context, memories, latencyMs };
   }
 
   /**
@@ -510,10 +595,19 @@ export class ContextAssembler {
   }
 }
 
-function formatContext(memories: Memory[]): string {
+function formatContext(memories: Memory[], items?: Map<string, RouteItem>): string {
   if (memories.length === 0) return '';
 
   const sections: string[] = ['[NEURAL MEMORY CONTEXT]'];
+  let position = 0;
+  const appendMemory = (memory: Memory, line: string): void => {
+    const item = items?.get(memory.id);
+    if (item) {
+      item.position = ++position;
+      item.offset = sections.join('\n').length + 1;
+    }
+    sections.push(line);
+  };
 
   const episodic = memories.filter((m) => m.type === 'episodic');
   const semantic = memories.filter((m) => m.type === 'semantic');
@@ -522,14 +616,14 @@ function formatContext(memories: Memory[]): string {
   if (semantic.length > 0) {
     sections.push('\n[KNOWLEDGE]');
     for (const m of semantic) {
-      sections.push(`• [${m.id.slice(0, 8)} · ${m.createdAt.slice(0, 10)}] ${m.summary ?? m.content}`);
+      appendMemory(m, `• [${m.id.slice(0, 8)} · ${m.createdAt.slice(0, 10)}] ${m.summary ?? m.content}`);
     }
   }
 
   if (procedural.length > 0) {
     sections.push('\n[PATTERNS & SKILLS]');
     for (const m of procedural) {
-      sections.push(`• [${m.id.slice(0, 8)} · ${m.createdAt.slice(0, 10)}] ${m.summary ?? m.content}`);
+      appendMemory(m, `• [${m.id.slice(0, 8)} · ${m.createdAt.slice(0, 10)}] ${m.summary ?? m.content}`);
     }
   }
 
@@ -538,7 +632,7 @@ function formatContext(memories: Memory[]): string {
     for (const m of episodic) {
       const when = (m.eventAt ?? m.createdAt).slice(0, 10);
       const src = m.source ? `[${m.source}] ` : '';
-      sections.push(`• [${m.id.slice(0, 8)} · ${when}] ${src}${m.summary ?? m.content}`);
+      appendMemory(m, `• [${m.id.slice(0, 8)} · ${when}] ${src}${m.summary ?? m.content}`);
     }
   }
 
