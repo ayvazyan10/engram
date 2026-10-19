@@ -96,6 +96,8 @@ export interface BrainConfig {
   contradictionConfig?: Partial<ContradictionConfig>;
   /** Path to persist the vector index for fast startup. Defaults to {dbPath}.index */
   indexPath?: string;
+  /** Enable hybrid vector + BM25 retrieval. Defaults to ENGRAM_HYBRID_SEARCH (1/true), otherwise false. */
+  hybridSearch?: boolean;
   /** Reflection engine configuration */
   reflection?: Partial<ReflectionConfig>;
 }
@@ -252,7 +254,7 @@ export interface Collection {
   totalMemories: number;
 }
 
-/** A search result: the stored memory plus cosine similarity, ordered by hybrid relevance. */
+/** A search result: the stored memory plus cosine similarity, ordered by retrieval relevance. */
 export type SearchHit = Memory & { score: number };
 
 export interface SearchOptions extends Pick<RecallOptions, 'since' | 'until' | 'tags'> {
@@ -339,14 +341,17 @@ export class NeuralBrain {
       throw new Error('namespace is required when namespaceMode is "isolated"');
     }
     this.activeNamespace = this.namespaceMode === 'none' ? undefined : config.namespace?.trim() || undefined;
-    this.config = { ...config, namespaceMode: this.namespaceMode, namespace: this.activeNamespace };
+    this.config = {
+      ...config, namespaceMode: this.namespaceMode, namespace: this.activeNamespace,
+      hybridSearch: config.hybridSearch ?? ['1', 'true'].includes(readEnvString(process.env, 'ENGRAM_HYBRID_SEARCH') ?? ''),
+    };
     // Use the ACTIVE model's dimension, not the frozen module constant, so a
     // configured model switch cannot leave the index sized for the default. The
     // model id travels into the saved index so a cache from another model is
     // refused on load instead of scoring against incomparable vectors.
     this.vectorSearch = new VectorSearch(getEmbeddingDimension(), getEmbeddingModelId());
     this.graph = new KnowledgeGraph();
-    this.assembler = new ContextAssembler(this.vectorSearch, this.graph, this.activeNamespace, this.namespaceMode === 'filter');
+    this.assembler = new ContextAssembler(this.vectorSearch, this.graph, this.activeNamespace, this.namespaceMode === 'filter', this.config.hybridSearch);
     this.decayEngine = new DecayEngine(mergePolicy(config.decayPolicy ?? {}));
     this.contradictionDetector = new ContradictionDetector(config.contradictionConfig ?? {});
     this.webhookManager = new WebhookManager();
@@ -1234,7 +1239,7 @@ export class NeuralBrain {
   }
 
   /**
-   * Hybrid vector + full-text search across memories.
+   * Semantic search across memories, with optional hybrid full-text ranking.
    */
   async search(query: string, options: SearchOptions = {}): Promise<SearchHit[]> {
     this.assertInitialized();
@@ -1243,15 +1248,12 @@ export class NeuralBrain {
     const queryVec = await embed(query);
     const crossNamespace = this.resolveCrossNamespace(options.crossNamespace);
     const topK = options.topK ?? 10;
-    const results = hybridSearch(
-      this.vectorSearch, query, queryVec,
-      hasRecallFilters(options) ? topK * FILTER_CANDIDATE_MULTIPLIER : topK,
-      options.threshold ?? 0.3,
-      options.types,
-      this.activeNamespace,
-      crossNamespace,
-      this.namespaceMode === 'filter'
-    );
+    const candidateLimit = hasRecallFilters(options) ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const results = this.config.hybridSearch
+      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, options.threshold ?? 0.3,
+        options.types, this.activeNamespace, crossNamespace, this.namespaceMode === 'filter')
+      : this.vectorSearch.search(queryVec, candidateLimit, options.threshold ?? 0.3,
+        options.types, this.activeNamespace, crossNamespace, this.namespaceMode === 'filter');
 
     const db = getDb();
 
@@ -1265,7 +1267,7 @@ export class NeuralBrain {
       : [];
     const byId = new Map(rows.map((r) => [r.id, r]));
 
-    // Iterate the fused results to preserve retrieval ranking.
+    // Iterate results to preserve retrieval ranking.
     const hits: SearchHit[] = [];
     for (const result of results) {
       const m = byId.get(result.id);
@@ -1273,7 +1275,7 @@ export class NeuralBrain {
       if (options.sources && m.source && !options.sources.includes(m.source)) continue;
       // Namespace filtering (defense in depth — vector search already filters)
       if (this.activeNamespace && !crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
-      // RRF orders candidates; cosine preserves the public query-similarity score.
+      // Preserve cosine similarity as the public score even when RRF orders candidates.
       hits.push({ ...m, score: result.similarity });
     }
 

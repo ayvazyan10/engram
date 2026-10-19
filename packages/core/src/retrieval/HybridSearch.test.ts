@@ -24,13 +24,17 @@ let brain: NeuralBrain;
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'engram-hybrid-'));
+  vi.stubEnv('ENGRAM_DB_PATH', join(directory, 'test.db'));
+  vi.stubEnv('ENGRAM_INDEX_PATH', join(directory, 'test.db.index'));
+  vi.stubEnv('ENGRAM_HYBRID_SEARCH', undefined);
   brain = new NeuralBrain({ dbPath: join(directory, 'test.db'), namespace: 'project-a',
-    namespaceMode: 'filter', contradictionConfig: { enabled: false } });
+    namespaceMode: 'filter', hybridSearch: true, contradictionConfig: { enabled: false } });
   await brain.initialize();
 });
 
 afterEach(() => {
   brain?.shutdown();
+  vi.unstubAllEnvs();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -59,6 +63,44 @@ async function retrieve(mode: string, query: string, options: RecallOptions = {}
 }
 
 describe.each(['search', 'recall', 'stream'])('%s hybrid retrieval', (mode) => {
+  it.each([
+    { flag: undefined, env: undefined, enabled: false },
+    { flag: undefined, env: '', enabled: false },
+    { flag: undefined, env: '0', enabled: false },
+    { flag: undefined, env: 'false', enabled: false },
+    { flag: undefined, env: 'yes', enabled: false },
+    { flag: undefined, env: '1', enabled: true },
+    { flag: undefined, env: 'true', enabled: true },
+    { flag: false, env: 'true', enabled: false },
+    { flag: true, env: '0', enabled: true },
+  ])('resolves config=$flag env=$env to hybrid=$enabled', async ({ flag, env, enabled }) => {
+    brain.shutdown();
+    vi.stubEnv('ENGRAM_HYBRID_SEARCH', env);
+    brain = new NeuralBrain({ dbPath: join(directory, 'test.db'), namespace: 'project-a',
+      namespaceMode: 'filter', hybridSearch: flag, contradictionConfig: { enabled: false } });
+    await brain.initialize();
+    insert('keyword', 0, { content: 'ERR_AUTH_429' });
+    insert('semantic', 1, { content: 'An authentication failure' });
+    insert('paraphrase', 0.8, { content: 'A login problem' });
+
+    const index = new VectorSearch(2);
+    index.load([
+      { id: 'keyword', type: 'semantic', vector: new Float32Array([0, 1]) },
+      { id: 'semantic', type: 'semantic', vector: new Float32Array([1, 0]) },
+      { id: 'paraphrase', type: 'semantic', vector: new Float32Array([0.8, 0.6]) },
+    ]);
+    const vectorIds = index.search(new Float32Array([1, 0]), 10, 0.3).map((hit) => hit.id);
+    // FTS stays populated even when hybrid retrieval is disabled.
+    expect(keywordSearch('ERR_AUTH_429', 10).map((hit) => hit.id)).toEqual(['keyword']);
+    const ids = await retrieve(mode, 'ERR_AUTH_429', { threshold: 0.3 });
+    if (enabled) {
+      expect(ids[0]).toBe('keyword');
+      expect(ids).toHaveLength(3);
+    } else {
+      expect(ids).toEqual(vectorIds);
+    }
+  });
+
   it('surfaces keyword-only hits below the cosine threshold', async () => {
     insert('keyword', 0, { content: 'ERR_AUTH_429' });
     expect(await retrieve(mode, 'ERR_AUTH_429', { threshold: 0.3 })).toEqual(['keyword']);

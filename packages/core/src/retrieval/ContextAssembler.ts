@@ -3,7 +3,7 @@
  *
  * The 7-step recall algorithm:
  * 1. Embed the query
- * 2. Hybrid vector + BM25 search across all memory types
+ * 2. Vector search across all memory types, optionally fused with BM25
  * 3. Graph traversal: expand to connected memories (depth 2)
  * 4. Importance scoring: combine similarity + recency + importance + access freq
  * 5. Rank and deduplicate
@@ -18,7 +18,7 @@ import type { Memory, MemoryType } from '../db/schema.js';
 import { embed, packFP16, unpackFP16 } from '../embedding/Embedder.js';
 import { KnowledgeGraph } from '../graph/KnowledgeGraph.js';
 import { scoreMemory } from './ImportanceScorer.js';
-import { VectorSearch } from './VectorSearch.js';
+import { VectorSearch, type SearchResult } from './VectorSearch.js';
 import { hybridSearch } from './HybridSearch.js';
 
 /** Phase of the streaming recall pipeline */
@@ -117,7 +117,8 @@ export class ContextAssembler {
     private readonly vectorSearch: VectorSearch,
     private readonly graph: KnowledgeGraph,
     private readonly namespace?: string,
-    private readonly includeGlobal = false
+    private readonly includeGlobal = false,
+    private readonly hybridSearch = false
   ) {}
 
   async recall(query: string, options: RecallOptions = {}): Promise<RecallResult> {
@@ -139,10 +140,12 @@ export class ContextAssembler {
     // Step 1: Embed the query
     const queryVec = await embed(query);
 
-    // Step 2: Hybrid search (namespace-scoped when configured)
+    // Step 2: Retrieval (namespace-scoped when configured)
     const filtered = hasRecallFilters(options);
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
-    const vectorResults = hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
+    const vectorResults: Array<SearchResult & { relevance?: number }> = this.hybridSearch
+      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal)
+      : this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
     const candidateIds = new Set(vectorResults.map((r) => r.id));
 
     // Step 3: Graph expansion
@@ -335,10 +338,12 @@ export class ContextAssembler {
     // Step 1: Embed query
     const queryVec = await embed(query);
 
-    // Step 2: Hybrid search — yield results immediately as Phase 1
+    // Step 2: Retrieval — yield results immediately as Phase 1
     const filtered = hasRecallFilters(options);
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
-    const vectorResults = hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
+    const vectorResults: Array<SearchResult & { relevance?: number }> = this.hybridSearch
+      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal)
+      : this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
 
     for (const vr of vectorResults) {
       if (totalChars >= maxChars || (filtered && allYielded.length >= topK)) break;
@@ -357,7 +362,7 @@ export class ContextAssembler {
           && !(this.includeGlobal && record.namespace == null)) continue;
 
       const score = scoreMemory({
-        similarity: vr.relevance,
+        similarity: vr.relevance ?? vr.similarity,
         createdAt: record.createdAt,
         lastAccessedAt: record.lastAccessedAt,
         importance: record.importance,
