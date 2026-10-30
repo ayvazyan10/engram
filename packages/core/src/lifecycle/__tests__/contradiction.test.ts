@@ -125,7 +125,7 @@ describe('Contradiction Detection — basic', () => {
     expect(result.contradictions.hasContradictions).toBe(false);
   });
 
-  it('creates contradicts graph edges when contradiction found', async () => {
+  it('records candidates when a possible contradiction is found', async () => {
     const first = await brain.store({ content: 'The application is deployed to AWS' });
     const second = await brain.store({ content: 'The application is not deployed to AWS, it runs on GCP instead' });
 
@@ -237,6 +237,7 @@ describe('Contradiction Resolution', () => {
     const second = await brain.store({ content: 'The API does not use REST, it uses GraphQL' });
 
     if (second.contradictions.hasContradictions) {
+      await brain.completeContradictionCheck(first.memory.id, second.memory.id, 'contradiction');
       const unresolved = await brain.getContradictions();
       expect(unresolved.length).toBeGreaterThan(0);
 

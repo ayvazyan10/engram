@@ -371,7 +371,7 @@ Store a new memory. The brain automatically:
 }
 ```
 
-When no contradictions are detected, `contradictions` is `{ "count": 0, "items": [] }`.
+Store/check heuristic results are unverified candidates, never confirmed conflicts. Use the MCP verification tools to judge them. When no candidates are detected, `contradictions` is `{ "count": 0, "items": [] }`.
 
 ---
 
@@ -399,7 +399,7 @@ Bulk store memories in a single transaction. High-throughput path.
 }
 ```
 
-The `contradictions` field reports how many contradictions were detected across the batch. Use `GET /api/contradictions` to retrieve details.
+The legacy `contradictions` field reports how many stored memories nominated candidates across the batch. MCP `get_contradiction_tasks` returns pending pairs; `GET /api/contradictions` returns only confirmed pairs.
 
 The batch is embedded in one call and stored in order; `memories` accepts at most **1000** items and `ids` come back in submission order.
 
@@ -860,7 +860,7 @@ All fields are optional; only provided fields are updated.
 
 ### `GET /api/contradictions`
 
-List live unresolved contradiction edges with both memories in scope, ordered by edge ID.
+List live confirmed unresolved contradiction edges with both memories in scope, ordered by edge ID.
 
 **Query parameters**
 
@@ -892,7 +892,7 @@ Unknown/repeated query parameters or invalid bounds return 400. Archived memorie
 
 ### `POST /api/contradictions/check/:id`
 
-Manually trigger contradiction checking for a specific memory against all other memories.
+Run heuristic checking for a specific memory against all other memories. Results are unverified suggestions, not confirmed contradictions.
 
 **Response `200`**
 ```json
@@ -1503,7 +1503,7 @@ type SingleItem = {
 };
 ```
 
-- `contradictions`: unresolved `contradicts` edges, ordered by edge ID.
+- `contradictions`: confirmed unresolved `contradicts` edges, ordered by edge ID.
 - `duplicates`: existing live `relates_to` edges with strength >= 0.95, ordered by edge ID; no new similarity computation. `sharedWordRatio` is the intersection/union of lowercase word sets in the masked content (0 for empty sets).
 - `fading`: not protected by the current decay policy, importance >= 0.6, and server retention < twice `archiveThreshold`; importance descending, then memory ID.
 - `secrets`: at least one finding in content, concept, or summary, ordered by memory ID. Findings use UTF-16 offsets into the **original** field, with exclusive `end` and `length = end - start`.
@@ -1606,7 +1606,7 @@ Unknown query parameters and invalid values return `400`. Combining `namespace` 
 }
 ```
 
-`method` is `pca2+knn` or `fallback`; `explainedVariance` contains the two PCA variance fractions. `embeddingModel`, `source`, `namespace` and `lastAccessedAt` can be null. Labels are at most 80 characters. Retention and protection use core's active decay policy and are refreshed on each response. `degree` counts incident live connections; `contradictCount` counts incident contradiction edges.
+`method` is `pca2+knn` or `fallback`; `explainedVariance` contains the two PCA variance fractions. `embeddingModel`, `source`, `namespace` and `lastAccessedAt` can be null. Labels are at most 80 characters. Retention and protection use core's active decay policy and are refreshed on each response. `degree` counts incident visible live connections; `contradictCount` counts only confirmed contradiction edges. Unverified candidates (including legacy edges with no status) are excluded from graph, map, and scene data.
 
 Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. The ID is the member nearest the region centroid (the squared-distance medoid). Names rank terms within the visible scope, preferring tags and concepts and falling back to content when those provide no usable words. They ignore stopwords, short and numeric tokens, and `reflection*` / `mc:*` metadata. A dominant two-word phrase keeps its reading order; otherwise the top two terms are joined. Labels use title case, with suffixes to distinguish duplicate names. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
 
@@ -1933,7 +1933,7 @@ const socket = io('http://localhost:4901/neural');
 | Event | Direction | Payload | Description |
 |---|---|---|---|
 | `memory:stored` | server → client | `{ id, type, source }` | A new memory was stored |
-| `memory:contradiction` | server → client | `{ contradictionId, memoryA, memoryB, confidence }` | A contradiction was detected |
+| `memory:contradiction` | server → client | `{ contradictionId, memoryA, memoryB, confidence }` | No longer emitted: stores only queue unverified candidates, which the MCP client confirms |
 | `memory:contradiction_resolved` | server → client | `{ contradictionId, strategy, kept, archived }` | A contradiction was resolved |
 | `memory:decayed` | server → client | `{ id, previousImportance, newImportance, archived }` | A memory's importance was reduced by decay |
 | `recall:chunk` | server → client | `{ memories, phase }` | Partial recall results (vector or graph phase) |

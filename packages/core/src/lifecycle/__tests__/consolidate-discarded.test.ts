@@ -1,16 +1,14 @@
 /**
- * Regression test for consolidate() vs. contradiction auto-resolution.
+ * Regression test for consolidate() receiving a discarded store result.
  *
  * consolidate() destructured only `memory` from store(), ignoring the
  * `discarded` flag that says the row was archived the instant it was written.
- * With auto-resolution on, the deterministic dedup summary repeats each
- * episode's wording — negations included — so it contradicts its own sources at
- * near-identical similarity and is archived immediately. consolidate() then
- * archived the whole cluster behind that dead summary and reported it as
- * created: three episodes plus one summary, none of them live.
+ * Unverified candidates no longer trigger auto-resolution. Simulate a store
+ * reporting a discarded summary so this still guards against archiving the
+ * whole cluster behind a dead summary.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -65,7 +63,7 @@ function createTestDb(): string {
   return dbPath;
 }
 
-describe('consolidate() with contradiction auto-resolution', () => {
+describe('consolidate() with a discarded store result', () => {
   let dbPath: string;
   let brain: NeuralBrain;
 
@@ -80,6 +78,7 @@ describe('consolidate() with contradiction auto-resolution', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     brain.shutdown();
     await closeDb();
     cleanupTestDb(dbPath);
@@ -100,7 +99,14 @@ describe('consolidate() with contradiction auto-resolution', () => {
       .where(inArray(schema.memories.id, episodeIds));
     expect(before).toHaveLength(3);
 
+    const store = brain.store.bind(brain);
+    const discardedStore = vi.spyOn(brain, 'store').mockImplementationOnce(async (input) => {
+      const result = await store(input);
+      await brain.forget(result.memory.id);
+      return { ...result, discarded: true };
+    });
     const created = await brain.consolidate(3, 0.5);
+    expect(discardedStore).toHaveBeenCalledTimes(1);
 
     // Nothing consolidate() reports as created may be archived.
     if (created.length > 0) {

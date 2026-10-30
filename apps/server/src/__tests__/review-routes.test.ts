@@ -51,7 +51,7 @@ function memory(id: string, values: Partial<typeof schema.memories.$inferInsert>
   getDb().insert(schema.memories).values({ id, content: 'shared words first', type: 'episodic', importance: 0.7, createdAt: '2020-01-01T00:00:00.000Z', updatedAt: now, ...values }).run();
 }
 function edge(id: string, sourceId: string, targetId: string, values: Partial<typeof schema.memoryConnections.$inferInsert> = {}) {
-  getDb().insert(schema.memoryConnections).values({ id, sourceId, targetId, relationship: 'relates_to', strength: 0.95, ...values }).run();
+  getDb().insert(schema.memoryConnections).values({ id, sourceId, targetId, relationship: 'relates_to', strength: 0.95, metadata: JSON.stringify({ status: 'confirmed' }), ...values }).run();
 }
 function get(url: string) { return app.inject({ method: 'GET', url, headers }); }
 function post(url: string, payload: unknown) { return app.inject({ method: 'POST', url, headers: { ...headers, 'content-type': 'application/json' }, payload: JSON.stringify(payload) }); }

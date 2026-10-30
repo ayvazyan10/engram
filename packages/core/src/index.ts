@@ -55,7 +55,7 @@ export type {
 
 // Graph
 export { KnowledgeGraph } from './graph/KnowledgeGraph.js';
-export { upsertConnection, upsertConnections } from './graph/connectionStore.js';
+export { upsertConnection, upsertConnections, visibleConnection } from './graph/connectionStore.js';
 
 // Embedder
 export {

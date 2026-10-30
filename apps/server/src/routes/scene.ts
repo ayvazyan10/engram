@@ -15,7 +15,7 @@
  */
 
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, schema, unpackFP16 } from '@engram-ai-memory/core';
+import { visibleConnection, getDb, schema, unpackFP16 } from '@engram-ai-memory/core';
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { brain } from '../index.js';
 import { fitToBox, pca3, type Vec3 } from '../lib/pca.js';
@@ -293,7 +293,7 @@ async function edgeFingerprint(memory: string): Promise<string> {
       newest: sql<string | null>`max(coalesce(${schema.memoryConnections.updatedAt}, ${schema.memoryConnections.createdAt}))`,
     })
     .from(schema.memoryConnections)
-    .where(isNull(schema.memoryConnections.deletedAt));
+    .where(and(isNull(schema.memoryConnections.deletedAt), visibleConnection()));
   return `${memory}|c:${row?.total ?? 0}:${row?.newest ?? '-'}`;
 }
 
@@ -324,7 +324,7 @@ async function loadVisibleEdges(): Promise<{ edges: SceneEdge[]; stored: number 
       strength: schema.memoryConnections.strength,
     })
     .from(schema.memoryConnections)
-    .where(isNull(schema.memoryConnections.deletedAt));
+    .where(and(isNull(schema.memoryConnections.deletedAt), visibleConnection()));
 
   const edges = rows.filter(
     (row) =>

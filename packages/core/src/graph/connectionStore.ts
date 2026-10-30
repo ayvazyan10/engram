@@ -20,7 +20,7 @@
  * synchronously — no `await` is allowed in that callback.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne, or, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { NewMemoryConnection } from '../db/schema.js';
 
@@ -74,4 +74,28 @@ export function upsertConnections(db: ConnectionWriter, connections: NewMemoryCo
   for (const connection of connections) {
     upsertConnection(db, connection);
   }
+}
+
+/** SQLite is the query backend; PostgreSQL sync preserves this metadata verbatim. */
+export function contradictionStatus() {
+  return sql<string>`coalesce(json_extract(${schema.memoryConnections.metadata}, '$.status'), 'candidate')`;
+}
+
+/** Shared by recall graph loading and every dashboard graph query. */
+export function visibleConnection() {
+  return or(ne(schema.memoryConnections.relationship, 'contradicts'), eq(contradictionStatus(), 'confirmed'))!;
+}
+
+/** A candidate never resurrects a dismissed/resolved pair, in either direction. */
+export function insertContradictionCandidate(db: ConnectionWriter, connection: NewMemoryConnection): boolean {
+  const existing = db.select({ id: schema.memoryConnections.id }).from(schema.memoryConnections).where(and(
+    eq(schema.memoryConnections.relationship, 'contradicts'),
+    or(
+      and(eq(schema.memoryConnections.sourceId, connection.sourceId), eq(schema.memoryConnections.targetId, connection.targetId)),
+      and(eq(schema.memoryConnections.sourceId, connection.targetId), eq(schema.memoryConnections.targetId, connection.sourceId)),
+    ),
+  )).get();
+  if (existing) return false;
+  db.insert(schema.memoryConnections).values(connection).run();
+  return true;
 }

@@ -82,10 +82,32 @@ describe('Atlas map routes', () => {
     expect(typeof empty.computeMs).toBe('number');
   });
 
+  it('excludes legacy and pending candidates from map, scene, and neighborhood graphs', async () => {
+    seed(3);
+    getDb().insert(schema.memoryConnections).values([
+      { id: 'legacy', sourceId: 'm00000', targetId: 'm00001', relationship: 'contradicts' },
+      { id: 'pending', sourceId: 'm00000', targetId: 'm00002', relationship: 'contradicts', metadata: '{"status":"candidate"}' },
+    ]).run();
+    const map = await ready();
+    expect(map.nodes.every((node) => node.contradictCount === 0)).toBe(true);
+    expect(map.regions.every((region) => region.contradictions === 0)).toBe(true);
+    const scene = await request('/api/graph/edges');
+    expect(scene.statusCode).toBe(200);
+    expect(scene.json().edges.every((edge: { relationship: string }) => edge.relationship !== 'contradicts')).toBe(true);
+    const neighborhood = await request('/api/graph/m00000');
+    expect(neighborhood.statusCode).toBe(200);
+    expect(neighborhood.json().connections.every((edge: { relationship: string }) => edge.relationship !== 'contradicts')).toBe(true);
+    await brain.completeContradictionCheck('m00000', 'm00001', 'contradiction');
+    const confirmed = await ready();
+    expect(confirmed.nodes[0]!.contradictCount).toBe(1);
+    const confirmedScene = await request('/api/graph/edges');
+    expect(confirmedScene.json().edges.some((edge: { id: string }) => edge.id === 'legacy')).toBe(true);
+  });
+
   it('returns the contract, core retention/protection, links and automatic names', async () => {
     seed(30);
     getDb().insert(schema.memoryConnections).values({
-      id: 'contradiction', sourceId: 'm00000', targetId: 'm00001', relationship: 'contradicts', strength: 0.9,
+      id: 'contradiction', sourceId: 'm00000', targetId: 'm00001', relationship: 'contradicts', strength: 0.9, metadata: JSON.stringify({ status: 'confirmed' }),
     }).run();
     const body = await ready();
     expect(body.method).toBe('pca2+knn');

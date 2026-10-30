@@ -89,7 +89,7 @@ it.each([false, true])('matches sequential stores, including hooks and auto-reso
     deduplicated: true, memory: { id: batched.results[0]!.memory.id, tags: '["api","backend"]', importance: 0.7 },
   });
   expect(batched.results[2]!.contradictions.hasContradictions).toBe(true);
-  expect(batched.results[2]!.discarded ?? false).toBe(autoResolve);
+  expect(batched.results[2]!.discarded ?? false).toBe(false);
   expect(batched.links.some((link) => link.relationship === 'relates_to')).toBe(true);
   expect(batched.links.some((link) => link.relationship === 'contradicts')).toBe(true);
   expect(embedBatch).toHaveBeenCalledExactlyOnceWith(texts);

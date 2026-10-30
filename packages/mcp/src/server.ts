@@ -106,6 +106,7 @@ const server = new McpServer(
       '  Store a 2-3 sentence session summary as type="episodic"',
       '  with tags=["session-summary"] and importance=0.6.',
       '  When convenient, call get_distill_tasks and extract durable facts from the pending sessions yourself.',
+      '  When convenient, call get_contradiction_tasks, judge each pair yourself, and call complete_contradiction_check. keep_newest archives the older memory; use it only when the newer memory fully replaces it.',
       '  Call complete_distill with each session id and its facts; Engram stores them before archiving the raw session.',
       '',
       'RULES:',

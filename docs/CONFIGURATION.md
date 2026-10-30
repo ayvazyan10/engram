@@ -391,7 +391,9 @@ After each decay sweep, the engine can automatically consolidate clusters of old
 
 ## Contradiction Detection
 
-When a new memory is stored, the contradiction detector finds highly similar existing memories and analyzes their content for conflicting statements.
+When a new memory is stored, the heuristic detector nominates **unverified candidates**, not established contradictions. The MCP client's own model calls `get_contradiction_tasks`, judges each pair, and submits `complete_contradiction_check` with `contradiction` or `none`. Only confirmed pairs appear in contradiction lists/counts, dashboard graphs/maps, or recall graph traversal.
+
+Candidates use existing `memory_connections` rows with relationship `contradicts` and metadata status `candidate`; strength holds confidence, and metadata retains signals and suggestedStrategy. Only explicit status `confirmed` is visible as a contradiction. Legacy edges with absent/null status are candidates too, requiring no migration. Dismissal sets status `dismissed` plus a deletion tombstone; later detector nominations of the same pair in either direction cannot resurrect it. SQLite is the query backend; PostgreSQL sync stores the same metadata and tombstone fields unchanged.
 
 ### Configuration defaults
 
@@ -401,8 +403,8 @@ When a new memory is stored, the contradiction detector finds highly similar exi
 | `similarityThreshold` | `0.65` | Minimum embedding similarity to consider two memories same-topic |
 | `confidenceThreshold` | `0.4` | Minimum contradiction confidence to flag |
 | `maxCandidates` | `10` | Maximum candidate memories to evaluate per store |
-| `defaultStrategy` | `keep_both` | Default resolution strategy when auto-resolving |
-| `autoResolve` | `false` | Automatically resolve contradictions using the default strategy |
+| `defaultStrategy` | `keep_both` | Suggested resolution strategy for candidates |
+| `autoResolve` | `false` | Legacy core option; never acts on unverified candidates |
 
 ### Resolution strategies
 
@@ -411,8 +413,10 @@ When a new memory is stored, the contradiction detector finds highly similar exi
 | `keep_newest` | Archive the old memory, keep the new one |
 | `keep_oldest` | Keep the old memory, archive the new one |
 | `keep_important` | Keep whichever memory has higher importance |
-| `keep_both` | Keep both memories, link with a `contradicts` graph edge |
+| `keep_both` | Keep both memories and tombstone the resolved edge |
 | `manual` | Flag for human review, take no action |
+
+`keep_newest` archives the older memory: use it only when the newer memory fully replaces it.
 
 ### Runtime configuration
 
@@ -443,7 +447,7 @@ Subscribe external systems to memory events via HTTP callbacks.
 | `forgotten` | A memory is archived |
 | `decayed` | A decay sweep completes |
 | `consolidated` | Episodic memories are consolidated into semantic |
-| `contradiction` | A contradiction is detected on store |
+| `contradiction` | A candidate is confirmed by the connected model |
 | `reflected` | A reflection insight is stored |
 
 ### HMAC signing

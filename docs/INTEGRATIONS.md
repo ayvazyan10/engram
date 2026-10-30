@@ -2,7 +2,7 @@
 
 Engram exposes multiple integration surfaces:
 
-1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 24 tools)
+1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 26 tools)
 2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
 3. **REST API** — for everything else (Ollama, custom apps, 53 endpoints)
 4. **CLI** — terminal workflows and scripting
@@ -140,7 +140,7 @@ pnpm turbo run build --filter=@engram-ai-memory/mcp
 }
 ```
 
-**Restart your AI client** — 24 tools will appear automatically.
+**Restart your AI client** — 26 tools will appear automatically.
 
 ### Claude Code
 
@@ -538,9 +538,17 @@ Output:
 
 ---
 
+#### `get_contradiction_tasks`
+
+Returns pending unverified pairs visible to the connected namespace. Optional `limit` is an integer from 1–100 (default 20). Each task includes `source` and `target` with `id`, full `content`, `createdAt`, and `source`, plus `confidence`, `signals`, and `suggestedStrategy`. Legacy detector edges are pending candidates too.
+
+#### `complete_contradiction_check`
+
+Submit `{ sourceId, targetId, verdict: "contradiction" | "none", strategy? }` after judging the pair yourself. `none` permanently tombstones the candidate. `contradiction` confirms it for lists, counts, dashboard graphs, and recall; an optional strategy then calls the existing resolution path. `keep_newest` archives the older memory, so use it only when the newer memory fully replaces it. Strategy is invalid with `none`.
+
 #### `check_contradictions`
 
-Check a memory for contradictions, or list all unresolved contradictions.
+Check a memory for unverified possible conflicts, or list all confirmed unresolved contradictions.
 
 ```
 Input:
@@ -817,7 +825,7 @@ Asterisk has full MCP client support. Add Engram as an MCP server in `~/.asteris
 }
 ```
 
-Restart Asterisk. All 24 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
+Restart Asterisk. All 26 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
 
 If Engram is already configured for Claude Code, use the same `server.js` path and database — both tools share the same brain.
 
@@ -958,7 +966,7 @@ curl -X POST http://localhost:4901/api/webhooks \
 | `forgotten` | Memory archived |
 | `decayed` | Decay sweep completed |
 | `consolidated` | Episodes merged into semantic |
-| `contradiction` | Conflict detected on store |
+| `contradiction` | Candidate confirmed by the connected model |
 | `reflected` | A reflection insight was stored |
 
 ### Payload format

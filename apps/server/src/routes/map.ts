@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
-import { DecayEngine, getDb, schema, unpackFP16 } from '@engram-ai-memory/core';
+import { DecayEngine, visibleConnection, getDb, schema, unpackFP16 } from '@engram-ai-memory/core';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { brain } from '../index.js';
 import { isRunning, runExclusive } from '../lib/exclusive.js';
@@ -48,7 +48,7 @@ async function snapshot(scope: Scope): Promise<Snapshot> {
   const visible = new Set(rows.map((row) => row.id));
   const ids = db.select({ id: schema.memories.id }).from(schema.memories).where(and(...conditions));
   const edges = db.select().from(schema.memoryConnections).where(and(
-    isNull(schema.memoryConnections.deletedAt),
+    isNull(schema.memoryConnections.deletedAt), visibleConnection(),
     inArray(schema.memoryConnections.sourceId, ids), inArray(schema.memoryConnections.targetId, ids)
   )).orderBy(asc(schema.memoryConnections.id)).all()
     .filter((e) => e.sourceId !== e.targetId && visible.has(e.sourceId) && visible.has(e.targetId));

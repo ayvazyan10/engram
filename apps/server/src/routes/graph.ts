@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { getDb, getDeviceId, schema, upsertConnection } from '@engram-ai-memory/core';
+import { visibleConnection, getDb, getDeviceId, schema, upsertConnection } from '@engram-ai-memory/core';
 import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { brain, notifySyncWrite } from '../index.js';
 import { strictQueryString } from '../lib/strictBody.js';
@@ -61,7 +61,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
                   inArray(schema.memoryConnections.sourceId, frontier),
                   inArray(schema.memoryConnections.targetId, frontier)
                 ),
-                isNull(schema.memoryConnections.deletedAt)
+                isNull(schema.memoryConnections.deletedAt), visibleConnection()
               )
             );
 

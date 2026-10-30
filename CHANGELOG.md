@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Changed
+- Heuristic contradiction findings are now unverified candidates, including legacy edges without a status. Only model-confirmed pairs appear in contradiction queues, dashboard graphs/maps, or recall traversal; auto-resolution never acts on candidates.
+- Added MCP `get_contradiction_tasks` and `complete_contradiction_check` (26 tools total). The connected AI confirms or permanently dismisses each pair, optionally resolving confirmed conflicts. Candidate status and dismissal tombstones sync through existing SQLite/PostgreSQL connection fields.
+
 ### Fixed
 - `POST /api/recall` accepts `namespace` and `global`, as `/api/search` and `/api/recall/explain` already did. Before this, Fastify dropped both and recall was never scoped to a project.
 - `none` mode keeps an explicit namespace on store again (it was dropped from v0.4.0 on). An omitted namespace still stores NULL, and reads stay unscoped. The REST server always runs as `none`, so `POST /api/memory` with a `namespace` stored a global memory.

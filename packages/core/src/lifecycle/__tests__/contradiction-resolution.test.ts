@@ -135,10 +135,9 @@ describe('contradiction auto-resolution', () => {
     }
 
     const live = await liveIds();
-    // keep_oldest wins for the newcomer, so it is discarded — and because it is
-    // gone, the memory that would have been archived "for" it must survive.
-    expect(fresh.discarded).toBe(true);
-    expect(live.has(fresh.memory.id)).toBe(false);
+    // Heuristic suggestions never archive either side before verification.
+    expect(fresh.discarded).not.toBe(true);
+    expect(live.has(fresh.memory.id)).toBe(true);
     expect(live.has(semantic.memory.id)).toBe(true);
     expect(live.has(episodic.memory.id)).toBe(true);
   });
@@ -193,6 +192,7 @@ describe('resolveContradiction — keep_both', () => {
     });
 
     expect(second.contradictions.hasContradictions).toBe(true);
+    await brain.completeContradictionCheck(first.memory.id, second.memory.id, 'contradiction');
     expect(await brain.getContradictions()).not.toHaveLength(0);
 
     const result = await brain.resolveContradiction(first.memory.id, second.memory.id, 'keep_both');

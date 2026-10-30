@@ -43,7 +43,7 @@ Most AI tools forget everything the moment a session ends. Engram solves this by
 | **Memory Reflection** | AI-driven insight engine — the AI connected over MCP reasons over your memories to surface patterns, knowledge gaps, trends, and contradictions. Engram runs no LLM of its own — no API keys, no external calls. |
 | **Atlas dashboard** | Map, Recall, Review, Timeline, Insights and Settings; light/dark and ⌘K command palette |
 | **Optional Namespaces** | Disabled by default; enable filtering or strict isolation per project/agent |
-| **Contradiction Detection** | Auto-detect conflicting memories, 5 resolution strategies (keep_newest/oldest/important/both/manual) |
+| **Contradiction Detection** | Heuristics nominate candidates; the connected AI verifies them before using 5 resolution strategies (keep_newest/oldest/important/both/manual) |
 | **Embedding Upgradability** | Swap embedding models, store model ID alongside vectors, batch re-embedding pipeline |
 | **Streaming Recall** | SSE endpoint — high-confidence memories first, graph-expanded backfill later |
 | **Index Persistence** | Save/load vector index to disk for fast startup (27-37x speedup) |
@@ -66,7 +66,7 @@ Every time an AI connected to Engram receives a query:
 2. **Searches** its vector index for similar past memories
 3. **Expands** via the knowledge graph to retrieve related concepts
 4. **Scores** candidates by semantic similarity + recency + importance + access frequency
-5. **Checks** for contradictions with existing memories
+5. **Queues** possible contradictions for verification by the connected AI
 6. **Injects** the assembled context into the AI's prompt
 
 The AI responds with awareness of everything it has ever learned. After the exchange, the response is stored as a new memory — the brain grows continuously.
@@ -96,7 +96,7 @@ CLI            ──direct───────→ ┘
 
 | Integration | Method | How |
 |---|---|---|
-| **Claude Code** | MCP (24 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
+| **Claude Code** | MCP (26 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
 | **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/skills/ayvazyan10/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
 | **Any app** | Direct REST API | `POST /api/recall` + `POST /api/memory` |
@@ -292,14 +292,14 @@ If you installed via `engram setup`, you can point to the local build instead:
 }
 ```
 
-Restart your AI client. **24 tools** are now available:
+Restart your AI client. **26 tools** are now available:
 
 | Category | Tools |
 |---|---|
 | **Memory** | `store_memory`, `search_memory`, `recall_context`, `add_knowledge`, `forget` |
 | **Stats & Health** | `memory_stats`, `index_status`, `embedding_status` |
 | **Lifecycle** | `decay_sweep`, `decay_policy`, `re_embed` |
-| **Contradictions** | `check_contradictions`, `resolve_contradiction` |
+| **Contradictions** | `get_contradiction_tasks`, `complete_contradiction_check`, `check_contradictions`, `resolve_contradiction` |
 | **Reflection** | `request_reflection`, `store_reflection`, `get_reflections` |
 | **Distillation** | `get_distill_tasks`, `complete_distill` |
 | **Tags** | `list_tags`, `tag_memory` |
@@ -357,7 +357,7 @@ Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan
 
 Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
 
-> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 24 MCP tools are then available in Claude Desktop.
+> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 26 MCP tools are then available in Claude Desktop.
 
 ---
 
@@ -366,7 +366,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | Package | Description | npm |
 |---|---|---|
 | `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, reflection | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
-| `@engram-ai-memory/mcp` | MCP Server — 24 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
+| `@engram-ai-memory/mcp` | MCP Server — 26 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
 | `@engram-ai-memory/cli` | CLI — store, search, recall, reflections, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
 | `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (53 endpoints) | — |
 | `@engram-ai-memory/web` | Atlas dashboard — Map, Recall, Review, Timeline, Insights, Settings | — |
@@ -519,11 +519,12 @@ Tool: `store_memory` → `search_memory` · Demonstrates cross-session persisten
 ```
 User (day 1): "Production runs on PostgreSQL 15"
 User (day 30): "We migrated prod to SQLite WAL last month"
-Claude: [store_memory returns contradictions detected]
-→ calls resolve_contradiction(strategy: "keep_newest")
+Claude: [store_memory queues possible contradictions]
+→ calls get_contradiction_tasks and judges the pair
+→ calls complete_contradiction_check(verdict: "contradiction", strategy: "keep_newest")
 ```
 
-Tool: `store_memory` + `resolve_contradiction` · Engram flags the conflict with 0.87 confidence and archives the stale belief.
+Tools: `store_memory`, `get_contradiction_tasks`, `complete_contradiction_check`. Heuristics only nominate candidates. The connected model verifies the conflict and uses `keep_newest` only when the new memory fully replaces the older one.
 
 ---
 

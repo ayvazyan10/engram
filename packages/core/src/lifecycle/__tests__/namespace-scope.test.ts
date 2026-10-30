@@ -136,10 +136,10 @@ describe('mutation scope', () => {
   it('filters contradiction connections by both endpoints, including global pairs', async () => {
     const otherGlobal = (await brain.store({ content: 'Another global fact', namespace: null })).memory;
     getDb().insert(schema.memoryConnections).values([
-      { id: 'own-global', sourceId: own.id, targetId: global.id, relationship: 'contradicts' },
-      { id: 'global-global', sourceId: global.id, targetId: otherGlobal.id, relationship: 'contradicts' },
-      { id: 'own-foreign', sourceId: own.id, targetId: foreign.id, relationship: 'contradicts' },
-      { id: 'foreign-global', sourceId: foreign.id, targetId: global.id, relationship: 'contradicts' },
+      { id: 'own-global', sourceId: own.id, targetId: global.id, relationship: 'contradicts', metadata: JSON.stringify({ status: 'confirmed' }) },
+      { id: 'global-global', sourceId: global.id, targetId: otherGlobal.id, relationship: 'contradicts', metadata: JSON.stringify({ status: 'confirmed' }) },
+      { id: 'own-foreign', sourceId: own.id, targetId: foreign.id, relationship: 'contradicts', metadata: JSON.stringify({ status: 'confirmed' }) },
+      { id: 'foreign-global', sourceId: foreign.id, targetId: global.id, relationship: 'contradicts', metadata: JSON.stringify({ status: 'confirmed' }) },
     ]).run();
     expect(new Set((await brain.getContradictions()).map((c) => c.edge.id))).toEqual(new Set(['own-global', 'global-global']));
     expect((await brain.getContradictions('A')).map((c) => c.edge.id)).toEqual(['own-global']);

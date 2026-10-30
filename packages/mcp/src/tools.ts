@@ -197,7 +197,7 @@ server.tool(
             text: JSON.stringify({
               ...result,
               message: result.hasContradictions
-                ? `Found ${result.contradictions.length} contradiction(s) for memory ${memoryId}`
+                ? `Found ${result.contradictions.length} unverified possible contradiction(s) for memory ${memoryId}`
                 : `No contradictions found for memory ${memoryId}`,
             }),
           },
@@ -232,7 +232,7 @@ server.tool(
 // ─── Tool: resolve_contradiction ─────────────────────────────────────────────
 server.tool(
   'resolve_contradiction',
-  'Resolve a contradiction between two memories using a strategy: keep_newest (archive old), keep_oldest (archive new), keep_important (archive lower importance), keep_both (keep both, edge remains), manual (no action).',
+  'Resolve a contradiction between two memories using a strategy: keep_newest (archive old), keep_oldest (archive new), keep_important (archive lower importance), keep_both (keep both, resolve edge), manual (no action).',
   {
     sourceId: z.string().describe('ID of the first memory in the contradiction'),
     targetId: z.string().describe('ID of the second memory in the contradiction'),
@@ -494,6 +494,49 @@ server.tool(
         },
       ],
     };
+  }
+);
+
+// The connected model verifies heuristic nominations before they become edges.
+server.tool(
+  'get_contradiction_tasks',
+  'Get unverified possible contradictions. Judge each pair yourself, then call complete_contradiction_check. Similarity and heuristic signals are not proof of a conflict.',
+  { limit: z.number().int().min(1).max(100).optional().default(20) },
+  { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  async ({ limit }) => {
+    try {
+      await ensureInitialized();
+      const tasks = await brain.getContradictionTasks(limit);
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ tasks }) }] };
+    } catch (err: unknown) {
+      console.error('[engram-mcp] get_contradiction_tasks failed:', err);
+      throw err;
+    }
+  }
+);
+
+server.tool(
+  'complete_contradiction_check',
+  'Record YOUR judgment of a candidate: none permanently dismisses it; contradiction confirms it. An optional strategy also resolves it. keep_newest archives the older memory: use only when the newer memory fully replaces it.',
+  {
+    sourceId: z.string().min(1), targetId: z.string().min(1),
+    verdict: z.enum(['contradiction', 'none']),
+    strategy: z.enum(['keep_newest', 'keep_oldest', 'keep_important', 'keep_both', 'manual']).optional(),
+  },
+  { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  async ({ sourceId, targetId, verdict, strategy }) => {
+    try {
+      await ensureInitialized();
+      if (verdict === 'none' && strategy) throw new Error('strategy requires verdict contradiction');
+      await brain.completeContradictionCheck(sourceId, targetId, verdict);
+      syncEngine?.notifyWrite();
+      const resolution = strategy ? await brain.resolveContradiction(sourceId, targetId, strategy) : undefined;
+      if (resolution?.resolved) syncEngine?.notifyWrite();
+      return { content: [{ type: 'text' as const, text: JSON.stringify({ sourceId, targetId, verdict, resolution }) }] };
+    } catch (err: unknown) {
+      console.error('[engram-mcp] complete_contradiction_check failed:', err);
+      throw err;
+    }
   }
 );
 

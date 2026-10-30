@@ -54,12 +54,6 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       // Broadcast the full record: the dashboard appends this straight into its
       // store, and a {id,type} stub left content undefined and crashed rendering.
       realtime?.emit('memory:stored', result.memory);
-      if (result.contradictions.hasContradictions) {
-        realtime?.emit('memory:contradiction', {
-          memoryId: result.memory.id,
-          contradictions: result.contradictions.contradictions,
-        });
-      }
       reply.code(201);
       return { ...result, deduplicated: result.deduplicated ?? false };
     },

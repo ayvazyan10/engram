@@ -23,7 +23,7 @@ import {
   getEmbeddingModelId, getModelDimension, getEmbeddingDimension,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
-import { upsertConnection, upsertConnections } from './graph/connectionStore.js';
+import { contradictionStatus, insertContradictionCandidate, upsertConnections, visibleConnection } from './graph/connectionStore.js';
 import { getDeviceId } from './sync/deviceId.js';
 import { EpisodicMemory } from './memory/EpisodicMemory.js';
 import { ProceduralMemory } from './memory/ProceduralMemory.js';
@@ -35,11 +35,10 @@ import type { DecayPolicyConfig } from './lifecycle/DecayPolicy.js';
 import { mergePolicy } from './lifecycle/DecayPolicy.js';
 import { readDedupThreshold, readEnvString } from './lifecycle/envConfig.js';
 import { ContradictionDetector } from './lifecycle/ContradictionDetector.js';
-import { decideResolution, planAutoResolution, writeResolution } from './lifecycle/contradictionResolution.js';
+import { decideResolution, writeResolution } from './lifecycle/contradictionResolution.js';
 import type {
   ContradictionCheckResult,
   ContradictionConfig,
-  Contradiction,
   ResolutionStrategy,
 } from './lifecycle/ContradictionDetector.js';
 import { WebhookManager } from './webhooks/WebhookManager.js';
@@ -127,7 +126,7 @@ export interface StoreResult {
   memory: Memory;
   /** True when tags and importance were merged into an existing live memory. */
   deduplicated?: boolean;
-  /** Contradiction check results (empty if detection is disabled) */
+  /** Unverified heuristic candidates (empty if detection is disabled). */
   contradictions: ContradictionCheckResult;
   /**
    * True when contradiction auto-resolution archived this memory immediately
@@ -613,7 +612,7 @@ export class NeuralBrain {
     const loadedConnections = await db
       .select()
       .from(schema.memoryConnections)
-      .where(isNull(schema.memoryConnections.deletedAt));
+      .where(and(isNull(schema.memoryConnections.deletedAt), visibleConnection()));
     const allConnections = this.namespaceMode === 'isolated'
       ? loadedConnections.filter((connection) =>
           activeIds.has(connection.sourceId) && activeIds.has(connection.targetId))
@@ -830,7 +829,7 @@ export class NeuralBrain {
                 inArray(schema.memoryConnections.sourceId, slice),
                 inArray(schema.memoryConnections.targetId, slice)
               ),
-              isNull(schema.memoryConnections.deletedAt)
+              isNull(schema.memoryConnections.deletedAt), visibleConnection()
             )
           );
 
@@ -1079,8 +1078,9 @@ export class NeuralBrain {
         record.namespace,
       );
 
-      // Create 'contradicts' graph edges for detected contradictions
+      // Persist nominations only; verification adds them to the live graph.
       if (contradictionResult.hasContradictions) {
+        const queued = [];
         for (const c of contradictionResult.contradictions) {
           const edgeId = uuidv4();
           const edge: NewMemoryConnection = {
@@ -1091,6 +1091,7 @@ export class NeuralBrain {
             strength: c.confidence,
             bidirectional: true,
             metadata: JSON.stringify({
+              status: 'candidate',
               signals: c.signals.map((s) => s.type),
               suggestedStrategy: c.suggestedStrategy,
             }),
@@ -1099,23 +1100,12 @@ export class NeuralBrain {
             deviceId,
           };
 
-          upsertConnection(db, edge);
-          this.graph.addEdge({
-            sourceId: edge.sourceId,
-            targetId: edge.targetId,
-            relationship: 'contradicts',
-            strength: edge.strength ?? 1.0,
-            bidirectional: true,
-          });
+          if (insertContradictionCandidate(db, edge)) queued.push(c);
         }
-
-        // Auto-resolve if enabled
-        if (this.contradictionDetector.getConfig().autoResolve) {
-          await this.autoResolveContradictions(contradictionResult.contradictions);
-        }
+        contradictionResult = { ...contradictionResult, contradictions: queued, hasContradictions: queued.length > 0 };
       }
-    } catch {
-      // Contradiction detection is best-effort — don't fail the store
+    } catch (error: unknown) {
+      console.error('[engram] Contradiction candidate detection failed:', error);
     }
 
     const [inserted] = await db
@@ -1124,11 +1114,7 @@ export class NeuralBrain {
       .where(eq(schema.memories.id, record.id!))
       .limit(1);
 
-    // Auto-resolution can discard the memory we just created: keep_oldest /
-    // keep_important forget() the newest row, which is always this one. Because
-    // forget is a soft-delete the row still reads back, so store() used to
-    // report success, fire a 'stored' webhook alongside 'forgotten', and hand
-    // back an id that can never be recalled.
+    // Another writer may have archived the row while detection was running.
     if (inserted!.archivedAt) {
       await this.refreshIndexBaseline();
       return { memory: inserted!, contradictions: contradictionResult, discarded: true };
@@ -1142,21 +1128,10 @@ export class NeuralBrain {
       importance: inserted!.importance,
     });
 
-    if (contradictionResult.hasContradictions) {
-      this.webhookManager.fire('contradiction', {
-        memoryId: inserted!.id,
-        contradictions: contradictionResult.contradictions.map((c) => ({
-          existingMemoryId: c.existingMemoryId,
-          confidence: c.confidence,
-          suggestedStrategy: c.suggestedStrategy,
-        })),
-      });
-    }
-
     // Fire plugin hooks
     void this.pluginRegistry.runHook('onStore', {
       memory: inserted!,
-      contradictions: contradictionResult.contradictions.length,
+      contradictions: 0,
     });
 
     // Count the store toward reflection. When it becomes due, the connected AI
@@ -2311,7 +2286,7 @@ export class NeuralBrain {
   /**
    * Get all unresolved contradictions (memories linked by 'contradicts' edges).
    */
-  private contradictionConditions(namespace?: string, global?: boolean): SQL[] {
+  private contradictionConditions(namespace?: string, global?: boolean, status = 'confirmed'): SQL[] {
     const conditions = this.liveConditions();
     // Existing core callers use soft filter-mode visibility (project + shared).
     // REST supplies the global selector, even when false, for exact list scope.
@@ -2326,6 +2301,7 @@ export class NeuralBrain {
     const visible = getDb().select({ id: schema.memories.id }).from(schema.memories).where(and(...conditions));
     const edges = [
       eq(schema.memoryConnections.relationship, 'contradicts'),
+      eq(contradictionStatus(), status),
       isNull(schema.memoryConnections.deletedAt),
       inArray(schema.memoryConnections.sourceId, visible),
       inArray(schema.memoryConnections.targetId, visible),
@@ -2343,7 +2319,11 @@ export class NeuralBrain {
       .where(and(...this.contradictionConditions(namespace, global))).get()!.total;
   }
 
-  async getContradictions(namespace?: string, limit?: number, offset = 0, global?: boolean): Promise<Array<{
+  async getContradictions(namespace?: string, limit?: number, offset = 0, global?: boolean) {
+    return this.getContradictionPairs(namespace, limit, offset, global);
+  }
+
+  private async getContradictionPairs(namespace?: string, limit?: number, offset = 0, global?: boolean, status = 'confirmed'): Promise<Array<{
     edge: { id: string; sourceId: string; targetId: string; strength: number; metadata: string };
     source: Memory;
     target: Memory;
@@ -2354,13 +2334,49 @@ export class NeuralBrain {
       id: schema.memoryConnections.id, sourceId: schema.memoryConnections.sourceId,
       targetId: schema.memoryConnections.targetId, strength: schema.memoryConnections.strength, metadata: schema.memoryConnections.metadata,
     }).from(schema.memoryConnections)
-      .where(and(...this.contradictionConditions(namespace, global)))
+      .where(and(...this.contradictionConditions(namespace, global, status)))
       .orderBy(schema.memoryConnections.id).limit(limit ?? -1).offset(offset).all();
     const referencedIds = [...new Set(edges.flatMap((e) => [e.sourceId, e.targetId]))];
     const rows = referencedIds.length ? db.select().from(schema.memories)
       .where(inArray(schema.memories.id, referencedIds)).all() : [];
     const byId = new Map(rows.map((m) => [m.id, m]));
     return edges.map((edge) => ({ edge, source: byId.get(edge.sourceId)!, target: byId.get(edge.targetId)! }));
+  }
+
+  /** Pending nominations include legacy edges with no explicit status. */
+  async getContradictionTasks(limit = 20) {
+    const pairs = await this.getContradictionPairs(undefined, limit, 0, undefined, 'candidate');
+    return pairs.map(({ edge, source, target }) => {
+      const metadata = JSON.parse(edge.metadata) as { signals?: string[]; suggestedStrategy?: ResolutionStrategy };
+      return {
+        source: { id: source.id, content: source.content, createdAt: source.createdAt, source: source.source },
+        target: { id: target.id, content: target.content, createdAt: target.createdAt, source: target.source },
+        confidence: edge.strength, signals: metadata.signals ?? [], suggestedStrategy: metadata.suggestedStrategy,
+      };
+    });
+  }
+
+  /** Only a visible, live candidate can receive the client's verdict. */
+  async completeContradictionCheck(sourceId: string, targetId: string, verdict: 'contradiction' | 'none'): Promise<void> {
+    const pairs = await this.getContradictionPairs(undefined, undefined, 0, undefined, 'candidate');
+    const pair = pairs.find(({ edge }) =>
+      (edge.sourceId === sourceId && edge.targetId === targetId) ||
+      (edge.sourceId === targetId && edge.targetId === sourceId));
+    if (!pair || !this.canAccessNamespace(pair.source.namespace) || !this.canAccessNamespace(pair.target.namespace)) {
+      throw new Error('Contradiction candidate not found');
+    }
+    const { edge } = pair;
+    const now = new Date().toISOString();
+    getDb().update(schema.memoryConnections).set({
+      metadata: JSON.stringify({ ...JSON.parse(edge.metadata), status: verdict === 'contradiction' ? 'confirmed' : 'dismissed' }),
+      deletedAt: verdict === 'none' ? now : null, updatedAt: now, deviceId: getDeviceId(),
+    }).where(eq(schema.memoryConnections.id, edge.id)).run();
+    if (verdict === 'contradiction') {
+      this.graph.addEdge({ sourceId: edge.sourceId, targetId: edge.targetId, relationship: 'contradicts',
+        strength: edge.strength, bidirectional: true });
+      this.webhookManager.fire('contradiction', { memoryId: edge.sourceId,
+        contradictions: [{ existingMemoryId: edge.targetId, confidence: edge.strength }] });
+    }
   }
 
   /**
@@ -2419,34 +2435,6 @@ export class NeuralBrain {
     }
 
     return { resolved: true, archivedId, keptId };
-  }
-
-  /**
-   * Auto-resolve a whole batch of contradictions using the suggested strategies.
-   *
-   * The batch is planned before any of it is applied. Resolving pair by pair
-   * let strategies that disagree about the new memory both take effect: one
-   * pair archived an existing memory in favour of the newcomer, the next pair
-   * archived the newcomer, and the existing memory's fact was left with no
-   * replacement at all. See lifecycle/contradictionResolution.
-   *
-   * Every contradiction already carries the id of the memory that triggered it
-   * (`c.newMemoryId`, stamped by the detector), so no separate id is passed in.
-   */
-  private async autoResolveContradictions(contradictions: Contradiction[]): Promise<void> {
-    if (contradictions.length === 0) return;
-
-    const db = getDb();
-    const ids = [...new Set(contradictions.flatMap((c) => [c.newMemoryId, c.existingMemoryId]))];
-    const rows = await db
-      .select()
-      .from(schema.memories)
-      .where(inArray(schema.memories.id, ids));
-    const byId = new Map(rows.map((row) => [row.id, row] as const));
-
-    for (const planned of planAutoResolution(contradictions, byId)) {
-      await this.resolveContradiction(planned.sourceId, planned.targetId, planned.strategy);
-    }
   }
 
   /** Get the current contradiction detection config. */

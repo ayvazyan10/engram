@@ -1,13 +1,14 @@
 /**
- * ContradictionDetector — identifies when new memories conflict with existing ones.
+ * ContradictionDetector — nominates possible conflicts for model verification.
  *
  * How it works:
  *   1. When a new memory is stored, find highly similar existing memories (same topic).
  *   2. Analyze content for negation/contradiction signals.
- *   3. If contradictions are found, flag them with resolution strategies.
+ *   3. Record possible conflicts with suggested resolution strategies.
  *
  * This is a heuristic system — it uses embedding similarity to find candidates,
- * then pattern-based content analysis to detect actual contradictions. No LLM needed.
+ * then pattern-based analysis to nominate unverified candidates. The connected model
+ * judges whether each candidate actually contradicts.
  */
 
 import { and, inArray, isNull } from 'drizzle-orm';
@@ -66,9 +67,9 @@ export interface ContradictionSignal {
 }
 
 export interface ContradictionCheckResult {
-  /** Whether any contradictions were found */
+  /** Whether any unverified candidates were found (legacy field name). */
   hasContradictions: boolean;
-  /** List of detected contradictions, ordered by confidence */
+  /** Unverified candidates, ordered by confidence (legacy field name). */
   contradictions: Contradiction[];
   /** How many candidate memories were evaluated */
   candidatesChecked: number;
@@ -87,7 +88,7 @@ export interface ContradictionConfig {
   maxCandidates: number;
   /** Default resolution strategy when auto-resolving (default: 'keep_both') */
   defaultStrategy: ResolutionStrategy;
-  /** If true, auto-resolve contradictions using the default strategy (default: false) */
+  /** Legacy option (default: false); never resolves unverified candidates. */
   autoResolve: boolean;
 }
 

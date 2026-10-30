@@ -56,7 +56,7 @@ server.tool(
     };
 
     if (result.contradictions.hasContradictions) {
-      response.contradictions = {
+      response.contradictionCandidates = {
         count: result.contradictions.contradictions.length,
         items: result.contradictions.contradictions.map((c) => ({
           existingMemoryId: c.existingMemoryId,
@@ -65,7 +65,7 @@ server.tool(
           suggestedStrategy: c.suggestedStrategy,
         })),
       };
-      response.message = `Memory stored with ${result.contradictions.contradictions.length} contradiction(s) detected`;
+      response.message = `Memory stored with ${result.contradictions.contradictions.length} possible contradiction(s) queued for review`;
     }
 
     return {
