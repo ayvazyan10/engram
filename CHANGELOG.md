@@ -9,6 +9,19 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-10-30
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.11.2 (core and mcp republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.11.2. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.8.0 and `@engram-ai-memory/web` 0.7.0.
+
+### Fixed
+
+- The session-end hook that `engram setup` installs never stored a summary: it looked for transcript entries of type `message`, but Claude Code writes them as type `assistant`.
+- Setup hooks store memories in the current git project and recall project plus shared memories. Updates refresh installed hooks and replace legacy hook paths without duplicate registration.
+
+### Added
+
+- Local setup installs a SessionStart hook that runs the built MCP session-start script with the configured database.
+
 ## [0.11.1] — 2026-10-30
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.11.1, and the Claude Desktop extension bundle 0.11.1. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.8.0 and `@engram-ai-memory/web` 0.7.0.
@@ -654,7 +667,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/ayvazyan10/engram/releases/tag/v0.11.2
 [0.11.1]: https://github.com/ayvazyan10/engram/releases/tag/v0.11.1
 [0.11.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.11.0
 [0.10.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.10.0

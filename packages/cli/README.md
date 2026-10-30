@@ -36,7 +36,7 @@ reports the step as skipped. It never writes `~/.mcp.json`; no MCP client reads
 that path.
 
 Separately, if `~/.claude` exists, setup also registers Engram at user scope in
-`~/.claude.json` and installs the recall and session-end hooks — so plain
+`~/.claude.json` and installs the recall, SessionStart, and session-end hooks — so plain
 `engram setup` wires up Claude Code on its own. Skip that with
 `--no-claude-hooks`.
 
@@ -203,3 +203,5 @@ process it starts — change them with `engram configure set`.
 ## License
 
 MIT
+
+Local setup scopes stored memories to the absolute git project root and recalls both project and shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart runs the local MCP context script; `engram update` refreshes previously installed hooks.

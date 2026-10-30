@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { spawnSync } from 'child_process';
 
 import {
   ConfigParseError,
@@ -19,7 +20,7 @@ import {
   updateJsonConfig,
   writeJsonConfig,
   CLAUDE_HOOKS,
-} from '../claudeSetup.js';
+} from '../claudeSetup.ts';
 
 describe('renderHook', () => {
   it('replaces every API-base placeholder', () => {
@@ -35,41 +36,43 @@ describe('renderHook', () => {
 
 describe('registerHook', () => {
   it('adds a hook for an event', () => {
-    const s: Record<string, unknown> = {};
-    registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
+    let s: Record<string, unknown> = {};
+    s = registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
     const entries = (s as any).hooks.UserPromptSubmit;
     expect(entries).toHaveLength(1);
     expect(entries[0].hooks[0]).toMatchObject({ type: 'command', command: "'/a/engram-recall.sh'", timeout: 8 });
   });
 
   it('is idempotent across repeated runs', () => {
-    const s: Record<string, unknown> = {};
-    for (let i = 0; i < 3; i++) registerHook(s, 'SessionEnd', '/a/engram-session-end.sh', 15);
+    let s: Record<string, unknown> = {};
+    for (let i = 0; i < 3; i++) s = registerHook(s, 'SessionEnd', '/a/engram-session-end.sh', 15);
     expect((s as any).hooks.SessionEnd).toHaveLength(1);
   });
 
   it('dedupes by script basename, not exact path (never fires twice)', () => {
-    const s: Record<string, unknown> = {};
-    registerHook(s, 'UserPromptSubmit', '/home/.engram/hooks/engram-recall.sh', 8);
+    let s: Record<string, unknown> = {};
+    s = registerHook(s, 'UserPromptSubmit', '/home/.engram/hooks/engram-recall.sh', 8);
     // Same script under a different directory must not be added again.
-    registerHook(s, 'UserPromptSubmit', '/home/.claude/hooks/engram-recall.sh', 8);
-    expect((s as any).hooks.UserPromptSubmit).toHaveLength(1);
+    s = registerHook(s, 'UserPromptSubmit', '/home/.claude/hooks/engram-recall.sh', 8);
+    expect((s as { hooks: { UserPromptSubmit: unknown[] } }).hooks.UserPromptSubmit).toEqual([
+      { matcher: '', hooks: [{ type: 'command', command: "'/home/.claude/hooks/engram-recall.sh'", timeout: 8 }] },
+    ]);
   });
 
   it('preserves unrelated existing hooks for the same event', () => {
-    const s: Record<string, any> = {
+    let s: Record<string, unknown> = {
       hooks: { UserPromptSubmit: [{ matcher: '', hooks: [{ type: 'command', command: '/other/thing.sh' }] }] },
     };
-    registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
-    expect(s.hooks.UserPromptSubmit).toHaveLength(2);
+    s = registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
+    expect((s.hooks as Record<string, unknown>).UserPromptSubmit).toHaveLength(2);
   });
 
   it('still dedupes against an entry written quoted by a previous run', () => {
-    const s: Record<string, any> = {
+    let s: Record<string, unknown> = {
       hooks: { UserPromptSubmit: [{ matcher: '', hooks: [{ type: 'command', command: "'/home/me/My Files/engram-recall.sh'" }] }] },
     };
-    registerHook(s, 'UserPromptSubmit', '/home/me/My Files/engram-recall.sh', 8);
-    expect(s.hooks.UserPromptSubmit).toHaveLength(1);
+    s = registerHook(s, 'UserPromptSubmit', '/home/me/My Files/engram-recall.sh', 8);
+    expect((s.hooks as Record<string, unknown>).UserPromptSubmit).toHaveLength(1);
   });
 });
 
@@ -318,6 +321,90 @@ describe('CLAUDE_HOOKS manifest', () => {
     const events = CLAUDE_HOOKS.map((h) => h.event);
     expect(events).toContain('UserPromptSubmit');
     expect(events).toContain('SessionEnd');
+    expect(events).toContain('SessionStart');
     for (const h of CLAUDE_HOOKS) expect(h.file).toMatch(/^engram-.*\.sh$/);
+  });
+});
+
+describe('rendered hook scripts', () => {
+  let dir: string;
+  let calls: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-shell-'));
+    calls = path.join(dir, 'calls');
+    fs.writeFileSync(path.join(dir, 'curl'), `#!/bin/bash
+jq -cn --args '$ARGS.positional' -- "$@" >> "$CALLS"
+[ "$FAIL_CURL" = 1 ] && exit 1
+printf '%s' '{"memories":[{"id":"a","content":"remember this","similarity":0.8}],"context":"remember this"}'
+`, { mode: 0o755 });
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  function run(file: string, cwd: string, fail = false): { status: number | null; stdout: string } {
+    const transcript = path.join(dir, 'transcript');
+    fs.writeFileSync(transcript, JSON.stringify({ type: 'assistant', message: {
+      role: 'assistant', content: 'A sufficiently long assistant message to save for future recall.',
+    } }));
+    const script = installHookScript(path.join(__dirname, '../../templates'), dir, file, 'http://example', dir, path.join(dir, 'db'));
+    return execute(script, JSON.stringify({
+      cwd, prompt: 'Please recall our previous work', session_id: 'test', transcript_path: transcript,
+    }), fail);
+
+  }
+
+  function execute(script: string, input: string, fail = false): { status: number | null; stdout: string } {
+    const inputPath = path.join(dir, 'input');
+    const outputPath = path.join(dir, 'output');
+    fs.writeFileSync(inputPath, input);
+    const stdin = fs.openSync(inputPath, 'r');
+    const stdout = fs.openSync(outputPath, 'w');
+    try {
+      const result = spawnSync('bash', [script], { stdio: [stdin, stdout, 'ignore'], timeout: 5000,
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CALLS: calls, FAIL_CURL: fail ? '1' : '0' } });
+      expect(result.error).toBeUndefined();
+      return { status: result.status, stdout: fs.readFileSync(outputPath, 'utf8') };
+    } finally {
+      fs.closeSync(stdin);
+      fs.closeSync(stdout);
+    }
+  }
+
+  it.each([true, false])('scopes session-end only inside git: %s', (git) => {
+    if (git) expect(spawnSync('git', ['init', '-q', dir], { stdio: 'ignore', timeout: 3000 }).status).toBe(0);
+    expect(run('engram-session-end.sh', dir).status).toBe(0);
+    const args: string[] = JSON.parse(fs.readFileSync(calls, 'utf8'));
+    const body = JSON.parse(args[args.indexOf('-d') + 1]);
+    expect(body.namespace).toBe(git ? fs.realpathSync(dir) : undefined);
+    expect(args).toContain('--max-time');
+  });
+
+  it.each([true, false])('recalls project and shared separately inside git: %s', (git) => {
+    if (git) expect(spawnSync('git', ['init', '-q', dir], { stdio: 'ignore', timeout: 3000 }).status).toBe(0);
+    const result = run('engram-recall.sh', dir);
+    expect(result.status).toBe(0);
+    const args: string[][] = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(args).toHaveLength(git ? 2 : 1);
+    const bodies = args.map((call) => JSON.parse(call[call.indexOf('-d') + 1]));
+    expect(bodies[0].namespace).toBe(git ? fs.realpathSync(dir) : undefined);
+    if (git) expect(bodies[1]).toMatchObject({ global: true });
+    expect(bodies.every((body) => !(body.global && body.namespace))).toBe(true);
+    expect(String(result.stdout).match(/remember this/g)).toHaveLength(1);
+  });
+
+  it('fails open on a recall transport failure', () => {
+    const result = run('engram-recall.sh', dir, true);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+
+  it('passes stdin and safely quoted paths to SessionStart', () => {
+    const repo = path.join(dir, "repo's $literal");
+    const db = path.join(dir, "db's $literal");
+    const script = installHookScript(path.join(__dirname, '../../templates'), dir,
+      'engram-session-start.sh', 'http://example', repo, db);
+    fs.writeFileSync(path.join(dir, 'node'), '#!/bin/bash\nprintf "%s\\n" "$1" "$ENGRAM_DB_PATH" "$ENGRAM_SOURCE"\ncat\n', { mode: 0o755 });
+    const result = execute(script, '{"cwd":"/tmp"}');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`${repo}/packages/mcp/dist/session-start.js\n${db}\nclaude-code\n{"cwd":"/tmp"}`);
   });
 });

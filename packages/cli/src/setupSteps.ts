@@ -18,7 +18,7 @@ import { spawnSync } from 'child_process';
 import { buildStatus, serializeBuildStamp } from './buildState.js';
 import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
-  readJson, updateJsonConfig, installHookScript, registerHook,
+  readJson, updateJsonConfig, installHookScript, registerHook, hasClaudeHooks,
 } from './claudeSetup.js';
 import { resolveMcpClient, manualSnippet, supportedClientList } from './mcpClients.js';
 import { setupRequirements, unmet } from './preflight.js';
@@ -174,13 +174,11 @@ export function configureMcpClient(
   }
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- merging free-form user JSON config */
-
 /**
  * Wire Engram into Claude Code as automatic memory: register the MCP server at
  * user scope (loads in every session with no manual approval — a project-scope
  * ~/.mcp.json entry does not) and, for a full local install, install the recall
- * and session-end hooks. Best-effort: a malformed Claude config is reported and
+ * session-start and session-end hooks. Best-effort: a malformed Claude config is reported and
  * left untouched rather than aborting setup — or being overwritten.
  */
 export interface ClaudePaths {
@@ -224,30 +222,39 @@ export function setupClaudeCode(
   }
 
   if (!withHooks) {
-    warn('npx mode has no local server — skipping recall/session-end hooks');
+    warn('npx mode has no local server — skipping recall/session-start/session-end hooks');
     warn('Restart Claude Code (or run /mcp) to activate.');
     return;
   }
 
-  try {
-    const templateDir = path.join(config.repoPath, 'packages', 'cli', 'templates');
-    const apiBase = `http://localhost:${config.port}`;
-    // Install the scripts first: the config update must be a pure transform, so
-    // a refusal below cannot leave half-written hooks referenced by nothing.
-    const installed = CLAUDE_HOOKS.map((h) => ({
-      ...h,
-      command: installHookScript(templateDir, hooksDir, h.file, apiBase),
-    }));
-    reportBackup(updateJsonConfig(paths.settings, (current) => {
-      const next = structuredClone(current) as Record<string, any>;
-      for (const h of installed) registerHook(next, h.event, h.command, h.timeout);
-      return next;
-    }));
-    ok('Recall + session-end hooks installed (~/.engram/hooks/)');
-  } catch (err) {
-    reportConfigRefusal(err, 'Claude Code recall/session-end hooks', skipped);
-  }
+  installClaudeHooks(config, hooksDir, paths, skipped);
   warn('Restart Claude Code (or run /mcp) to activate.');
 }
 
-/* eslint-enable @typescript-eslint/no-explicit-any */
+/** Shared by local setup and updates of an existing hook installation. */
+export function installClaudeHooks(
+  config: EngramConfig, hooksDir: string, paths: ClaudePaths, skipped: string[],
+): void {
+  try {
+    const templateDir = path.join(config.repoPath, 'packages', 'cli', 'templates');
+    const installed = CLAUDE_HOOKS.map((h) => ({
+      ...h,
+      command: installHookScript(templateDir, hooksDir, h.file, `http://localhost:${config.port}`,
+        config.repoPath, config.dbPath),
+    }));
+    reportBackup(updateJsonConfig(paths.settings, (current) => installed.reduce(
+      (next, h) => registerHook(next, h.event, h.command, h.timeout), current)));
+    ok('Recall + session-start + session-end hooks installed (~/.engram/hooks/)');
+  } catch (err) {
+    reportConfigRefusal(err, 'Claude Code hooks', skipped);
+  }
+}
+
+/** Only update users who previously opted into local hooks. */
+export function refreshClaudeHooks(
+  config: EngramConfig, hooksDir: string, paths: ClaudePaths, skipped: string[],
+): void {
+  if (hasClaudeHooks(paths.settings) && shouldConfigureClaudeCode(paths.settings, skipped)) {
+    installClaudeHooks(config, hooksDir, paths, skipped);
+  }
+}

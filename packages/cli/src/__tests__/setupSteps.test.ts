@@ -21,8 +21,9 @@ import {
   currentBuildStatus,
   configureMcpClient,
   setupClaudeCode,
+  refreshClaudeHooks,
   CLAUDE_PATHS,
-} from '../setupSteps.js';
+} from '../setupSteps.ts';
 import { buildArtifactPaths, parseBuildStamp } from '../buildState.js';
 import { defaultConfig } from '../engramConfig.js';
 
@@ -272,7 +273,7 @@ describe('setupClaudeCode', () => {
     expect(output()).toMatch(/not detected/i);
   });
 
-  it.each([undefined, false, 'true'])('registers MCP and both hooks when plugin enabled is %s', (enabled) => {
+  it.each([undefined, false, 'true'])('registers MCP and all hooks when plugin enabled is %s', (enabled) => {
     const home = tempDir('home');
     const paths = claudePathsIn(home);
     fs.mkdirSync(paths.dir, { recursive: true });
@@ -291,15 +292,45 @@ describe('setupClaudeCode', () => {
     const settings = JSON.parse(fs.readFileSync(paths.settings, 'utf8'));
     const commands = Object.values(settings.hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>)
       .flatMap((entries) => entries.flatMap((e) => e.hooks.map((h) => h.command)));
-    expect(commands).toHaveLength(2);
+    expect(commands).toHaveLength(3);
     for (const command of commands) {
       // The registered command is shell-quoted so a home directory with spaces works.
       const script = command.replace(/^(['"])(.*)\1$/, '$2');
       expect(fs.existsSync(script)).toBe(true);
       // The API base placeholder has to be substituted, or the hook posts nowhere.
       expect(fs.readFileSync(script, 'utf8')).not.toContain('__API_BASE__');
-      expect(fs.readFileSync(script, 'utf8')).toContain('http://localhost:4901');
+      expect(fs.readFileSync(script, 'utf8')).toContain(script.endsWith('engram-session-start.sh')
+        ? config.repoPath : 'http://localhost:4901');
     }
+  });
+
+  it.each([true, false])('update refreshes hooks only when registered: %s', (registered) => {
+    const home = tempDir('home');
+    const paths = claudePathsIn(home);
+    fs.mkdirSync(paths.dir);
+    const settings = { hooks: { UserPromptSubmit: [{ hooks: [{
+      command: registered ? "'/legacy/engram-recall.sh'" : '/other/hook.sh',
+    }] }] } };
+    fs.writeFileSync(paths.settings, JSON.stringify(settings));
+    const config = { ...defaultConfig(home), repoPath: repoWithTemplates() };
+    const hooksDir = path.join(home, 'hooks');
+    const skipped: string[] = [];
+    refreshClaudeHooks(config, hooksDir, paths, skipped);
+    expect(skipped).toEqual([]);
+    if (registered) {
+      expect(fs.readFileSync(path.join(hooksDir, 'engram-session-start.sh'), 'utf8')).toContain(config.repoPath);
+      const updated = JSON.parse(fs.readFileSync(paths.settings, 'utf8'));
+      expect(updated.hooks.SessionStart[0].hooks[0].timeout).toBe(10);
+      expect(updated.hooks.UserPromptSubmit).toHaveLength(1);
+      expect(updated.hooks.UserPromptSubmit[0].hooks[0].command).toContain(hooksDir);
+      fs.writeFileSync(path.join(hooksDir, 'engram-recall.sh'), 'old template');
+      refreshClaudeHooks(config, hooksDir, paths, skipped);
+      expect(fs.readFileSync(path.join(hooksDir, 'engram-recall.sh'), 'utf8')).not.toBe('old template');
+    } else {
+      expect(fs.existsSync(hooksDir)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(paths.settings, 'utf8'))).toEqual(settings);
+    }
+    expect(fs.existsSync(paths.userJson)).toBe(false);
   });
 
   it.each([true, false])('leaves MCP and hooks untouched for an enabled plugin (withHooks=%s)', (withHooks) => {

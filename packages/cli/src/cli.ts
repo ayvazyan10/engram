@@ -27,7 +27,7 @@ import {
   resolveMcpClient, supportedClientList, KNOWN_CLIENT_IDS, LEGACY_GLOBAL_MCP_FILE,
 } from './mcpClients.js';
 import {
-  shortHead, checkPrerequisites, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode,
+  shortHead, checkPrerequisites, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
   CLAUDE_PATHS,
 } from './setupSteps.js';
 import {
@@ -164,7 +164,7 @@ program
   .command('setup')
   .description('Initialize Engram — clone, build, configure, and set up MCP for any AI client')
   .option('--no-mcp', 'Skip MCP configuration')
-  .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP + recall/session-end hooks)')
+  .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP + recall/session-start/session-end hooks)')
   .option('--npx', 'Use npx instead of cloning repo (fastest setup)')
   .option('--source <name>', 'AI client identifier (e.g. claude-code, cursor, windsurf)', 'mcp-client')
   // Kept because commander rejects unknown options: dropping it would break
@@ -296,7 +296,7 @@ program
     }
 
     // Claude Code gets the full auto-memory wiring: user-scope MCP so it loads
-    // without manual approval, plus recall/session-end hooks for a local install.
+    // without manual approval, plus recall/session-start/session-end hooks for a local install.
     if (opts.claudeHooks !== false) {
       step('Setting up Claude Code auto-memory...');
       setupClaudeCode(config, engramServer, !opts.npx, HOOKS_DIR, CLAUDE_PATHS, skipped);
@@ -546,7 +546,7 @@ program
       warn('Legacy: engram found in ~/.claude/settings.json — Claude Code reads MCP servers from ~/.claude.json');
     }
 
-    // Claude Code auto-memory: the two hooks (its user-scope MCP entry is
+    // Claude Code auto-memory: the three hooks (its user-scope MCP entry is
     // covered by the client loop above, which reads the same ~/.claude.json).
     if (fs.existsSync(CLAUDE_DIR)) {
       const settings = readJsonOrEmpty(CLAUDE_SETTINGS);
@@ -976,6 +976,7 @@ program
     // run must be able to tell them from a clean update, which costs the green
     // banner and the zero exit code at the end.
     const degraded: string[] = [];
+    refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, degraded);
 
     step('Updating CLI...');
     const prefix = currentGlobalPrefix();

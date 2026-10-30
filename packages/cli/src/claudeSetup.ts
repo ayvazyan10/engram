@@ -16,6 +16,7 @@ export const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
 /** Hooks installed for automatic memory, keyed by Claude Code event. */
 export const CLAUDE_HOOKS: ReadonlyArray<{ event: string; file: string; timeout: number }> = [
   { event: 'UserPromptSubmit', file: 'engram-recall.sh', timeout: 8 },
+  { event: 'SessionStart', file: 'engram-session-start.sh', timeout: 10 },
   { event: 'SessionEnd', file: 'engram-session-end.sh', timeout: 15 },
 ];
 
@@ -151,13 +152,16 @@ export function updateJsonConfig(
 }
 
 /** Substitute the API-base placeholder in a hook template. */
-export function renderHook(templateBody: string, apiBase: string): string {
-  return templateBody.replace(/__API_BASE__/g, apiBase);
+export function renderHook(templateBody: string, apiBase: string, repoPath = '', dbPath = ''): string {
+  return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__/g, (placeholder) => {
+    if (placeholder === '__API_BASE__') return apiBase;
+    return quoteHookCommand(placeholder === '__REPO_PATH__' ? repoPath : dbPath);
+  });
 }
 
 /** Copy a hook template into hooksDir with the API base baked in; returns dest path. */
-export function installHookScript(templateDir: string, hooksDir: string, file: string, apiBase: string): string {
-  const body = renderHook(fs.readFileSync(path.join(templateDir, file), 'utf8'), apiBase);
+export function installHookScript(templateDir: string, hooksDir: string, file: string, apiBase: string, repoPath = '', dbPath = ''): string {
+  const body = renderHook(fs.readFileSync(path.join(templateDir, file), 'utf8'), apiBase, repoPath, dbPath);
   fs.mkdirSync(hooksDir, { recursive: true });
   const dest = path.join(hooksDir, file);
   fs.writeFileSync(dest, body);
@@ -187,13 +191,32 @@ function unquoteHookCommand(command: string): string {
  * it. Dedupe is by script basename, not exact path, so a re-run or a moved
  * script never registers the same hook twice (which would fire it twice).
  */
-export function registerHook(settings: Record<string, any>, event: string, command: string, timeout: number): void {
-  const hooks = settings.hooks || (settings.hooks = {});
-  const entries: any[] = hooks[event] || (hooks[event] = []);
-  const base = path.basename(command);
-  const already = entries.some((e) =>
-    (e.hooks || []).some((h: any) => typeof h.command === 'string' && path.basename(unquoteHookCommand(h.command)) === base));
-  if (!already) entries.push({ matcher: '', hooks: [{ type: 'command', command: quoteHookCommand(command), timeout }] });
+export function registerHook(
+  settings: Record<string, unknown>, event: string, command: string, timeout: number,
+): Record<string, unknown> {
+  const hooks = (settings.hooks ?? {}) as Record<string, Array<{ hooks?: Array<Record<string, unknown>> }>>;
+  const entries = hooks[event] ?? [];
+  const matches = (hook: Record<string, unknown>): boolean =>
+    typeof hook.command === 'string' && path.basename(unquoteHookCommand(hook.command)) === path.basename(command);
+  const replacement = { type: 'command', command: quoteHookCommand(command), timeout };
+  const already = entries.some((entry) => (entry.hooks ?? []).some(matches));
+  const next = already
+    ? entries.map((entry) => ({ ...entry, hooks: (entry.hooks ?? []).map((hook) =>
+      matches(hook) ? { ...hook, ...replacement } : hook) }))
+    : [...entries, { matcher: '', hooks: [replacement] }];
+  return { ...settings, hooks: { ...hooks, [event]: next } };
+}
+
+/** Detect installed hooks, including quoted commands and legacy locations. */
+export function hasClaudeHooks(settingsFile: string): boolean {
+  const hooks: unknown = readJsonOrEmpty(settingsFile).hooks;
+  if (!hooks || typeof hooks !== 'object') return false;
+  return Object.values(hooks).some((entries: unknown) => Array.isArray(entries) && entries.some((entry: unknown) => {
+    if (!entry || typeof entry !== 'object' || !('hooks' in entry) || !Array.isArray(entry.hooks)) return false;
+    return entry.hooks.some((hook: unknown) => hook && typeof hook === 'object' && 'command' in hook
+      && typeof hook.command === 'string'
+      && CLAUDE_HOOKS.some((h) => h.file === path.basename(unquoteHookCommand(hook.command as string))));
+  }));
 }
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

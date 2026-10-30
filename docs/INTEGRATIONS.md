@@ -368,6 +368,8 @@ mcpServers:
 
 ### Auto-store conversations (optional)
 
+Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes previously installed hooks.
+
 By default, memories are only stored when Claude explicitly calls `store_memory`. To automatically save a conversation summary to engram when each session ends, add a Claude Code hook:
 
 ```bash
