@@ -930,6 +930,9 @@ program
       // "Server not found", and nothing said a rebuild was what was missing.
       const build = currentBuildStatus(repoPath, BUILD_STAMP_PATH);
       if (build.current) {
+        // Hook templates can change without a new commit reaching this CLI:
+        // the update that brought them in ran the previous CLI. Refresh anyway.
+        refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, []);
         ok('Already up to date.');
         console.log();
         return;

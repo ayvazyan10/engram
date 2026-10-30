@@ -15,6 +15,7 @@ Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-m
 
 ### Fixed
 
+- `engram update` refreshes the Claude Code hooks even when it finds nothing new to pull. The update that brings new hook templates runs the previous CLI, so without this, existing installs would never get them.
 - The session-end hook that `engram setup` installs never stored a summary: it looked for transcript entries of type `message`, but Claude Code writes them as type `assistant`.
 - Setup hooks store memories in the current git project and recall project plus shared memories. Updates refresh installed hooks and replace legacy hook paths without duplicate registration.
 
