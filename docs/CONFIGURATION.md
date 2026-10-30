@@ -31,7 +31,7 @@ One database file is shared by default: `~/.engram/engram.db`. Core, the MCP ser
 `ENGRAM_NAMESPACE_MODE` values:
 
 - `project` (default when unset): inside a git repository, scopes to the absolute git top-level path. It behaves like `filter`: reads return the project's own memories plus global (NULL namespace) memories. Outside a git repository it uses the shared pool (`none`). An explicit `ENGRAM_NAMESPACE` wins. `engram setup` writes `project`.
-- `none`: namespace inputs are ignored and new memories are stored in the shared pool.
+- `none`: reads are not scoped. A memory stored with an explicit namespace keeps it; one stored without a namespace goes to the shared pool (NULL).
 - `filter`: the configured namespace scopes normal reads and writes, while per-memory overrides and `crossNamespace` remain available.
 - `isolated`: `ENGRAM_NAMESPACE` is required; overrides and cross-namespace search are rejected.
 

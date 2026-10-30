@@ -55,29 +55,33 @@ afterAll(async () => {
   vi.restoreAllMocks();
 });
 
-describe('POST /api/search project filters', () => {
+describe.each(['/api/search', '/api/recall'])('POST %s project filters', (url) => {
   it('returns only the exact namespace requested', async () => {
-    const response = await app.inject({ method: 'POST', url: '/api/search', payload: { query: 'query', namespace: '/code/api' } });
+    const response = await app.inject({ method: 'POST', url, payload: { query: 'query', namespace: '/code/api' } });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ count: 1, results: [{ id: projectId, namespace: '/code/api' }] });
+    const body = response.json();
+    expect((body.results ?? body.memories).map((memory: { id: string }) => memory.id)).toEqual([projectId]);
+    if (body.results) expect(body).toMatchObject({ count: 1, results: [{ id: projectId, namespace: '/code/api' }] });
   });
 
   it('returns only NULL namespaces for global=true', async () => {
-    const response = await app.inject({ method: 'POST', url: '/api/search', payload: { query: 'query', global: true } });
+    const response = await app.inject({ method: 'POST', url, payload: { query: 'query', global: true } });
     expect(response.statusCode).toBe(200);
-    expect(response.json().results.map((memory: { id: string }) => memory.id).sort()).toEqual([...globalIds].sort());
-    expect(response.json().results.every((memory: { namespace: string | null }) => memory.namespace === null)).toBe(true);
+    const body = response.json();
+    const memories = body.results ?? body.memories;
+    expect(memories.map((memory: { id: string }) => memory.id).sort()).toEqual([...globalIds].sort());
+    if (body.results) expect(memories.every((memory: { namespace: string | null }) => memory.namespace === null)).toBe(true);
   });
 
   it.each(['/code/api', ''])('rejects namespace=%j combined with global=true', async (namespace) => {
-    const response = await app.inject({ method: 'POST', url: '/api/search', payload: { query: 'query', namespace, global: true } });
+    const response = await app.inject({ method: 'POST', url, payload: { query: 'query', namespace, global: true } });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: 'Bad Request', message: 'namespace and global cannot be used together.' });
   });
 
   it.each([{ namespace: null }, { namespace: 1 }, { global: false }, { global: 'true' }, { global: 1 }])(
     'rejects invalid project filters: %j', async (invalid) => {
-      const response = await app.inject({ method: 'POST', url: '/api/search', payload: { query: 'query', ...invalid } });
+      const response = await app.inject({ method: 'POST', url, payload: { query: 'query', ...invalid } });
       expect(response.statusCode).toBe(400);
     },
   );

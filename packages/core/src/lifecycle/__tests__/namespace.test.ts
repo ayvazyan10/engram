@@ -2,7 +2,7 @@
  * Tests for Namespace Isolation.
  *
  * Validates:
- * 1. `none` is the default and ignores namespace values
+ * 1. `none` is the default, preserves explicit store namespaces, and does not scope reads
  * 2. `filter` scopes memories, search, and stats to a namespace
  * 3. crossNamespace flag — allows searching across all namespaces
  * 4. Two brains sharing one DB — each sees only its own namespace
@@ -255,15 +255,24 @@ describe('Namespace — auto-migration', () => {
 });
 
 describe('Namespace modes', () => {
-  it('defaults to none and ignores configured and per-store namespaces', async () => {
+  it('keeps explicit store namespaces in none mode and defaults omitted namespaces to null', async () => {
     const dbPath = createTestDb();
     const brain = new NeuralBrain({ dbPath, namespaceMode: 'none', namespace: 'ignored' });
     await brain.initialize();
 
-    const { memory } = await brain.store({ content: 'Shared memory', namespace: 'also-ignored' });
     expect(brain.getNamespaceMode()).toBe('none');
     expect(brain.getNamespace()).toBeUndefined();
-    expect(memory.namespace).toBeNull();
+    for (const namespace of ['A', undefined]) {
+      const content = `Memory in ${namespace ?? 'global'}`;
+      const { memory } = await brain.store({ content, namespace });
+      expect(memory.namespace).toBe(namespace ?? null);
+      const episodic = await brain.episodic.store({ content, namespace });
+      const semantic = await brain.semantic.store({ content, concept: 'Namespace', namespace });
+      const procedural = await brain.procedural.store({ content, triggerPattern: 'test', actionPattern: 'check', namespace });
+      for (const stored of [episodic, semantic, procedural]) {
+        expect(stored.namespace).toBe(namespace ?? null);
+      }
+    }
 
     brain.shutdown();
     closeDb();

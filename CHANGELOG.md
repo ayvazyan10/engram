@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+### Fixed
+- `POST /api/recall` accepts `namespace` and `global`, as `/api/search` and `/api/recall/explain` already did. Before this, Fastify dropped both and recall was never scoped to a project.
+- `none` mode keeps an explicit namespace on store again (it was dropped from v0.4.0 on). An omitted namespace still stores NULL, and reads stay unscoped. The REST server always runs as `none`, so `POST /api/memory` with a `namespace` stored a global memory.
+
 ## [0.10.0] — 2026-10-20
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.10.0 (republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.10.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.7.0 and `@engram-ai-memory/web` 0.7.0.

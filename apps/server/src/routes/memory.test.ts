@@ -2,7 +2,6 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { StoreResult } from '../../../../packages/core/src/NeuralBrain.ts';
 import { getDb, schema } from '../../../../packages/core/src/db/index.ts';
@@ -91,12 +90,9 @@ it('POST /api/memory/batch accepts empty batches and retains validation and the 
 it('GET /api/memory ANDs exact namespace and global filters with existing filters', async () => {
   expect(brain.getNamespaceMode()).toBe('none');
   const source = 'namespace-list';
-  // none-mode writes discard the namespace by design, so set the column directly.
-  const a = await brain.episodic.store({ content: 'Project A memory', source });
-  const b = await brain.episodic.store({ content: 'Project B memory', source });
+  const a = await brain.episodic.store({ content: 'Project A memory', source, namespace: 'A' });
+  const b = await brain.episodic.store({ content: 'Project B memory', source, namespace: 'B' });
   const global = await brain.episodic.store({ content: 'Global memory', source });
-  await getDb().update(schema.memories).set({ namespace: 'A' }).where(eq(schema.memories.id, a.id));
-  await getDb().update(schema.memories).set({ namespace: 'B' }).where(eq(schema.memories.id, b.id));
   for (const [query, expected] of [
     ['', [{ id: a.id, namespace: 'A' }, { id: b.id, namespace: 'B' }, { id: global.id, namespace: null }]],
     ['&namespace=A', [{ id: a.id, namespace: 'A' }]],

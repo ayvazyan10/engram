@@ -48,7 +48,7 @@ export class SemanticMemory {
   private readonly namespaceMode: 'none' | 'filter' | 'isolated';
 
   private storeNamespace(requested?: string): string | null {
-    if (this.namespaceMode === 'none') return null;
+    if (this.namespaceMode === 'none') return requested ?? null;
     if (this.namespaceMode === 'isolated' && requested && requested !== this.namespace) {
       throw new Error('namespace override is not allowed in isolated mode');
     }

@@ -379,7 +379,7 @@ export class NeuralBrain {
   }
 
   private resolveStoreNamespace(requested?: string | null): string | null {
-    if (this.namespaceMode === 'none') return null;
+    if (this.namespaceMode === 'none') return requested ?? null;
     if (this.namespaceMode === 'isolated') {
       if (requested !== undefined && requested !== this.activeNamespace) {
         throw new Error('namespace override is not allowed in isolated mode');

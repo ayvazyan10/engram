@@ -28,7 +28,7 @@ server.tool(
       .describe('Importance score 0.0–1.0 (default varies by type)'),
     concept: z.string().optional().describe('For semantic memories: the concept name'),
     sessionId: z.string().optional().describe('Session ID to group related episodic memories'),
-    namespace: z.string().optional().describe('Override namespace in filter mode; ignored in none mode and restricted in isolated mode'),
+    namespace: z.string().optional().describe('Override namespace in filter mode; kept as given in none mode and restricted in isolated mode'),
     global: z.boolean().optional().describe('Store globally across projects; rejected in isolated mode'),
   },
   { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
