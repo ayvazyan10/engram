@@ -117,3 +117,33 @@ it('reports read failures explicitly', async () => {
   expect((await call('get_contradiction_tasks')).isError).toBe(true);
   expect(log).toHaveBeenCalledWith('[engram-mcp] get_contradiction_tasks failed:', expect.any(Error));
 });
+it.each(['Old fact', 'Old fact '.repeat(70)])('store_memory includes candidate context and immediate judgment instructions', async (content) => {
+  const sourceId = 'new-memory';
+  const targetId = 'existing-memory';
+  getDb().insert(schema.memories).values([
+    { id: sourceId, type: 'semantic', content: 'New fact', namespace: 'project', importance: 0.7 },
+    { id: targetId, type: 'semantic', content, namespace: 'project', createdAt: '2026-10-01' },
+  ]).run();
+  getDb().insert(schema.memoryConnections).values({ id: randomUUID(), sourceId, targetId,
+    relationship: 'contradicts', strength: 0.8, metadata: '{"status":"candidate"}' }).run();
+  const memory = getDb().select().from(schema.memories).all().find((row) => row.id === sourceId)!;
+  vi.spyOn(brain, 'store').mockResolvedValueOnce({ memory, contradictions: {
+    hasContradictions: true, candidatesChecked: 1, latencyMs: 0,
+    contradictions: [{ newMemoryId: sourceId, existingMemoryId: targetId, similarity: 0.9, confidence: 0.8,
+      signals: [], suggestedStrategy: 'keep_both' }],
+  } });
+  const query = vi.spyOn(getDb().query.memories, 'findMany');
+  const result = await call('store_memory', { content: 'New fact', type: 'semantic' });
+  expect(result.isError).not.toBe(true);
+  expect(query).toHaveBeenCalledOnce();
+  const response = JSON.parse(result.text);
+  expect(response).toMatchObject({ id: sourceId, contradictionCandidates: { count: 1, items: [{
+    existingMemoryId: targetId, content: content.slice(0, 500), createdAt: '2026-10-01', confidence: 0.8,
+  }] } });
+  expect(response.message).toContain(`Judge each now: call complete_contradiction_check with sourceId=${sourceId}, targetId=<existingMemoryId below>, verdict 'contradiction' or 'none'`);
+  expect(response.message).toContain('keep_newest only when the new memory fully replaces the old one; otherwise keep_both or no strategy');
+  expect((await call('complete_contradiction_check', {
+    sourceId: response.id, targetId: response.contradictionCandidates.items[0].existingMemoryId, verdict: 'none',
+  })).isError).not.toBe(true);
+  expect(await brain.getContradictionTasks()).toEqual([]);
+});

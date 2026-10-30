@@ -45,9 +45,13 @@ async function recallContext(cwd: string, env: NamespaceEnv): Promise<string> {
     // The reminder is extra: failing to count must not cost the recalled context.
     const { getPendingDistillSessions }: typeof StoreModule = await import(storeModulePath);
     const pending = await getPendingDistillSessions(brain).then((s) => s.length, () => 0);
-    const reminder = pending > 0
-      ? `${pending} past sessions are waiting to be distilled — call get_distill_tasks when convenient.`
-      : '';
+    const contradictions = await brain.getContradictionTasks(100).then((tasks) => tasks.length, () => 0);
+    const reminder = [
+      pending > 0 ? `${pending} past sessions are waiting to be distilled — call get_distill_tasks when convenient.` : '',
+      contradictions > 0
+        ? `${contradictions === 100 ? '100+' : contradictions} possible contradictions are waiting for your judgment — call get_contradiction_tasks when convenient.`
+        : '',
+    ].filter(Boolean).join('\n');
     const context = result.context.slice(0, 6000 - (reminder ? reminder.length + 1 : 0));
     return [context, reminder].filter(Boolean).join('\n');
   } finally {

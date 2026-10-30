@@ -66,7 +66,7 @@ Every time an AI connected to Engram receives a query:
 2. **Searches** its vector index for similar past memories
 3. **Expands** via the knowledge graph to retrieve related concepts
 4. **Scores** candidates by semantic similarity + recency + importance + access frequency
-5. **Queues** possible contradictions for verification by the connected AI
+5. **Queues** possible contradictions and returns existing memory excerpts with instructions for the connected AI to judge them immediately
 6. **Injects** the assembled context into the AI's prompt
 
 The AI responds with awareness of everything it has ever learned. After the exchange, the response is stored as a new memory — the brain grows continuously.
@@ -519,8 +519,8 @@ Tool: `store_memory` → `search_memory` · Demonstrates cross-session persisten
 ```
 User (day 1): "Production runs on PostgreSQL 15"
 User (day 30): "We migrated prod to SQLite WAL last month"
-Claude: [store_memory queues possible contradictions]
-→ calls get_contradiction_tasks and judges the pair
+Claude: [store_memory returns possible contradictions with existing memory excerpts]
+→ judges each pair immediately using the response
 → calls complete_contradiction_check(verdict: "contradiction", strategy: "keep_newest")
 ```
 

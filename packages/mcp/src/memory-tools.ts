@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { getDb } from '@engram-ai-memory/core';
 import type { ToolContext } from './tools.js';
 
 /** Core memory registrations, shared by both transports. */
@@ -47,35 +48,33 @@ server.tool(
     });
     syncEngine?.notifyWrite();
 
-    const response: Record<string, unknown> = {
+    const candidates = result.contradictions.contradictions;
+    const existing = candidates.length ? await getDb().query.memories.findMany({
+      columns: { id: true, content: true, createdAt: true },
+      where: (memories, { inArray }) => inArray(memories.id, candidates.map((c) => c.existingMemoryId)),
+    }) : [];
+    const byId = new Map(existing.map((memory) => [memory.id, memory]));
+    const response = {
       id: result.memory.id,
       type: result.memory.type,
       importance: result.memory.importance,
       deduplicated: result.deduplicated ?? false,
-      message: 'Memory stored successfully',
-    };
-
-    if (result.contradictions.hasContradictions) {
-      response.contradictionCandidates = {
-        count: result.contradictions.contradictions.length,
-        items: result.contradictions.contradictions.map((c) => ({
+      message: candidates.length
+        ? `This memory may conflict with ${candidates.length} existing memory/memories below. Judge each now: call complete_contradiction_check with sourceId=${result.memory.id}, targetId=<existingMemoryId below>, verdict 'contradiction' or 'none'. Use strategy keep_newest only when the new memory fully replaces the old one; otherwise keep_both or no strategy.`
+        : 'Memory stored successfully',
+      ...(candidates.length ? { contradictionCandidates: {
+        count: candidates.length,
+        items: candidates.map((c) => ({
           existingMemoryId: c.existingMemoryId,
+          content: byId.get(c.existingMemoryId)?.content.slice(0, 500) ?? '',
+          createdAt: byId.get(c.existingMemoryId)?.createdAt ?? null,
           confidence: c.confidence,
           signals: c.signals.map((s) => s.type),
           suggestedStrategy: c.suggestedStrategy,
         })),
-      };
-      response.message = `Memory stored with ${result.contradictions.contradictions.length} possible contradiction(s) queued for review`;
-    }
-
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(response),
-        },
-      ],
+      } } : {}),
     };
+    return { content: [{ type: 'text', text: JSON.stringify(response) }] };
   }
 );
 

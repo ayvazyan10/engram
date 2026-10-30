@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
   git: vi.fn(),
   getByTag: vi.fn(),
+  getContradictionTasks: vi.fn(),
   canAccessNamespace: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock('@engram-ai-memory/core', async (importOriginal) => ({
     recall = mocks.recall;
     shutdown = mocks.shutdown;
     getByTag = mocks.getByTag;
+    getContradictionTasks = mocks.getContradictionTasks;
     canAccessNamespace = mocks.canAccessNamespace;
   },
 }));
@@ -35,6 +37,7 @@ beforeEach(() => {
   mocks.initialize.mockResolvedValue(undefined);
   mocks.recall.mockResolvedValue({ context: 'Past project decisions.' });
   mocks.getByTag.mockResolvedValue([]);
+  mocks.getContradictionTasks.mockResolvedValue([]);
   mocks.canAccessNamespace.mockReturnValue(true);
 });
 
@@ -112,6 +115,31 @@ describe('runSessionStart', () => {
     expect(write).toHaveBeenCalledOnce();
     expect(write.mock.calls[0]![0]).toContain('Past project decisions.');
     expect(write.mock.calls[0]![0]).not.toContain('get_distill_tasks');
+  });
+
+  it('keeps recalled context when counting contradiction candidates fails', async () => {
+    mocks.getContradictionTasks.mockRejectedValue(new Error('read failed'));
+    const write = vi.fn();
+    await runSessionStart('{}', env, write);
+    expect(JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext)
+      .toBe('Past project decisions.');
+  });
+
+  it.each([0, 2, 100])('reports %s pending contradictions alongside distillation within the cap', async (count) => {
+    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000) });
+    mocks.getByTag.mockResolvedValue([{ namespace: 'work' }]);
+    mocks.getContradictionTasks.mockResolvedValue(Array.from({ length: count }, () => ({})));
+    const write = vi.fn();
+    await runSessionStart('{}', env, write);
+    const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
+    expect(output).toHaveLength(6000);
+    expect(output).toContain('get_distill_tasks');
+    expect(mocks.getContradictionTasks).toHaveBeenCalledWith(100);
+    if (count) {
+      expect(output).toContain(`${count === 100 ? '100+' : count} possible contradictions are waiting for your judgment — call get_contradiction_tasks when convenient.`);
+    } else {
+      expect(output).not.toContain('get_contradiction_tasks');
+    }
   });
 
   it('is silent and exits zero when the DB directory cannot be created', async () => {

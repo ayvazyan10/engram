@@ -9,6 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-10-30
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.11.1, and the Claude Desktop extension bundle 0.11.1. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.8.0 and `@engram-ai-memory/web` 0.7.0.
+
+### Changed
+
+- `store_memory` now includes existing candidate memory excerpts and instructions to judge contradictions immediately. SessionStart reminds the connected AI about pending contradiction judgments alongside distillation.
+
 ## [0.11.0] — 2026-10-30
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.11.0, and the Claude Desktop extension bundle 0.11.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.8.0 and `@engram-ai-memory/web` 0.7.0.
@@ -646,7 +654,8 @@ No API changes — a drop-in upgrade.
 
 ---
 
-[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/ayvazyan10/engram/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/ayvazyan10/engram/releases/tag/v0.11.1
 [0.11.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.11.0
 [0.10.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.10.0
 [0.9.0]: https://github.com/ayvazyan10/engram/releases/tag/v0.9.0
