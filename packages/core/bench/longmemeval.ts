@@ -49,9 +49,13 @@ function options() {
       'per-type': { type: 'string' },
       data: { type: 'string' },
       out: { type: 'string' },
+      'allow-heavy-load': { type: 'boolean' },
     },
     allowPositionals: false,
   });
+  if (!values['allow-heavy-load']) {
+    throw new Error('Refusing to run: this bench loads every CPU core and has crashed the host. Pass --allow-heavy-load only on a human\'s explicit request.');
+  }
   const limit = values.limit === undefined ? Infinity : Number(values.limit);
   if (values.limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     throw new Error('--limit must be a positive integer');

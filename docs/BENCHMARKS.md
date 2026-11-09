@@ -41,11 +41,12 @@ memories belongs to one of the question's `answer_session_ids`.
 
 ```sh
 cd packages/core
-pnpm bench:longmemeval --data /path/to/longmemeval_s_cleaned.json --out results.json
+pnpm bench:longmemeval --allow-heavy-load --data /path/to/longmemeval_s_cleaned.json --out results.json
 ```
 
 Flags:
 
+- `--allow-heavy-load`: required. The bench loads every CPU core and has crashed a host with unstable hardware.
 - `--data <path>`: the LongMemEval JSON file.
 - `--limit <N>`: evaluate only the first N non-abstention questions. This is a
   smoke-test subset, not a representative sample. The first questions in the
