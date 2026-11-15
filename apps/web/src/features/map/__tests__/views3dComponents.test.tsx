@@ -17,7 +17,7 @@ describe.each([['Sky', SkyView], ['Landscape', LandscapeView]] as const)('%s vie
   });
   it('reports unavailable WebGL without presenting a broken scene or scrubber', async () => {
     render(<View payload={payload()} />);
-    expect(await screen.findByRole('status')).toHaveTextContent('WebGL is unavailable in this browser.');
+    expect(await screen.findByText('WebGL is unavailable in this browser.')).toHaveAttribute('role', 'status');
     expect(screen.queryByRole('slider')).not.toBeInTheDocument();
     expect(screen.queryByText('Legend')).not.toBeInTheDocument();
   });

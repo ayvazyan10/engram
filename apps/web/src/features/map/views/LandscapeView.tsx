@@ -15,6 +15,7 @@ export default function LandscapeView({ payload }: { payload: MapPayload }) {
   const changeDay = useRef((_day: number, _animate: boolean) => {});
   const clear = useRef(() => {});
   const [policy, setPolicy] = useState(DEFAULT_POLICY);
+  const [policyLoaded, setPolicyLoaded] = useState(false);
   const [day, setDay] = useState(0);
   const [unavailable, setUnavailable] = useState(false);
   const [hover, setHover] = useState<Hover>(null);
@@ -23,12 +24,12 @@ export default function LandscapeView({ payload }: { payload: MapPayload }) {
   const phone = useMediaQuery('(max-width: 720px)');
   useEffect(() => {
     let active = true;
-    void loadPolicy().then((value) => { if (active) setPolicy(value); }).catch(() => {});
+    void loadPolicy().catch(() => DEFAULT_POLICY).then((value) => { if (active) { setPolicy(value); setPolicyLoaded(true); } });
     return () => { active = false; };
   }, []);
 
   useEffect(() => {
-    if (!host.current || !payload.nodes.length) return;
+    if (!policyLoaded || !host.current || !payload.nodes.length) return;
     const stage = createStage(host.current, reduced, false);
     if (!stage) { setUnavailable(true); return; }
     setUnavailable(false); setSelected(-1); setHover(null);
@@ -135,7 +136,7 @@ export default function LandscapeView({ payload }: { payload: MapPayload }) {
       if (animation.t === 1) animation = null;
     };
     return () => { observer.disconnect(); scheme.removeEventListener('change', applyTheme); stage.dispose(); };
-  }, [payload, policy, reduced]);
+  }, [payload, policy, policyLoaded, reduced]);
 
   const node = payload.nodes[selected] ?? (hover ? payload.nodes[hover.index] : undefined);
   const threshold = policy.archiveThreshold * 100;
