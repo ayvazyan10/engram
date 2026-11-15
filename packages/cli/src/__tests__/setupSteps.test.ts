@@ -286,7 +286,14 @@ describe('setupClaudeCode', () => {
 
     setupClaudeCode(config, server, true, hooksDir, paths, []);
 
-    expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toEqual(server);
+    expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toEqual({
+      ...server,
+      env: {
+        ENGRAM_DB_PATH: config.dbPath,
+        ENGRAM_SOURCE: 'claude-code',
+        ENGRAM_NAMESPACE_MODE: config.namespaceMode,
+      },
+    });
     expect(output().match(/\/plugin install engram@engram/g)).toHaveLength(1);
 
     const settings = JSON.parse(fs.readFileSync(paths.settings, 'utf8'));
@@ -330,7 +337,7 @@ describe('setupClaudeCode', () => {
       expect(fs.existsSync(hooksDir)).toBe(false);
       expect(JSON.parse(fs.readFileSync(paths.settings, 'utf8'))).toEqual(settings);
     }
-    expect(fs.existsSync(paths.userJson)).toBe(false);
+    expect(fs.existsSync(paths.userJson)).toBe(registered);
   });
 
   it.each([true, false])('leaves MCP and hooks untouched for an enabled plugin (withHooks=%s)', (withHooks) => {
@@ -379,7 +386,14 @@ describe('setupClaudeCode', () => {
 
     setupClaudeCode(defaultConfig(home), { command: 'npx' }, false, path.join(home, 'hooks'), paths, []);
 
-    expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toEqual({ command: 'npx' });
+    expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toEqual({
+      command: 'npx',
+      env: {
+        ENGRAM_DB_PATH: path.join(home, 'engram.db'),
+        ENGRAM_SOURCE: 'claude-code',
+        ENGRAM_NAMESPACE_MODE: 'project',
+      },
+    });
     expect(fs.existsSync(paths.settings)).toBe(false);
     expect(output()).toMatch(/npx mode has no local server/);
   });

@@ -69,7 +69,8 @@ export function defaultConfig(engramHome: string): EngramConfig {
     host: '127.0.0.1',
     namespace: null,
     namespaceMode: 'project',
-    embeddingModel: 'Xenova/all-MiniLM-L6-v2',
+    // Empty = automatic: the database's own model, or the multilingual default for a new one.
+    embeddingModel: '',
     indexPath: path.join(engramHome, 'engram.db.index'),
     repoPath: path.join(engramHome, 'repo'),
   };

@@ -252,14 +252,15 @@ At the start of each task call recall_context; store decisions with store_memory
 
 ### Codex CLI
 
-`~/.codex/config.toml`:
+`engram setup --source codex` registers Engram automatically in `~/.codex/config.toml`. `engram update` updates the code that entry runs; re-run `engram setup --source codex` to rewrite the entry itself.
+
+Manual fallback in `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.engram]
-command = "npx"
-args = ["-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"]
-env = { ENGRAM_DB_PATH = "~/.engram/engram.db", ENGRAM_SOURCE = "codex" }
-startup_timeout_sec = 60
+command = "node"
+args = ["/path/to/neuralcore/packages/mcp/dist/server.js"]
+env = { "ENGRAM_DB_PATH" = "~/.engram/engram.db", "ENGRAM_SOURCE" = "codex", "ENGRAM_NAMESPACE_MODE" = "none" }
 ```
 
 Add to `AGENTS.md`:
@@ -295,18 +296,22 @@ At the start of each task call recall_context; store decisions with store_memory
 
 ### OpenCode
 
-`opencode.json`:
+`engram setup --source opencode` registers Engram automatically in `~/.config/opencode/opencode.json`. `engram update` updates the code that entry runs; re-run `engram setup --source opencode` to rewrite the entry itself.
+
+Manual fallback in `~/.config/opencode/opencode.json`:
 
 ```json
 {
   "mcp": {
     "engram": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "@engram-ai-memory/mcp@latest", "engram-mcp"],
+      "command": ["node", "/path/to/neuralcore/packages/mcp/dist/server.js"],
       "environment": {
         "ENGRAM_DB_PATH": "~/.engram/engram.db",
-        "ENGRAM_SOURCE": "opencode"
-      }
+        "ENGRAM_SOURCE": "opencode",
+        "ENGRAM_NAMESPACE_MODE": "none"
+      },
+      "enabled": true
     }
   }
 }
@@ -368,7 +373,7 @@ mcpServers:
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes previously installed hooks.
+Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.5 by default. SessionEnd uses importance 0.3 and skips `clear`/`resume`. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
 
 By default, memories are only stored when Claude explicitly calls `store_memory`. To automatically save a conversation summary to engram when each session ends, add a Claude Code hook:
 
@@ -594,6 +599,8 @@ Output:
 #### `re_embed`
 
 Re-embed memories with the current model. Use after switching embedding models.
+
+New databases use the multilingual default `Xenova/paraphrase-multilingual-MiniLM-L12-v2`; an existing database keeps its current model until `ENGRAM_EMBEDDING_MODEL` is set and `re_embed` is run.
 
 ```
 Input:

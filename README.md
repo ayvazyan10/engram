@@ -255,7 +255,7 @@ Add the config below to the file your client reads:
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 
-`engram setup --source <client>` writes the right one for you. Any other client
+`engram setup --source <client>` writes the right one for you. Codex CLI and OpenCode are also registered automatically by `engram setup --source codex` and `engram setup --source opencode`, using their [native config formats](docs/INTEGRATIONS.md#codex-cli). Any other client
 reads its own file — check its documentation and paste the same block there.
 
 ```json
@@ -308,7 +308,7 @@ Restart your AI client. **26 tools** are now available:
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes previously installed hooks.
+Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.5 by default. SessionEnd uses importance 0.3 and skips `clear`/`resume`. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
 
 Add a Claude Code hook to automatically save conversation summaries to engram when a session ends:
 
@@ -388,7 +388,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_NAMESPACE_MODE` | `project` | Namespace behavior: `project`, `none`, `filter`, or `isolated` |
 | `ENGRAM_NAMESPACE` | *(none)* | Namespace value used when mode is `filter` or `isolated`; overrides `project` detection |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Override embedding model |
+| `ENGRAM_EMBEDDING_MODEL` | *(automatic)* | New databases use `Xenova/paraphrase-multilingual-MiniLM-L12-v2`; existing databases keep their model. Set to override. |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |
@@ -452,7 +452,7 @@ Use light or dark mode (or follow the system), open commands with **⌘K / Ctrl+
 |---|---|---|
 | Recall latency (100 memories) | ~18ms p50 | In-memory cosine scan + importance scoring |
 | Store throughput | ~120 mem/s | SQLite WAL + auto-linking |
-| Embedding | 8ms/text | Local ONNX/WASM (all-MiniLM-L6-v2) |
+| Embedding | 8ms/text | Local ONNX/WASM (measured with all-MiniLM-L6-v2) |
 | Cold startup (1k memories) | ~1.2s | Full DB scan + index build |
 | Cached startup (1k memories) | ~45ms | Persisted index (27x faster) |
 | Storage per memory | ~1.3 KB | FP16 compressed (2x reduction) |
@@ -536,7 +536,7 @@ Engram is local-first and privacy-preserving by design:
 
 - **Local by default.** All memories are stored in a local SQLite database (`~/.engram/engram.db`). No data leaves your machine unless you explicitly enable cloud sync.
 - **Cloud sync is opt-in.** Setting `ENGRAM_SYNC_URL` replicates memories to a PostgreSQL database you own and control — Engram never phones home and never touches any third-party service on its own. See [Cloud Sync](docs/CLOUD-SYNC.md).
-- **All embeddings run on-device.** The `all-MiniLM-L6-v2` model runs locally via `@xenova/transformers` — no external embedding API calls.
+- **All embeddings run on-device.** The configured embedding model runs locally via `@xenova/transformers` — no external embedding API calls.
 - **No telemetry.** Engram does not collect usage statistics, crash reports, or any analytics.
 - **Webhooks are opt-in.** If you configure webhooks, memory events are sent to your chosen URL — fully under your control.
 
