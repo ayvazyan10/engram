@@ -62,7 +62,9 @@ export function checkPrerequisites(needsRepoTools: boolean): boolean {
   const results = setupRequirements({
     nodeVersion: process.versions.node,
     run: (cmd, args) => {
-      const probe = spawnSync(cmd, [...args], { encoding: 'utf8' });
+      // On Windows pnpm/npm are .cmd shims: without a shell spawnSync cannot
+      // find them (ENOENT) even when installed. The arguments are constants.
+      const probe = spawnSync(cmd, [...args], { encoding: 'utf8', shell: process.platform === 'win32' });
       if (probe.error) throw probe.error;
       if (probe.status !== 0) throw new Error(probe.stderr?.trim() || `${cmd} exited with ${probe.status}`);
       return probe.stdout ?? '';
