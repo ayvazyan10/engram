@@ -23,6 +23,8 @@ interface Props {
   onRetry: () => void;
   onLoadMore: () => void;
   loadingMore: boolean;
+  /** False once the list has reached its end (see Shell's loadMore). */
+  hasMore?: boolean;
   onStore: () => void;
   onCommands: () => void;
 }
@@ -60,7 +62,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
     else params.view = id;
     useRouteStore.getState().navigate(toHash({ ...route, params }));
   };
-  const { status, error, model, payload, lens, cutDays, regionId, focusId, hoverId, names, arrivals, faults, faultError } = useMapStore();
+  const { status, error, model, payload, lens, cutDays, regionId, focusId, hoverId, names, arrivals, faults, faultError, faultsTruncated } = useMapStore();
   const { setLens, setCut, setRegion, setFocus, setHover } = useMapStore.getState();
   const { searchQuery, searchResults, weakerResults, projectFilter, hiddenIds } = useMemoryStore();
   const selectedId = useNeuralStore((s) => s.selectedNeuronId);
@@ -197,7 +199,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
     const dir = ARROWS[event.key];
     if (dir) {
       event.preventDefault();
-      const shown = (i: number) => pickable(model.created[i]!, lensState);
+      const shown = (i: number) => pickable(model.created[i]!, lensState) && !hiddenIds.has(model.nodes[i]!.id);
       const from = focusId ? (model.at.get(focusId) ?? -1) : -1;
       let next: number;
       if (from !== -1) next = step(model.index, model.xs, model.ys, from, dir, shown);
@@ -248,7 +250,9 @@ export default function MapView({ onCommands, ...sheet }: Props) {
           ? 'Loading the fault lines…'
           : `${lines.length.toLocaleString('en-US')} fault ${lines.length === 1 ? 'line' : 'lines'} ${
               selectedId && model?.at.has(selectedId) ? 'touch the open memory' : regionId ? 'touch this region' : 'on the map'
-            }. Each joins two memories that contradict each other.`;
+            }. Each joins two memories that contradict each other.${
+              faultsTruncated ? ' Only the strongest links were returned, so some lines may be missing.' : ''
+            }`;
 
   return (
     <div ref={viewRef} className="mp-view" data-lens={lens} data-view={active?.id ?? 'map'}>

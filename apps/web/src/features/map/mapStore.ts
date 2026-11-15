@@ -47,6 +47,8 @@ interface MapState {
   faults: [string, string][] | null;
   /** Why the fault lines could not be loaded, said in the Faults legend. */
   faultError: string | null;
+  /** The server returned only its strongest edges, so some lines may be missing. */
+  faultsTruncated: boolean;
   lens: Lens;
   cutDays: number;
   regionId: string | null;
@@ -77,6 +79,7 @@ export const useMapStore = create<MapState>((set) => ({
   arrivals: new Map(),
   faults: null,
   faultError: null,
+  faultsTruncated: false,
   lens: 'meaning',
   cutDays: DEFAULT_CUT_DAYS,
   regionId: null,
@@ -131,6 +134,12 @@ export async function loadMap(scope: ProjectFilter, sleep: (ms: number) => Promi
       const payload = await api.getMap(scope);
       if (mine !== generation) return;
       const prev = useMapStore.getState().payload;
+      // An unchanged map keeps its objects, so the views drawn from them
+      // (Sky, Landscape, River, Pulse) are not torn down and rebuilt.
+      if (prev && prev.fingerprint === payload.fingerprint) {
+        useMapStore.setState({ status: 'ready', error: null });
+        return;
+      }
       const arrivals = new Map(useMapStore.getState().arrivals);
       if (prev) {
         const known = new Set(prev.nodes.map((n) => n.id));
@@ -143,7 +152,7 @@ export async function loadMap(scope: ProjectFilter, sleep: (ms: number) => Promi
         payload,
         model: buildModel(payload),
         arrivals,
-        faults: prev?.fingerprint === payload.fingerprint ? useMapStore.getState().faults : null,
+        faults: null,
       });
       return;
     } catch (err) {
@@ -174,9 +183,9 @@ export async function loadFaults(): Promise<void> {
   try {
     const res = await api.getGraphEdges();
     const faults = res.edges.filter((e) => e.relationship === 'contradicts').map((e): [string, string] => [e.sourceId, e.targetId]);
-    useMapStore.setState({ faults, faultError: null });
+    useMapStore.setState({ faults, faultError: null, faultsTruncated: res.truncated });
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return;
-    useMapStore.setState({ faults: [], faultError: err instanceof Error ? err.message : 'Could not reach Engram API' });
+    useMapStore.setState({ faults: [], faultError: err instanceof Error ? err.message : 'Could not reach Engram API', faultsTruncated: false });
   }
 }

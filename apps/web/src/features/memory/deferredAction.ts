@@ -1,4 +1,4 @@
-import { showToast } from '../../shell/Toasts.js';
+import { showToast, useToasts, type ToastAction } from '../../shell/Toasts.js';
 
 /** How long an action can be taken back before its call is sent. */
 export const UNDO_MS = 6000;
@@ -28,6 +28,25 @@ function send(action: DeferredAction, keepalive: boolean): void {
 }
 
 /**
+ * The toast's Undo (and ⌘Z / Ctrl+Z): takes back the newest action still
+ * waiting. A newer toast replaces an older one, so while others still wait,
+ * the toast comes back for the next newest and Undo walks back through them.
+ */
+const UNDO: ToastAction = {
+  label: 'Undo',
+  run: () => {
+    const newest = [...pending.keys()].pop();
+    const entry = newest === undefined ? undefined : pending.get(newest);
+    if (newest === undefined || !entry) return;
+    clearTimeout(entry.timer);
+    pending.delete(newest);
+    entry.action.undo();
+    const next = [...pending.values()].pop();
+    if (next) showToast(next.action.message, UNDO);
+  },
+};
+
+/**
  * Archive with an undo, client side (the server has no restore yet): the
  * caller hides the item at once, the toast offers Undo for six seconds, and
  * only then is the call sent. Closing or reloading the page inside that
@@ -39,18 +58,12 @@ export function deferAction(action: DeferredAction): void {
   const timer = setTimeout(() => {
     pending.delete(id);
     send(action, false);
+    // Nothing left to take back: an Undo still on screen would do nothing.
+    const toasts = useToasts.getState();
+    if (pending.size === 0 && toasts.visible && toasts.toast?.action === UNDO) toasts.dismiss();
   }, UNDO_MS);
   pending.set(id, { timer, action });
-  showToast(action.message, {
-    label: 'Undo',
-    run: () => {
-      const entry = pending.get(id);
-      if (!entry) return;
-      clearTimeout(entry.timer);
-      pending.delete(id);
-      action.undo();
-    },
-  });
+  showToast(action.message, UNDO);
 }
 
 /** Sends every action still waiting, now. Runs when the page is hidden for good. */

@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { isAnalyticsData, useAnalyticsStore } from '../../store/analyticsStore.js';
 import { api, ApiError } from '../../lib/api.js';
 import { ConceptPanel, GrowthPanel, HeatmapPanel, SourcePanel, StatsRow, TypePanel } from './AnalyticsPanels.js';
@@ -15,23 +15,29 @@ export const RANGES = [7, 30, 90] as const;
  */
 export default function NumbersTab() {
   const { data, loading, days, error, setData, setLoading, setError, setDays } = useAnalyticsStore();
+  const latest = useRef(0);
 
   // The shape is checked before it is trusted: a payload this page does not
   // understand reaches the error state rather than a page of `undefined`.
+  // Only the latest request lands: a slow reply for an earlier range is dropped.
   const load = useCallback(() => {
+    const request = ++latest.current;
     setLoading(true);
     setError(null);
     api
       .getAnalytics(days)
       .then((payload) => {
+        if (request !== latest.current) return;
         if (!isAnalyticsData(payload)) setError('the analytics endpoint returned a shape this dashboard does not understand');
         else setData(payload);
       })
       .catch((e: unknown) => {
-        if (e instanceof ApiError && e.status === 401) return;
+        if (request !== latest.current || (e instanceof ApiError && e.status === 401)) return;
         setError(e instanceof Error ? e.message : 'Could not reach Engram');
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (request === latest.current) setLoading(false);
+      });
   }, [days, setData, setLoading, setError]);
 
   useEffect(load, [load]);

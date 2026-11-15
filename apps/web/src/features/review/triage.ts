@@ -1,4 +1,6 @@
 import { api, type ReviewItem, type ReviewPair, type ReviewQueue } from '../../lib/api.js';
+import { asMemoryRecord } from '../../hooks/useWebSocket.js';
+import { useMemoryStore } from '../../store/memoryStore.js';
 import type { Action } from './parts.js';
 
 /** Fading memories are kept by this tag, which the decay policy protects. */
@@ -16,6 +18,17 @@ async function leave(queue: ReviewQueue, item: ReviewItem): Promise<void> {
     return;
   }
   if (queue === 'fading' || queue === 'secrets') await api.dismissReview(queue, [item.memory.id]);
+}
+
+/** The list's copies of tagged memories gain the tag, as the server's did. */
+function tagLoaded(ids: string[], tag: string): void {
+  const { records, updateRecordTags } = useMemoryStore.getState();
+  const chosen = new Set(ids);
+  for (const record of records) {
+    if (!chosen.has(record.id)) continue;
+    const tags = JSON.parse(record.tags || '[]') as string[];
+    if (!tags.includes(tag)) updateRecordTags(record.id, [...tags, tag]);
+  }
 }
 
 const LEFT: Record<ReviewQueue, string> = {
@@ -45,11 +58,22 @@ export async function settle(queue: ReviewQueue, item: ReviewItem, action: Actio
   }
   const id = item.memory.id;
   switch (action) {
-    case 'pin':
-      await api.addTag(id, PIN_TAG);
+    case 'pin': {
+      const { tags } = await api.addTag(id, PIN_TAG);
+      useMemoryStore.getState().updateRecordTags(id, tags);
       return { message: 'Pinned. It will not fade.' };
+    }
     case 'redact': {
       const { redacted } = await api.redactMemory(id);
+      // No text comes back: the list's copy is replaced by the redacted row,
+      // so the old text is not shown again. Failing that, it is until a reload.
+      api
+        .getGraph(id)
+        .then((g) => {
+          const fresh = asMemoryRecord(g.node);
+          if (fresh) useMemoryStore.getState().updateRecord(fresh);
+        })
+        .catch(() => {});
       return { message: `Redacted ${redacted} ${redacted === 1 ? 'value' : 'values'}. The memory stays.` };
     }
     case 'archive':
@@ -91,10 +115,13 @@ export async function settleMany(
   if (action === 'tag') {
     const ids = memoryIds(items);
     await api.bulkTag(ids, tag);
+    tagLoaded(ids, tag);
     return { removed: [], message: `Tagged ${plural(ids.length, 'memory', 'memories')} “${tag}”.` };
   }
   if (action === 'pin') {
-    await api.bulkTag(memoryIds(items), PIN_TAG);
+    const ids = memoryIds(items);
+    await api.bulkTag(ids, PIN_TAG);
+    tagLoaded(ids, PIN_TAG);
     return { removed: items.map(keyOf), message: `Pinned ${plural(items.length, 'memory', 'memories')}.` };
   }
   if (action === 'archive') {

@@ -65,6 +65,8 @@ export class NeuralGraph {
   }
 
   addEdge(sourceId: string, targetId: string, strength: number = 1.0): void {
+    // Like addNode: a second copy would double the edge's attraction.
+    if (this.edges.some((e) => e.sourceId === sourceId && e.targetId === targetId)) return;
     this.edges.push({ sourceId, targetId, strength });
   }
 

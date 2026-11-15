@@ -113,21 +113,25 @@ export class AnimationEngine {
       }
     }
 
-    if (events.length > 0) {
-      for (const listener of this.listeners) {
-        listener(events);
+    try {
+      if (events.length > 0) {
+        for (const listener of this.listeners) {
+          listener(events);
+        }
       }
-    }
+    } finally {
+      // Scheduled even when a listener throws: otherwise `running` stays true
+      // with no timer live, and ensureRunning() never starts the loop again.
+      // Always clear the previous handle before assigning a new one so exactly
+      // one timer can ever be live.
+      if (this.frameTimer) clearTimeout(this.frameTimer);
 
-    // Always clear the previous handle before assigning a new one so exactly
-    // one timer can ever be live.
-    if (this.frameTimer) clearTimeout(this.frameTimer);
-
-    if (this.activations.size > 0) {
-      this.frameTimer = setTimeout(() => this.tick(), this.TICK_MS);
-    } else {
-      this.frameTimer = null;
-      this.running = false;
+      if (this.activations.size > 0) {
+        this.frameTimer = setTimeout(() => this.tick(), this.TICK_MS);
+      } else {
+        this.frameTimer = null;
+        this.running = false;
+      }
     }
   }
 }

@@ -95,13 +95,19 @@ export default function ReviewView() {
   const current = items[Math.min(index, items.length - 1)];
   const at = current ? Math.min(index, items.length - 1) : 0;
 
-  // Counts are refreshed on arrival; the queue on every queue or scope change
-  // (the store keeps one it already has).
+  // Counts are refreshed on arrival; the queue on every queue or scope change.
+  // The store keeps a queue it already has, but each visit to Review asks
+  // once more for every queue it opens, since items may have been settled
+  // elsewhere (the memory sheet) in between.
+  const asked = useRef(new Set<ReviewQueue>());
   useEffect(() => {
     void loadSummary(scope);
   }, [loadSummary, scope]);
   useEffect(() => {
-    if (ready) void loadQueue(queue, scope);
+    if (ready) {
+      void loadQueue(queue, scope, { retry: !asked.current.has(queue) });
+      asked.current.add(queue);
+    }
     setIndex(0);
     setSelected(new Set());
     setConfirming(false);
@@ -214,6 +220,8 @@ export default function ReviewView() {
       const previous = lastKey.current;
       lastKey.current = { key: event.key, at: Date.now() };
       if (event.defaultPrevented || typing || event.metaKey || event.ctrlKey || event.altKey) return;
+      // A memory sheet, dialog or the unlock gate over the queue has the keys.
+      if (document.querySelector('[aria-modal="true"]')) return;
       if (previous.key === 'g' && Date.now() - previous.at < 1200) return;
       if (confirming) return;
       const pair = current?.kind === 'pair';

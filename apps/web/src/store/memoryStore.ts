@@ -30,6 +30,9 @@ interface MemoryState {
    *  added. Listed apart, under "Weaker matches". */
   weakerResults: MemoryRecord[];
   searchQuery: string;
+  /** The scope `searchResults` were fetched for, so a search bar mounted
+   *  after the scope changed elsewhere knows to ask again. */
+  searchScope: ProjectFilter;
   isSearching: boolean;
   /**
    * How many records are LOADED, not how many the store holds. The dashboard
@@ -46,8 +49,9 @@ interface MemoryState {
    */
   loadedCount: number;
   highlightedIds: Set<string>;
-  /** Memories archived a moment ago whose call waits out the undo window:
-   *  every list leaves them out until it is sent or undone. */
+  /** Memories archived a moment ago whose call waits out the undo window, and
+   *  ones archived since the page opened: every list leaves them out. Undo
+   *  (or a failed call) takes an id back out. */
   hiddenIds: ReadonlySet<string>;
   /**
    * Bumped when a memory joins or leaves the STORE (a socket arrival, an
@@ -84,6 +88,7 @@ export const useMemoryStore = create<MemoryState>((set) => ({
   searchResults: [],
   weakerResults: [],
   searchQuery: '',
+  searchScope: undefined,
   isSearching: false,
   loadedCount: 0,
   highlightedIds: new Set(),

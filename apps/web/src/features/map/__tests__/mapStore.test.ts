@@ -32,6 +32,7 @@ beforeEach(() => {
     arrivals: new Map(),
     faults: null,
     faultError: null,
+    faultsTruncated: false,
     lens: 'meaning',
     regionId: null,
     panel: 'recent',
@@ -79,6 +80,16 @@ describe('loadMap', () => {
     await loadMap(undefined);
     expect(during).toBe('ready');
     expect([...useMapStore.getState().arrivals.keys()]).toEqual(['new']);
+  });
+
+  it('keeps the same objects when the map has not changed, so the views are not rebuilt', async () => {
+    getMap.mockResolvedValueOnce(payload());
+    await loadMap(undefined);
+    const { payload: before, model } = useMapStore.getState();
+    getMap.mockResolvedValueOnce(payload());
+    await loadMap(undefined);
+    expect(useMapStore.getState().payload).toBe(before);
+    expect(useMapStore.getState().model).toBe(model);
   });
 
   it('starts over on a new scope: no arrivals, no open region', async () => {
@@ -142,6 +153,15 @@ describe('loadFaults', () => {
     });
     await loadFaults();
     expect(useMapStore.getState().faults).toEqual([['c', 'd']]);
+    expect(useMapStore.getState().faultsTruncated).toBe(false);
+  });
+
+  it('notes when the server returned only its strongest edges', async () => {
+    vi.mocked(api.getGraphEdges).mockResolvedValueOnce({
+      total: 30000, stored: 30000, matching: 30000, returned: 20000, truncated: true, minStrength: 0, limit: 20000, edges: [],
+    });
+    await loadFaults();
+    expect(useMapStore.getState().faultsTruncated).toBe(true);
   });
 
   it('says when they could not be loaded', async () => {

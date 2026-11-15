@@ -10,6 +10,8 @@ import { useMapStore } from '../../features/map/mapStore.js';
 import { payload } from '../../features/map/__tests__/payload.js';
 import { useReviewStore } from '../../features/review/queues.js';
 import { api } from '../../lib/api.js';
+import { refreshServerStats, resetServerStats } from '../../lib/serverStats.js';
+import { useToasts } from '../Toasts.js';
 
 /** The map's canvas draws only, and jsdom cannot draw; the map's own tests
  *  cover what it is handed. */
@@ -29,7 +31,6 @@ vi.mock('../../features/insights/InsightsView.js', () => ({
 vi.mock('../../lib/api.js', () => ({
   api: {
     listMemories: vi.fn(),
-    getContradictions: vi.fn(),
     stats: vi.fn().mockResolvedValue({ total: 0, byType: {}, bySource: {} }),
     health: vi.fn().mockResolvedValue({ status: 'ok', version: '0.5.0', uptime: 1 }),
     deleteMemory: vi.fn(),
@@ -87,17 +88,19 @@ function resetAll() {
   window.location.hash = '';
   useRouteStore.setState({ route: parseHash('') });
   useMemoryStore.setState({
-    records: [], loadedCount: 0, projectFilter: undefined, searchQuery: '', searchResults: [], weakerResults: [], hiddenIds: new Set(),
+    records: [], loadedCount: 0, projectFilter: undefined, searchQuery: '', searchScope: undefined, searchResults: [], weakerResults: [], hiddenIds: new Set(),
   });
-  useNeuralStore.setState({ contradictionPairs: [], selectedNeuronId: null, isConnected: false });
+  useNeuralStore.setState({ selectedNeuronId: null, isConnected: false });
+  // The census is module state: a total left by an earlier test would read as
+  // growth to a new Shell and reload its list.
+  resetServerStats();
+  useToasts.setState({ toast: null, visible: false, queued: null });
   useMapStore.setState({ status: 'loading', payload: null, model: null, scopeKey: null, arrivals: new Map(), regionId: null, panel: 'recent' });
   go('/');
   useAuthStore.setState({ locked: false, hadKey: false });
   vi.mocked(api.listMemories).mockReset();
-  vi.mocked(api.getContradictions).mockReset();
   getMap.mockReset();
   getDecayPolicy.mockReset();
-  vi.mocked(api.getContradictions).mockResolvedValue({ count: 0, contradictions: [] });
   getMap.mockResolvedValue(payload());
   getDecayPolicy.mockResolvedValue({ halfLifeDays: 7, archiveThreshold: 0.05 });
   useReviewStore.setState({ scope: undefined, summary: null, summaryLoading: false, summaryFailed: false, queues: {}, cleared: 0 });
@@ -108,11 +111,10 @@ function resetAll() {
 describe('Shell effect wiring (W12)', () => {
   beforeEach(resetAll);
 
-  it('refetches contradictions and the map when a memory arrives, so it lands on the map', async () => {
+  it('refetches the map when a memory arrives, so it lands on the map', async () => {
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<Shell />);
-    await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getMap).toHaveBeenCalledTimes(1));
 
     // Simulates a socket 'memory:stored' broadcast adding a new record.
@@ -120,24 +122,42 @@ describe('Shell effect wiring (W12)', () => {
       useMemoryStore.getState().addRecord(record({ id: 'b' }));
     });
 
-    await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(getMap).toHaveBeenCalledTimes(2));
   });
 
   it('loads the map once on a cold load, and not again when the list pages', async () => {
-    vi.mocked(api.stats).mockResolvedValue({ total: 3, byType: { semantic: 3 }, bySource: {} });
+    vi.mocked(api.stats).mockResolvedValue({ total: 201, byType: { semantic: 201 }, bySource: {} });
+    // A full first page: a shorter one is the whole list, with nothing older to load.
+    const page = Array.from({ length: 200 }, (_, i) => record({ id: `r${i}` }));
     vi.mocked(api.listMemories)
-      .mockResolvedValueOnce({ count: 2, memories: [record({ id: 'a' }), record({ id: 'b' })] })
+      .mockResolvedValueOnce({ count: 200, memories: page })
       .mockResolvedValueOnce({ count: 1, memories: [record({ id: 'c' })] });
 
     render(<Shell />);
     expect(await screen.findByRole('application', { name: 'Memory map, 5 memories in 2 regions' })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
 
-    await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['a', 'b', 'c']));
-    expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, offset: 2 });
+    await waitFor(() => expect(useMemoryStore.getState().records).toHaveLength(201));
+    expect(useMemoryStore.getState().records[200]!.id).toBe('c');
+    expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 200, offset: 200 });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(getMap).toHaveBeenCalledTimes(1);
+    vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
+  });
+
+  it('stops offering older memories once a page adds nothing, whatever the census says', async () => {
+    vi.mocked(api.stats).mockResolvedValue({ total: 202, byType: { semantic: 202 }, bySource: {} });
+    const page = Array.from({ length: 200 }, (_, i) => record({ id: `r${i}` }));
+    vi.mocked(api.listMemories)
+      .mockResolvedValueOnce({ count: 200, memories: page })
+      // The rows shifted under a write no socket event announced: the page holds only a known row.
+      .mockResolvedValueOnce({ count: 1, memories: [record({ id: 'r199' })] });
+
+    render(<Shell />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load older' })).not.toBeInTheDocument());
+    expect(api.listMemories).toHaveBeenCalledTimes(2);
     vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
   });
 
@@ -189,18 +209,44 @@ describe('Shell effect wiring (W12)', () => {
     expect(getMap).toHaveBeenCalledTimes(1);
   });
 
-  it('does not refetch contradictions merely because an existing record was edited', async () => {
+  it('reloads the list and the map when the census grows with no socket event, as after an MCP write', async () => {
+    vi.mocked(api.stats).mockResolvedValue({ total: 1, byType: { semantic: 1 }, bySource: {} });
+    vi.mocked(api.listMemories)
+      .mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] })
+      .mockResolvedValueOnce({ count: 2, memories: [record({ id: 'b' }), record({ id: 'a' })] });
+
+    render(<Shell />);
+    await waitFor(() => expect(getMap).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.stats).toHaveBeenCalled());
+    await act(() => refreshServerStats());
+
+    vi.mocked(api.stats).mockResolvedValue({ total: 2, byType: { semantic: 2 }, bySource: {} });
+    await act(() => refreshServerStats());
+
+    await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).toEqual(['b', 'a']));
+    expect(api.listMemories).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(getMap).toHaveBeenCalledTimes(2));
+    vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
+  });
+
+  it('does not reload the list when the census grows because of a memory the socket announced', async () => {
+    vi.mocked(api.stats).mockResolvedValue({ total: 1, byType: { semantic: 1 }, bySource: {} });
     vi.mocked(api.listMemories).mockResolvedValueOnce({ count: 1, memories: [record({ id: 'a' })] });
 
     render(<Shell />);
-    await waitFor(() => expect(api.getContradictions).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getMap).toHaveBeenCalledTimes(1));
+    await act(() => refreshServerStats());
 
+    // The arrival bumps storeChanges, which asks for the census itself.
+    vi.mocked(api.stats).mockResolvedValue({ total: 2, byType: { semantic: 2 }, bySource: {} });
     act(() => {
-      useMemoryStore.getState().updateRecordTags('a', ['new-tag']);
+      useMemoryStore.getState().addRecord(record({ id: 'b' }));
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitFor(() => expect(getMap).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(api.getContradictions).toHaveBeenCalledTimes(1);
+    expect(api.listMemories).toHaveBeenCalledTimes(1);
+    vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
   });
 });
 
@@ -476,9 +522,8 @@ describe('Shell routes', () => {
     expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
   });
 
-  it('badges Rail and BottomNav from the Review summary even when contradictions returns its 200-item limit', async () => {
+  it('badges Rail and BottomNav from the Review summary', async () => {
     vi.mocked(api.getReviewSummary).mockResolvedValue({ contradictions: 2, duplicates: 1, fading: 0, secrets: 0, fingerprint: 'f' });
-    vi.mocked(api.getContradictions).mockResolvedValue({ count: 200, contradictions: Array.from({ length: 200 }, (_, i) => ({ edgeId: `c${i}`, confidence: 0.8, source: { id: `a${i}`, content: '', type: 'semantic', importance: 0.5 }, target: { id: `b${i}`, content: '', type: 'semantic', importance: 0.5 } })) });
     vi.mocked(api.stats).mockResolvedValue({
       total: 3,
       byType: {},

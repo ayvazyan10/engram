@@ -5,7 +5,7 @@ import Toasts, { showToast, useToasts, TOAST_MS, TOAST_ACTION_MS } from '../Toas
 describe('Toasts', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useToasts.setState({ toast: null, visible: false });
+    useToasts.setState({ toast: null, visible: false, queued: null });
   });
   afterEach(() => vi.useRealTimers());
 
@@ -46,6 +46,19 @@ describe('Toasts', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Second');
     expect(screen.getByRole('status')).toHaveAttribute('data-on', 'true');
+  });
+
+  it('holds a plain toast back while an Undo is up, and shows it when the Undo goes', () => {
+    render(<Toasts />);
+    act(() => showToast('Archived', { label: 'Undo', run: vi.fn() }));
+    act(() => showToast('Saved'));
+    expect(screen.getByRole('status')).toHaveTextContent('Archived');
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(TOAST_ACTION_MS));
+    expect(screen.getByRole('status')).toHaveTextContent('Saved');
+    expect(screen.getByRole('status')).toHaveAttribute('data-on', 'true');
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 
   it('takes the action with Ctrl+Z or ⌘Z while it is up, but leaves a text field its own undo', () => {

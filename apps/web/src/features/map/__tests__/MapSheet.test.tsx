@@ -56,6 +56,7 @@ beforeEach(() => {
     searchResults: [],
     weakerResults: [],
     searchQuery: '',
+    searchScope: undefined,
     isSearching: false,
     projectFilter: undefined,
     hiddenIds: new Set(),
@@ -310,6 +311,20 @@ describe('SearchBar with the sheet', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     await screen.findByRole('heading', { name: '3 memories match “sync”' });
     act(() => useMemoryStore.getState().setProjectFilter('/code/api'));
+    await waitFor(() => expect(api.search).toHaveBeenLastCalledWith('sync', 20, undefined, '/code/api'));
+  });
+
+  it('runs the search again for a scope picked on another route while the field was away', async () => {
+    vi.mocked(api.search).mockResolvedValue({ count: 3, results: [memory(), memory(), memory()] });
+    const { unmount } = renderBoth();
+    const input = screen.getByLabelText('Search memories');
+    fireEvent.change(input, { target: { value: 'sync' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await screen.findByRole('heading', { name: '3 memories match “sync”' });
+    unmount();
+
+    act(() => useMemoryStore.getState().setProjectFilter('/code/api'));
+    renderBoth();
     await waitFor(() => expect(api.search).toHaveBeenLastCalledWith('sync', 20, undefined, '/code/api'));
   });
 

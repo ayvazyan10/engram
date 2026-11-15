@@ -22,7 +22,7 @@ import { useNeuralStore } from '../store/neuralStore.js';
 import { useMemoryStore, type MemoryRecord } from '../store/memoryStore.js';
 import { useAuthStore } from '../store/authStore.js';
 import { api, ApiError } from '../lib/api.js';
-import { refreshServerStats } from '../lib/serverStats.js';
+import { refreshServerStats, useServerStats } from '../lib/serverStats.js';
 import { useWebSocket, asMemoryRecord } from '../hooks/useWebSocket.js';
 import './shell.css';
 
@@ -47,11 +47,10 @@ const TITLES: Record<Route['name'], string> = {
 /**
  * The Atlas shell: rail (desktop) or bottom nav (phone), the scope and command
  * bar, the routed screen, the palette, toasts, the store dialog and the unlock
- * gate. It also owns the loads every screen shares (the memory list, the
- * contradiction pairs, the map) so moving between routes refetches nothing.
+ * gate. It also owns the loads every screen shares (the memory list and the
+ * map) so moving between routes refetches nothing.
  */
 export default function Shell() {
-  const setContradictionPairs = useNeuralStore((s) => s.setContradictionPairs);
   const { setRecords, appendRecords, storeChanges, projectFilter } = useMemoryStore();
   const route = useRouteStore((s) => s.route);
   const navigate = useRouteStore((s) => s.navigate);
@@ -60,6 +59,9 @@ export default function Shell() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  /** False once a page comes back short or adds nothing new: the list is at
+   *  its end, whatever the census says, until the next full load. */
+  const [hasMore, setHasMore] = useState(true);
   const [showStoreModal, setShowStoreModal] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
@@ -73,13 +75,18 @@ export default function Shell() {
     api.listMemories({ limit: PAGE_SIZE, namespace: projectFilter })
       .then((res) => {
         // A quick second pick must not be overwritten by the first's reply.
-        if (useMemoryStore.getState().projectFilter === projectFilter) setRecords(parseMemories(res.memories));
+        if (useMemoryStore.getState().projectFilter !== projectFilter) return;
+        setRecords(parseMemories(res.memories));
+        setHasMore(res.memories.length >= PAGE_SIZE);
       })
       .catch((err: unknown) => {
+        if (useMemoryStore.getState().projectFilter !== projectFilter) return;
         if (err instanceof ApiError && err.status === 401) return;
         setLoadError(err instanceof Error ? err.message : 'Could not reach Engram API');
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (useMemoryStore.getState().projectFilter === projectFilter) setLoading(false);
+      });
   }, [setRecords, projectFilter]);
 
   // Fires again whenever the scope changes. The scope is global now: it is
@@ -95,7 +102,12 @@ export default function Shell() {
     const { records, projectFilter: namespace } = useMemoryStore.getState();
     api.listMemories({ limit: PAGE_SIZE, offset: records.length, namespace })
       .then((res) => {
-        if (useMemoryStore.getState().projectFilter === namespace) appendRecords(parseMemories(res.memories));
+        if (useMemoryStore.getState().projectFilter !== namespace) return;
+        appendRecords(parseMemories(res.memories));
+        // A page that adds nothing (rows shifted by a write the socket never
+        // announced) must not be asked for again and again.
+        const added = useMemoryStore.getState().records.length > records.length;
+        if (!added || res.memories.length < PAGE_SIZE) setHasMore(false);
       })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 401) return;
@@ -109,20 +121,20 @@ export default function Shell() {
     if (storeChanges > 0) void refreshServerStats();
   }, [storeChanges]);
 
-  // Whole-store fetches key on `storeChanges` (a socket arrival or an archive),
-  // not on the loaded count, so paging and edits do not refetch them.
-  const contradictionsFetchedForRef = useRef(-1);
+  // An MCP client writes to the database directly, so its memory reaches the
+  // census (GET /stats) with no socket event: a census that grows while
+  // `storeChanges` stood still means a write this tab was not told about.
+  const total = useServerStats()?.total;
+  const seen = useRef<{ total: number; changes: number } | null>(null);
   useEffect(() => {
-    if (contradictionsFetchedForRef.current === storeChanges) return;
-    contradictionsFetchedForRef.current = storeChanges;
-    api.getContradictions()
-      .then((res) => {
-        setContradictionPairs(
-          res.contradictions.map((c) => ({ sourceId: c.source.id, targetId: c.target.id, confidence: c.confidence }))
-        );
-      })
-      .catch(() => {});
-  }, [storeChanges, setContradictionPairs]);
+    const before = seen.current;
+    if (total === undefined || total === before?.total) return;
+    seen.current = { total, changes: storeChanges };
+    if (before && total > before.total && storeChanges === before.changes) {
+      loadMemories();
+      void loadMap(projectFilter);
+    }
+  }, [total, storeChanges, loadMemories, projectFilter]);
 
   // The map, for the scope: again when a memory joins or leaves the store, so
   // an arrival lands on the map (the server places it by its neighbours).
@@ -244,6 +256,7 @@ export default function Shell() {
               {...viewProps}
               onLoadMore={loadMore}
               loadingMore={loadingMore}
+              hasMore={hasMore}
               onStore={openStore}
               onCommands={() => setPaletteOpen(true)}
             />

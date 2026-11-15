@@ -519,7 +519,8 @@ export default function MapCanvas(props: Props) {
         return pickRouteBadge(s.badges, px, py);
       }
       return pick(p.model.index, p.model.xs, p.model.ys, s.view, px, py, PICK_PX,
-        (i) => pickable(p.model.created[i]!, p.lens));
+        // A memory hidden while its archive waits is not drawn, so it does not answer the pointer.
+        (i) => pickable(p.model.created[i]!, p.lens) && !p.lens.hidden?.has(p.model.nodes[i]!.id));
     };
 
     const onMove = (event: PointerEvent) => {

@@ -64,10 +64,12 @@ export default function SearchBar({ onCommands }: { onCommands: () => void }) {
       setSearching(true);
       setError(null);
       try {
-        const { strong, weaker } = await searchWithFallback(query, useMemoryStore.getState().projectFilter);
+        const scope = useMemoryStore.getState().projectFilter;
+        const { strong, weaker } = await searchWithFallback(query, scope);
         if (id !== latest.current) return;
         // Committed together, and only on success, so a failed search never
         // relabels the last good results with its own words.
+        useMemoryStore.setState({ searchScope: scope });
         setSearchQuery(query);
         setSearchResults(strong, weaker);
         setHighlightedIds(new Set([...strong, ...weaker].map((r) => r.id)));
@@ -114,8 +116,9 @@ export default function SearchBar({ onCommands }: { onCommands: () => void }) {
     }, TYPE_PAUSE_MS);
   };
 
-  // A new scope asks the same question again of the new project.
-  const scopeRef = useRef(projectFilter);
+  // A new scope asks the same question again of the new project, including
+  // one picked on another route while this bar was not mounted.
+  const scopeRef = useRef(useMemoryStore.getState().searchScope);
   useEffect(() => {
     if (scopeRef.current === projectFilter) return;
     scopeRef.current = projectFilter;

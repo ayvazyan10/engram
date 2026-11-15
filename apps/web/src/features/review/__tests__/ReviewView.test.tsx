@@ -104,7 +104,7 @@ beforeEach(() => {
   window.matchMedia = vi.fn((query: string) => ({ matches: query.includes('reduce') }) as MediaQueryList);
   useReviewStore.setState({ scope: undefined, summary: null, summaryLoading: false, summaryFailed: false, queues: {}, cleared: 0 });
   useMemoryStore.setState({ projectFilter: undefined, records: [], hiddenIds: new Set() });
-  useToasts.setState({ toast: null, visible: false });
+  useToasts.setState({ toast: null, visible: false, queued: null });
   vi.mocked(api.getReviewSummary).mockResolvedValue(SUMMARY);
   vi.mocked(api.getDecayPolicy).mockResolvedValue({ halfLifeDays: 7, archiveThreshold: 0.05 });
   vi.mocked(api.bulkArchive).mockResolvedValue({ archived: 1, total: 1 });
@@ -342,6 +342,9 @@ describe('Review: keyboard triage', () => {
 describe('Review: redact', () => {
   it('asks first, showing only masked previews, and never puts a secret on screen', async () => {
     vi.mocked(api.redactMemory).mockResolvedValue({ id: 's1', redacted: 2 });
+    // The list's copy predates the redaction; afterwards it is the redacted row.
+    const listed = { ...memory('s1', 'CI deploy token: (stale copy)'), source: null, tags: '[]' };
+    useMemoryStore.setState({ records: [listed] });
     go('/review/secrets');
     view();
     expect(await screen.findByRole('heading', { name: 'This looks like a secret' })).toBeInTheDocument();
@@ -362,10 +365,16 @@ describe('Review: redact', () => {
     expect(api.listMemories).not.toHaveBeenCalled();
     expect(api.getGraph).not.toHaveBeenCalled();
 
+    vi.mocked(api.getGraph).mockResolvedValue({
+      node: { ...listed, content: 'CI deploy token: [REDACTED] with repo scope' },
+      connections: [],
+      neighbors: [],
+    });
     fireEvent.click(within(confirm).getByRole('button', { name: 'Redact 2 values' }));
     await waitFor(() => expect(api.redactMemory).toHaveBeenCalledWith('s1'));
     await waitFor(() => expect(toast()).toBe('Redacted 2 values. The memory stays.'));
     expect(await screen.findByRole('heading', { name: 'All clear' })).toBeInTheDocument();
+    await waitFor(() => expect(useMemoryStore.getState().records[0]!.content).toBe('CI deploy token: [REDACTED] with repo scope'));
   });
 
   it('cancels with Escape or Cancel and sends nothing', async () => {
@@ -482,6 +491,9 @@ describe('Review: bulk', () => {
     press('x');
     fireEvent.click(screen.getByRole('button', { name: 'Archive older' }));
     await waitFor(() => expect(toast()).toBe('Kept the newer of 1 pair; the older ones are archived.'));
+    // By the time the call is sent its Undo toast has gone; a plain toast
+    // would otherwise wait behind it.
+    act(() => useToasts.getState().dismiss());
     await act(async () => flushDeferred());
     expect(toast()).toBe('Could not archive: Too many');
     expect(screen.getByText('1 of 3')).toBeInTheDocument();
@@ -522,7 +534,9 @@ describe('Review: deferred archive', () => {
     expect(api.bulkArchive).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(api.bulkArchive).toHaveBeenCalledExactlyOnceWith(['s1'], false);
-    expect(useMemoryStore.getState().hiddenIds.size).toBe(0);
+    // Archived, it stays hidden, so no list that keeps its own rows shows it again.
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(useMemoryStore.getState().hiddenIds.has('s1')).toBe(true);
   });
 });
 

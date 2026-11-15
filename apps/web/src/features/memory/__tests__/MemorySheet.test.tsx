@@ -85,9 +85,9 @@ function renderSheet() {
 beforeEach(() => {
   resetPolicyCache();
   mapScore(0.2);
-  useNeuralStore.setState({ selectedNeuronId: null, contradictionPairs: [{ sourceId: 'a', targetId: 'b', confidence: 0.9 }] });
+  useNeuralStore.setState({ selectedNeuronId: null });
   useMemoryStore.setState({ records: [record(), other, neighbour], searchResults: [], weakerResults: [], hiddenIds: new Set() });
-  useToasts.setState({ toast: null, visible: false });
+  useToasts.setState({ toast: null, visible: false, queued: null });
   vi.mocked(api.getGraph).mockReset().mockResolvedValue(graph() as never);
   vi.mocked(api.getDecayPolicy).mockReset().mockResolvedValue({ halfLifeDays: 7, archiveThreshold: 0.05 });
   vi.mocked(api.deleteMemory).mockReset().mockResolvedValue(undefined);
@@ -217,6 +217,15 @@ describe('MemorySheet: reading', () => {
     expect(await screen.findByText(/Sync encryption is optional/)).toBeInTheDocument();
   });
 
+  it('shows the fetched memory over a stale list copy, so a redaction made elsewhere shows', async () => {
+    useMemoryStore.setState({ records: [record({ content: 'The key is sk-live-123.' })] });
+    vi.mocked(api.getGraph).mockResolvedValue({ node: record({ content: 'The key is [REDACTED].' }), connections: [], neighbors: [] } as never);
+    renderSheet();
+    open();
+    expect(await screen.findByText(/\[REDACTED\]/)).toBeInTheDocument();
+    expect(screen.queryByText(/sk-live-123/)).not.toBeInTheDocument();
+  });
+
   it('says so when the memory is no longer in the store', async () => {
     useMemoryStore.setState({ records: [] });
     vi.mocked(api.getGraph).mockRejectedValue(Object.assign(new Error('Memory not found'), { status: 404 }));
@@ -290,7 +299,7 @@ describe('MemorySheet: edit', () => {
 });
 
 describe('MemorySheet: archive with undo', () => {
-  it('hides the memory at once, sends the archive after the undo window, then drops it', async () => {
+  it('hides the memory at once, sends the archive after the undo window, then drops it and keeps it hidden', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     renderSheet();
     open();
@@ -306,7 +315,8 @@ describe('MemorySheet: archive with undo', () => {
     });
     expect(api.deleteMemory).toHaveBeenCalledWith('a', false);
     await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).not.toContain('a'));
-    expect(useMemoryStore.getState().hiddenIds.has('a')).toBe(false);
+    // A list with its own rows (the Timeline) must not show it again.
+    expect(useMemoryStore.getState().hiddenIds.has('a')).toBe(true);
   });
 
   it('Undo (the button or Ctrl+Z) puts it back and never sends the call', async () => {
@@ -362,8 +372,23 @@ describe('MemorySheet: contradictions', () => {
       vi.advanceTimersByTime(UNDO_MS);
     });
     expect(api.resolveContradiction).toHaveBeenCalledWith('a', 'b', 'keep_oldest', false);
-    await waitFor(() => expect(useNeuralStore.getState().contradictionPairs).toEqual([]));
-    expect(useMemoryStore.getState().records.map((r) => r.id)).not.toContain('b');
+    await waitFor(() => expect(useMemoryStore.getState().records.map((r) => r.id)).not.toContain('b'));
+    expect(useMemoryStore.getState().hiddenIds.has('b')).toBe(true);
+  });
+
+  it('puts the loser back and says so when the server did not resolve the pair', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(api.resolveContradiction).mockResolvedValue({ resolved: false });
+    renderSheet();
+    open();
+    const card = (await screen.findByRole('button', { name: /on by default/ })).closest('.mm-fault') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: 'Keep oldest' }));
+    await act(async () => {
+      vi.advanceTimersByTime(UNDO_MS);
+    });
+    expect(await screen.findByText('Could not resolve that contradiction: Contradiction not resolved')).toBeInTheDocument();
+    expect(useMemoryStore.getState().hiddenIds.has('b')).toBe(false);
+    expect(useMemoryStore.getState().records.map((r) => r.id)).toContain('b');
   });
 
   it('closes the sheet when this memory is the one archived, and Undo reopens it', async () => {

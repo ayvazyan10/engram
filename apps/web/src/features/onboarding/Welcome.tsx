@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useMemoryStore } from '../../store/memoryStore.js';
+import { useMemoryStore, type MemoryRecord } from '../../store/memoryStore.js';
+import { api } from '../../lib/api.js';
+import { asMemoryRecord } from '../../hooks/useWebSocket.js';
 import { useNeuralStore } from '../../store/neuralStore.js';
 import { useServerStats } from '../../lib/serverStats.js';
 import { getStoredApiKey } from '../../lib/apiKey.js';
@@ -221,7 +223,9 @@ interface Props {
   /** True while the shell's memory list is still loading. */
   loading: boolean;
   /** Reloads the memory list. An MCP client writes to the database directly,
-   *  so its memory reaches the census (GET /stats) before any socket event. */
+   *  so its memory reaches the census (GET /stats) before any socket event;
+   *  the shell reloads when the census grows, and this covers a store that
+   *  was empty when the list loaded. */
   onRefresh: () => void;
   /** Leaves for the map. */
   onDone: () => void;
@@ -233,26 +237,45 @@ interface Props {
  * memories, the same steps wait for the next one instead.
  */
 export default function Welcome({ loading, onRefresh, onDone }: Props) {
-  const records = useMemoryStore((s) => s.records);
   const selectedId = useNeuralStore((s) => s.selectedNeuronId);
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
   const total = useServerStats()?.total;
-  // The newest memory when the page opened (null: none). Anything newer arrived while it was open.
-  const [baseline, setBaseline] = useState<string | null | undefined>(() => (loading ? undefined : (records[0]?.id ?? null)));
-  const lastTotal = useRef<number | undefined>(undefined);
+  // The newest memory in the whole store, whatever the scope: when the page
+  // opened (null: none), and now, asked again whenever the census moves.
+  // Only one stored after the first counts as arrived, so archiving the
+  // newest does not pass the next one off as new.
+  const [baseline, setBaseline] = useState<MemoryRecord | null | undefined>(undefined);
+  const [newest, setNewest] = useState<MemoryRecord | null>(null);
+  const checked = useRef(false);
 
   useEffect(() => {
-    if (!loading && baseline === undefined) setBaseline(useMemoryStore.getState().records[0]?.id ?? null);
-  }, [loading, baseline]);
+    let cancelled = false;
+    api
+      .listMemories({ limit: 1 })
+      .then((res) => {
+        if (cancelled) return;
+        const row = res.memories.length > 0 ? asMemoryRecord(res.memories[0]) : null;
+        setBaseline((b) => (b === undefined ? row : b));
+        setNewest(row);
+      })
+      .catch(() => {
+        // The steps still show; the arrival waits for the next census.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [total]);
 
+  // Once the list has loaded: a census above an empty list means a memory
+  // landed in between, with no socket event to say so.
   useEffect(() => {
-    if (total === undefined) return;
-    const before = lastTotal.current;
-    lastTotal.current = total;
-    if (before === undefined ? total > 0 && useMemoryStore.getState().records.length === 0 : total > before) onRefresh();
-  }, [total, onRefresh]);
+    if (total === undefined || loading || checked.current) return;
+    checked.current = true;
+    if (total > 0 && useMemoryStore.getState().records.length === 0) onRefresh();
+  }, [total, loading, onRefresh]);
 
-  const first = baseline !== undefined && records[0] && records[0].id !== baseline ? records[0] : null;
+  const first =
+    baseline !== undefined && newest && newest.id !== baseline?.id && newest.createdAt >= (baseline?.createdAt ?? '') ? newest : null;
   const empty = baseline === null;
 
   return (

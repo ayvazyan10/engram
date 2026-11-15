@@ -126,9 +126,12 @@ export default function TimelineView() {
     fetchPage(0);
   }, [picked, fetchPage, attempt]);
 
+  // Archived rows have left the server's list under the anchor, so they do not
+  // count toward the offset. One still waiting out its undo window is counted
+  // short too; the overlap that leaves is dropped as already seen.
   const loadOlder = useCallback(() => {
-    if (!loading && !done && !error) fetchPage(rows.length);
-  }, [loading, done, error, fetchPage, rows.length]);
+    if (!loading && !done && !error) fetchPage(rows.filter((r) => !hiddenIds.has(r.id)).length);
+  }, [loading, done, error, fetchPage, rows, hiddenIds]);
 
   // Older days load as the end of the list scrolls into view.
   useEffect(() => {

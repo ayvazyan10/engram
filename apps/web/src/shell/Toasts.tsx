@@ -16,6 +16,8 @@ interface ToastState {
   /** The last toast shown. It stays after hiding so the exit can animate. */
   toast: Toast | null;
   visible: boolean;
+  /** A plain toast that arrived while an Undo was up, shown when it goes. */
+  queued: Toast | null;
   show: (message: string, action?: ToastAction) => void;
   dismiss: () => void;
 }
@@ -26,12 +28,19 @@ const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 export const useToasts = create<ToastState>((set) => ({
   toast: null,
   visible: false,
-  show: (message, action) => set({ toast: { id: nextId++, message, action }, visible: true }),
-  dismiss: () => set({ visible: false }),
+  queued: null,
+  show: (message, action) =>
+    set((s) =>
+      !action && s.visible && s.toast?.action
+        ? { queued: { id: nextId++, message } }
+        : { toast: { id: nextId++, message, action }, visible: true }
+    ),
+  dismiss: () => set((s) => (s.queued ? { toast: s.queued, queued: null, visible: true } : { visible: false })),
 }));
 
 /** Says what just happened, once, at the bottom of the screen. A newer
- *  toast replaces the one on screen. */
+ *  toast replaces the one on screen, except that a plain one waits for an
+ *  Undo on screen to go, so the Undo is not lost. */
 export function showToast(message: string, action?: ToastAction): void {
   useToasts.getState().show(message, action);
 }

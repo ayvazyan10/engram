@@ -22,10 +22,8 @@ export function archiveMemories(ids: string[], message: string, restore: () => v
       for (let i = 0; i < ids.length; i += BULK_MAX) {
         const chunk = ids.slice(i, i + BULK_MAX);
         await api.bulkArchive(chunk, keepalive);
-        chunk.forEach((id) => {
-          removeRecord(id);
-          setHidden(id, false);
-        });
+        // Archived ids stay hidden, so a list with its own rows never shows them again.
+        chunk.forEach((id) => removeRecord(id));
       }
     },
     undo,

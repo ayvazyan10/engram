@@ -75,7 +75,7 @@ beforeEach(() => {
   vi.mocked(api.getGraphEdges).mockReset();
   vi.mocked(api.getMap).mockReset();
   useNeuralStore.setState({ selectedNeuronId: null });
-  useMemoryStore.setState({ records: [], searchQuery: '', searchResults: [], weakerResults: [], projectFilter: undefined, hiddenIds: new Set() });
+  useMemoryStore.setState({ records: [], searchQuery: '', searchScope: undefined, searchResults: [], weakerResults: [], projectFilter: undefined, hiddenIds: new Set() });
   useMapStore.setState({
     status: 'loading',
     error: null,

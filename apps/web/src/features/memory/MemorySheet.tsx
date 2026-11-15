@@ -12,7 +12,7 @@ import { projectLabel } from '../../lib/projects.js';
 import MemoryEdit from './MemoryEdit.js';
 import { TYPE_NAME, TypeMark, isReflection } from './MemoryRow.js';
 import { deferAction } from './deferredAction.js';
-import { useMapStore } from '../map/mapStore.js';
+import { loadMap, useMapStore } from '../map/mapStore.js';
 import type { MapNode } from '../../lib/api.js';
 import './memory.css';
 
@@ -221,7 +221,9 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
 
   // What was fetched for an earlier memory never stands in for this one.
   const current: Detail = detail.id === id ? detail : { id, status: 'loading', node: null, links: [] };
-  const memory: MemoryRecord | null = current.node || listed ? ({ ...current.node, ...listed } as MemoryRecord) : null;
+  // The fetched row wins over the list's copy, which may predate a change
+  // made elsewhere (a redaction or a tag from Review, a recall).
+  const memory: MemoryRecord | null = current.node || listed ? ({ ...listed, ...current.node } as MemoryRecord) : null;
   const tags = parseTags(memory?.tags);
   const close = useCallback(() => selectNeuron(null), [selectNeuron]);
 
@@ -262,11 +264,9 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
     close();
     deferAction({
       message: 'Archived. It no longer reaches your AI.',
-      commit: (keepalive) =>
-        api.deleteMemory(archivedId, keepalive).then(() => {
-          removeRecord(archivedId);
-          setHidden(archivedId, false);
-        }),
+      // Once archived it stays hidden: a list that keeps its own rows (the
+      // Timeline) would otherwise show it again.
+      commit: (keepalive) => api.deleteMemory(archivedId, keepalive).then(() => removeRecord(archivedId)),
       undo: () => {
         setHidden(archivedId, false);
         if (!useNeuralStore.getState().selectedNeuronId) selectNeuron(archivedId);
@@ -305,12 +305,14 @@ function Sheet({ id, closing }: { id: string; closing: boolean }) {
       message: 'Contradiction resolved.',
       commit: (keepalive) =>
         api.resolveContradiction(link.sourceId, link.targetId, strategy, keepalive).then((res) => {
-          const neural = useNeuralStore.getState();
-          neural.setContradictionPairs(
-            neural.contradictionPairs.filter((p) => !(p.sourceId === link.sourceId && p.targetId === link.targetId))
-          );
-          if (res.archivedId) removeRecord(res.archivedId);
-          if (loser) setHidden(loser, false);
+          if (!res.resolved) throw new Error('Contradiction not resolved');
+          // An archived side stays hidden, as after Archive. Keeping both
+          // changes no memory, so the map is asked again for its fault lines.
+          if (res.archivedId) {
+            setHidden(res.archivedId, true);
+            removeRecord(res.archivedId);
+          } else void loadMap(useMemoryStore.getState().projectFilter);
+          if (loser && loser !== res.archivedId) setHidden(loser, false);
         }),
       undo: putBack,
       onError: (err) => {

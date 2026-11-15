@@ -104,6 +104,10 @@ interface Props {
   onRetry: () => void;
   onLoadMore: () => void;
   loadingMore: boolean;
+  /** False once a page came back short or added nothing: the census alone
+   *  cannot end the list, since an MCP write raises it with no row to load.
+   *  Left out, the census decides. */
+  hasMore?: boolean;
   onStore: () => void;
   /** Opens a region on the map (and here), or closes it with null. */
   onRegion: (id: string | null) => void;
@@ -125,7 +129,7 @@ const SNAPS = [0.3, 0.46, 1] as const;
  * always the way to ask what the AI would be told instead. Pointing at a row
  * rings its memory on the map, and pointing at a mark marks its row.
  */
-export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingMore, onStore, onRegion }: Props) {
+export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingMore, hasMore = true, onStore, onRegion }: Props) {
   const { records, searchQuery, searchResults, weakerResults, isSearching, projectFilter, hiddenIds } = useMemoryStore();
   const openId = useNeuralStore((s) => s.selectedNeuronId);
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
@@ -154,7 +158,7 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
     projectFilter === undefined
       ? (stats?.total ?? records.length)
       : (stats?.byNamespace.find((b) => b.namespace === projectFilter)?.count ?? records.length);
-  const more = !searchQuery && total > records.length;
+  const more = !searchQuery && hasMore && total > records.length;
   const strong = visible(searchResults);
   const weaker = visible(weakerResults);
 

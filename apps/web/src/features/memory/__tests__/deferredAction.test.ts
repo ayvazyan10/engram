@@ -14,7 +14,7 @@ function action() {
 describe('deferAction', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useToasts.setState({ toast: null, visible: false });
+    useToasts.setState({ toast: null, visible: false, queued: null });
   });
 
   afterEach(() => {
@@ -49,6 +49,32 @@ describe('deferAction', () => {
     vi.advanceTimersByTime(UNDO_MS);
     undo?.run();
     expect(a.undo).not.toHaveBeenCalled();
+  });
+
+  it('Undo takes back the newest waiting action first, then offers the one before it', () => {
+    const a = action();
+    const b = { ...action(), message: 'Removed.' };
+    deferAction(a);
+    deferAction(b);
+    expect(useToasts.getState().toast?.message).toBe('Removed.');
+
+    useToasts.getState().toast?.action?.run();
+    expect(b.undo).toHaveBeenCalledTimes(1);
+    expect(a.undo).not.toHaveBeenCalled();
+    expect(useToasts.getState().toast?.message).toBe('Archived.');
+
+    useToasts.getState().toast?.action?.run();
+    expect(a.undo).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(UNDO_MS * 2);
+    expect(a.commit).not.toHaveBeenCalled();
+    expect(b.commit).not.toHaveBeenCalled();
+  });
+
+  it('takes the Undo toast down once nothing is left to undo', () => {
+    deferAction(action());
+    expect(useToasts.getState().visible).toBe(true);
+    vi.advanceTimersByTime(UNDO_MS);
+    expect(useToasts.getState().visible).toBe(false);
   });
 
   it('leaving the page sends every waiting call at once, with keepalive', () => {

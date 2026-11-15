@@ -48,7 +48,8 @@ interface ReviewState {
   cleared: number;
   loadSummary: (scope: ProjectFilter) => Promise<void>;
   /** The first page, or with `more` the next one. A loaded queue is kept
-   *  until the scope changes: Review reads share a tight rate limit. */
+   *  until the scope changes (Review reads share a tight rate limit) unless
+   *  `retry` asks for it again. */
   loadQueue: (queue: ReviewQueue, scope: ProjectFilter, options?: { more?: boolean; retry?: boolean }) => Promise<void>;
   /** Takes settled items out of a queue and its count; returns their Undo. */
   remove: (queue: ReviewQueue, keys: string[]) => () => void;
@@ -103,10 +104,16 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         const page = await api.getReviewQueue(queue, { namespace: scope, limit: PAGE_SIZE, offset });
         if (get().scope !== scope) return;
         if (offset > 0) {
-          // An empty page past the end means the queue shrank meanwhile: stop
-          // asking rather than ask again for what is not there.
-          const items = [...current!.items, ...page.items];
-          patchQueue(queue, { items, total: page.items.length ? page.total : items.length, loading: false });
+          // Items settled while the page was on its way stay out, and one the
+          // server still lists (its archive waits out the undo window) shifts
+          // the offsets, so rows already here are skipped. A page with nothing
+          // new means the queue shrank meanwhile: stop asking rather than ask
+          // again for what is not there.
+          const have = get().queues[queue]?.items ?? [];
+          const keys = new Set(have.map(itemKey));
+          const fresh = page.items.filter((item) => !keys.has(itemKey(item)));
+          const items = [...have, ...fresh];
+          patchQueue(queue, { items, total: fresh.length ? page.total : items.length, loading: false });
           return;
         }
         patchQueue(queue, { items: page.items, total: page.total, loading: false });

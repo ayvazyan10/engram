@@ -7,7 +7,7 @@ import { useMemoryStore, type MemoryRecord } from '../../../store/memoryStore.js
 import { useNeuralStore } from '../../../store/neuralStore.js';
 
 vi.mock('../../../lib/api.js', () => ({
-  api: { stats: vi.fn() },
+  api: { stats: vi.fn(), listMemories: vi.fn() },
 }));
 
 function record(id: string, content = `memory ${id}`): MemoryRecord {
@@ -29,7 +29,8 @@ const writeText = vi.fn();
 beforeEach(() => {
   resetServerStats();
   vi.mocked(api.stats).mockResolvedValue({ total: 0, byType: {}, bySource: {} });
-  useMemoryStore.setState({ records: [] });
+  vi.mocked(api.listMemories).mockReset().mockResolvedValue({ count: 0, memories: [] });
+  useMemoryStore.setState({ records: [], projectFilter: undefined });
   useNeuralStore.setState({ selectedNeuronId: null });
   writeText.mockReset().mockResolvedValue(undefined);
   Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
@@ -97,41 +98,75 @@ describe('ConnectClients', () => {
   });
 });
 
+/** The census moves; Welcome asks the server for its newest memory again. */
+async function census(total: number) {
+  vi.mocked(api.stats).mockResolvedValue({ total, byType: {}, bySource: {} });
+  await act(() => refreshServerStats());
+}
+
+/** Lets the first reads (census and newest memory) land. */
+async function settle() {
+  await waitFor(() => expect(api.listMemories).toHaveBeenCalled());
+  await act(() => refreshServerStats());
+  await act(async () => {});
+}
+
 describe('Welcome', () => {
   it('waits on an empty store, then shows the first memory as it arrives', async () => {
     const onDone = vi.fn();
     render(<Welcome loading={false} onRefresh={() => {}} onDone={onDone} />);
+    await settle();
     expect(screen.getByRole('heading', { name: 'Nothing charted yet' })).toBeInTheDocument();
     expect(screen.getByText(/Waiting for your first memory/)).toBeInTheDocument();
 
-    act(() => useMemoryStore.setState({ records: [record('first', 'Prefer pnpm over npm')] }));
-    expect(screen.getByRole('heading', { name: 'Your first memory arrived' })).toBeInTheDocument();
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record('first', 'Prefer pnpm over npm')] });
+    await census(1);
+    expect(await screen.findByRole('heading', { name: 'Your first memory arrived' })).toBeInTheDocument();
+    expect(api.listMemories).toHaveBeenLastCalledWith({ limit: 1 });
     fireEvent.click(screen.getByRole('button', { name: /Prefer pnpm over npm/ }));
     expect(useNeuralStore.getState().selectedNeuronId).toBe('first');
     fireEvent.click(screen.getByRole('button', { name: 'Open the map' }));
     expect(onDone).toHaveBeenCalled();
   });
 
-  it('on a store that has memories, waits for the next one', async () => {
-    useMemoryStore.setState({ records: [record('old')] });
-    const { rerender } = render(<Welcome loading={true} onRefresh={() => {}} onDone={() => {}} />);
-    rerender(<Welcome loading={false} onRefresh={() => {}} onDone={() => {}} />);
+  it('on a store that has memories, waits for the next one, in any project', async () => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record('old')] });
+    // The list is scoped to one project; the arrival is in another.
+    useMemoryStore.setState({ records: [], projectFilter: '/code/api' });
+    render(<Welcome loading={false} onRefresh={() => {}} onDone={() => {}} />);
     expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
+    await settle();
     expect(screen.getByText(/Waiting for the next memory/)).toBeInTheDocument();
 
-    act(() => useMemoryStore.setState({ records: [record('new'), record('old')] }));
-    expect(screen.getByRole('heading', { name: 'A new memory arrived' })).toBeInTheDocument();
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [{ ...record('new'), namespace: '/code/web' }] });
+    await census(2);
+    expect(await screen.findByRole('heading', { name: 'A new memory arrived' })).toBeInTheDocument();
   });
 
-  it('reloads the list when the census grows, since an MCP client writes straight to the database', async () => {
-    const onRefresh = vi.fn();
-    vi.mocked(api.stats).mockResolvedValueOnce({ total: 0, byType: {}, bySource: {} });
-    render(<Welcome loading={false} onRefresh={onRefresh} onDone={() => {}} />);
-    await waitFor(() => expect(api.stats).toHaveBeenCalled());
-    expect(onRefresh).not.toHaveBeenCalled();
+  it('does not take the next-newest for an arrival when the newest is archived', async () => {
+    vi.mocked(api.listMemories).mockResolvedValue({ count: 1, memories: [record('newest')] });
+    render(<Welcome loading={false} onRefresh={() => {}} onDone={() => {}} />);
+    expect(await screen.findByRole('heading', { name: 'Connect your AI in 30 seconds' })).toBeInTheDocument();
+    await settle();
 
-    vi.mocked(api.stats).mockResolvedValueOnce({ total: 1, byType: {}, bySource: {} });
-    await act(() => refreshServerStats());
+    vi.mocked(api.listMemories).mockResolvedValue({
+      count: 1,
+      memories: [{ ...record('older'), createdAt: '2026-10-18T12:00:00.000Z' }],
+    });
+    await census(5);
+    await act(async () => {});
+    expect(screen.queryByRole('heading', { name: 'A new memory arrived' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Waiting for the next memory/)).toBeInTheDocument();
+  });
+
+  it('reloads the list once when the census finds memories the empty list missed', async () => {
+    const onRefresh = vi.fn();
+    vi.mocked(api.stats).mockResolvedValue({ total: 1, byType: {}, bySource: {} });
+    render(<Welcome loading={false} onRefresh={onRefresh} onDone={() => {}} />);
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+
+    // Later growth is the shell's to notice, not this page's.
+    await census(2);
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
 });
