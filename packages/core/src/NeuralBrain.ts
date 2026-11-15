@@ -20,7 +20,7 @@ import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   embed, embedBatch, memoryEmbeddingText, packFP16, unpackFP16,
-  getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel, DEFAULT_MODEL_ID,
+  getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel, DEFAULT_MODEL_ID, MODEL_DIMENSIONS,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
 import { contradictionStatus, insertContradictionCandidate, upsertConnections, visibleConnection } from './graph/connectionStore.js';
@@ -418,6 +418,21 @@ export class NeuralBrain {
     return conditions;
   }
 
+  /** Prefer the live store's majority tracked model, or the legacy model for untracked rows. */
+  private async detectStoredEmbeddingModel(): Promise<{ model: string | undefined; otherCount: number }> {
+    const modelCounts = await getDb()
+      .select({ model: schema.memories.embeddingModel, count: sql<number>`count(*)` })
+      .from(schema.memories)
+      .where(and(...this.liveConditions(), sql`${schema.memories.embedding} IS NOT NULL`))
+      .groupBy(schema.memories.embeddingModel)
+      .orderBy(desc(sql`count(*)`), schema.memories.embeddingModel);
+    const model = modelCounts.find((row) => row.model !== null)?.model
+      ?? (modelCounts.length > 0 ? 'Xenova/all-MiniLM-L6-v2' : undefined);
+    const otherCount = modelCounts.reduce((total, row) =>
+      total + (row.model !== null && row.model !== model ? row.count : 0), 0);
+    return { model, otherCount };
+  }
+
   /**
    * Add a vector to the index, counting rather than throwing when it came from
    * a model of another dimension.
@@ -517,23 +532,21 @@ export class NeuralBrain {
 
     const db = getDb(this.config.dbPath);
     if (!readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL')) {
-      const modelCounts = await db
-        .select({ model: schema.memories.embeddingModel, count: sql<number>`count(*)` })
-        .from(schema.memories)
-        .where(and(
-          isNull(schema.memories.archivedAt),
-          sql`${schema.memories.embedding} IS NOT NULL`,
-          sql`${schema.memories.embeddingModel} IS NOT NULL`,
-        ))
-        .groupBy(schema.memories.embeddingModel)
-        .orderBy(desc(sql`count(*)`), schema.memories.embeddingModel);
-      const storedModel = modelCounts[0]?.model;
-      if (storedModel && (modelCounts.length > 1 || storedModel !== getEmbeddingModelId())) {
+      const { model: storedModel, otherCount } = await this.detectStoredEmbeddingModel();
+      if (storedModel && storedModel !== getEmbeddingModelId()) {
         switchEmbeddingModel(storedModel);
-        console.error(`[engram] Existing embeddings use ${storedModel}; keeping it. To move to ${DEFAULT_MODEL_ID}, set ENGRAM_EMBEDDING_MODEL=${DEFAULT_MODEL_ID} and run re_embed.`);
+        const migrationHint = storedModel === DEFAULT_MODEL_ID ? ''
+          : ` To move to ${DEFAULT_MODEL_ID}, set ENGRAM_EMBEDDING_MODEL=${DEFAULT_MODEL_ID} and run re_embed.`;
+        console.error(`[engram] Existing embeddings use ${storedModel}; keeping it.${migrationHint}`);
+      }
+      if (otherCount > 0) {
+        console.error(`[engram] ${otherCount} memories use other embedding models and are excluded from search; run re_embed to bring them back.`);
       }
     }
     const currentModel = getEmbeddingModelId();
+    if (MODEL_DIMENSIONS[currentModel] === undefined) {
+      MODEL_DIMENSIONS[currentModel] = (await embed('x')).length;
+    }
     this.vectorSearch.setDimension(getEmbeddingDimension());
     this.vectorSearch.setModelId(currentModel);
     this.indexStatus.dimension = this.vectorSearch.dimension;
@@ -779,6 +792,20 @@ export class NeuralBrain {
     const previous = this.indexClaim?.baseline ?? null;
     this.indexClaim = { counters, baseline, connection: getDatabaseConnection() };
 
+    if (!readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL')) {
+      const { model: storedModel } = await this.detectStoredEmbeddingModel();
+      if (storedModel && storedModel !== getEmbeddingModelId()) {
+        switchEmbeddingModel(storedModel);
+        if (MODEL_DIMENSIONS[storedModel] === undefined) {
+          MODEL_DIMENSIONS[storedModel] = (await embed('x')).length;
+        }
+        // Changing the model clears the index; the missing-row pass below
+        // rebuilds it using every compatible live vector.
+        this.vectorSearch.setModelId(storedModel);
+        this.vectorSearch.setDimension(getEmbeddingDimension());
+      }
+    }
+
     const liveRows = await db
       .select({ id: schema.memories.id, model: schema.memories.embeddingModel })
       .from(schema.memories)
@@ -800,9 +827,11 @@ export class NeuralBrain {
       }
     }
 
-    const missing = [...live.keys()].filter((id) => !indexed.has(id));
+    const missing = liveRows
+      .filter(({ id, model }) => !indexed.has(id) && (!model || model === currentModel))
+      .map(({ id }) => id);
     let added = 0;
-    let skipped = 0;
+    let skipped = liveRows.filter(({ model }) => model && model !== currentModel).length;
 
     // Chunked: SQLite caps variables per statement, and a process that has been
     // idle for a while can come back to thousands of new memories.
@@ -875,13 +904,13 @@ export class NeuralBrain {
     }
 
     const changed = added + removed + refreshed;
-    if (changed > 0 || skipped > 0) {
+    if (changed > 0 || skipped !== this.indexStatus.externalSkipped) {
       this.indexStatus.externalSyncCount++;
       this.indexStatus.externalAdded += added;
       this.indexStatus.externalRemoved += removed;
       this.indexStatus.externalRefreshed += refreshed;
-      this.indexStatus.externalSkipped += skipped;
     }
+    this.indexStatus.externalSkipped = skipped;
 
     return changed;
   }
@@ -959,6 +988,7 @@ export class NeuralBrain {
   async storeBatch(inputs: StoreInput[]): Promise<StoreResult[]> {
     this.assertInitialized();
     if (inputs.length === 0) return [];
+    await this.syncIndexFromStore();
     const embeddings = await embedBatch(inputs.map((input) => memoryEmbeddingText({
       ...input, concept: input.concept ?? extractConcept(input.content),
     })));
@@ -983,15 +1013,18 @@ export class NeuralBrain {
     const db = getDb();
     const type = input.type ?? 'episodic';
     const source = input.source ?? this.config.defaultSource ?? null;
-    const now = new Date().toISOString();
     // Hoisted once per store() call rather than read per-row below — the id
     // is memoized on disk, but there's no reason to touch it more than once
     // per write.
     const deviceId = getDeviceId();
 
+    await this.syncIndexFromStore();
     const concept = input.concept ?? extractConcept(input.content);
     const embedding = precomputedEmbedding ?? await embed(memoryEmbeddingText({ ...input, type, concept }));
     const embeddingBuf = packFP16(embedding);
+    // No awaits before the transaction: a slow embed must not backdate the
+    // memory and its auto-link edges behind another process's sync cursor.
+    const now = new Date().toISOString();
 
     const record: NewMemory = {
       id: uuidv4(),
@@ -1015,7 +1048,6 @@ export class NeuralBrain {
       deviceId,
     };
 
-    await this.syncIndexFromStore();
     const duplicate = this.deduplicateStore(record, embedding, dedupThreshold);
     if (duplicate) {
       await this.refreshIndexBaseline();
@@ -1270,11 +1302,13 @@ export class NeuralBrain {
     const topK = options.topK ?? 10;
     const filtered = hasRecallFilters(options) || options.namespace !== undefined || options.global === true;
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const includeGlobal = this.namespaceMode === 'filter';
+    const namespace = this.activeNamespace === undefined && includeGlobal ? null : this.activeNamespace;
     const results = this.config.hybridSearch
       ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, options.threshold ?? 0.3,
-        options.types, this.activeNamespace, crossNamespace, this.namespaceMode === 'filter')
+        options.types, namespace, crossNamespace, includeGlobal)
       : this.vectorSearch.search(queryVec, candidateLimit, options.threshold ?? 0.3,
-        options.types, this.activeNamespace, crossNamespace, this.namespaceMode === 'filter');
+        options.types, namespace, crossNamespace, includeGlobal);
 
     const db = getDb();
 
@@ -1293,11 +1327,11 @@ export class NeuralBrain {
     for (const result of results) {
       const m = byId.get(result.id);
       if (!m || !matchesMemoryFilters(m, options)) continue;
-      if (options.sources && m.source && !options.sources.includes(m.source)) continue;
+      if (options.sources && !options.sources.includes(m.source ?? '')) continue;
       if (options.namespace !== undefined && m.namespace !== options.namespace) continue;
       if (options.global === true && m.namespace !== null) continue;
       // Namespace filtering (defense in depth — vector search already filters)
-      if (this.activeNamespace && !crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
+      if (!crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
       // Preserve cosine similarity as the public score even when RRF orders candidates.
       hits.push({ ...m, score: result.similarity });
     }
@@ -1402,6 +1436,12 @@ export class NeuralBrain {
     if (tags !== undefined) updates.tags = JSON.stringify(tags);
     if (concept !== undefined) updates.concept = concept;
     if (summary !== undefined) updates.summary = summary;
+    if (content !== undefined && content !== existing.content) {
+      if (concept === undefined && existing.concept === extractConcept(existing.content)) {
+        updates.concept = extractConcept(content);
+      }
+      if (summary === undefined) updates.summary = null;
+    }
     const text = memoryEmbeddingText({ ...existing, ...updates });
     const newVector = text !== memoryEmbeddingText(existing) ? await embed(text) : null;
     if (newVector) {
@@ -1409,14 +1449,18 @@ export class NeuralBrain {
       updates.embeddingDim = newVector.length;
       updates.embeddingModel = this.getEmbeddingModel();
     }
-    await db.update(schema.memories).set(updates).where(eq(schema.memories.id, resolvedId));
+    const memory = db.update(schema.memories).set(updates)
+      .where(and(eq(schema.memories.id, resolvedId), isNull(schema.memories.archivedAt)))
+      .returning().get();
+    if (!memory) throw new Error(`Memory not found: ${id}`);
     if (newVector) {
-      this.vectorSearch.upsert({
+      this.indexVector({
         id: resolvedId, vector: newVector, type: existing.type,
         namespace: existing.namespace ?? undefined,
       });
     }
-    return db.select().from(schema.memories).where(eq(schema.memories.id, resolvedId)).get()!;
+    this.graph.addNode({ id: resolvedId, type: memory.type, concept: memory.concept ?? undefined });
+    return memory;
   }
 
   async forget(id: string): Promise<void> {
@@ -1719,9 +1763,8 @@ export class NeuralBrain {
       .select()
       .from(schema.memories)
       .where(and(...conditions))
-      // Newest first — a bare orderBy is ASC, which fed the reflection prompt
-      // the OLDEST memories while claiming they were "the most recent".
-      .orderBy(desc(schema.memories.updatedAt))
+      // Creation order stays meaningful when decay stamps many rows' updatedAt together.
+      .orderBy(desc(schema.memories.createdAt))
       .limit(maxMemoriesToAnalyze);
 
     const tasks = this.reflectionEngine.buildTasks(memories);
@@ -2058,12 +2101,10 @@ export class NeuralBrain {
     const db = getDb();
     const currentModel = getEmbeddingModelId();
 
-    const embeddingConditions = [isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) embeddingConditions.push(eq(schema.memories.namespace, this.activeNamespace));
     const all = await db
       .select()
       .from(schema.memories)
-      .where(and(...embeddingConditions));
+      .where(and(...this.liveConditions()));
 
     const currentDimension = getModelDimension();
 
@@ -2118,6 +2159,9 @@ export class NeuralBrain {
     const start = Date.now();
     const db = getDb();
     const currentModel = getEmbeddingModelId();
+    if (MODEL_DIMENSIONS[currentModel] === undefined) {
+      MODEL_DIMENSIONS[currentModel] = (await embed('x')).length;
+    }
     const currentDim = getModelDimension();
     // Hoisted out of the per-row loop below — this is the device performing
     // the re-embed, not something that varies per memory.
@@ -2138,12 +2182,10 @@ export class NeuralBrain {
     }
 
     // Select memories to re-embed
-    const reEmbedConditions = [isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) reEmbedConditions.push(eq(schema.memories.namespace, this.activeNamespace));
     const all = await db
       .select()
       .from(schema.memories)
-      .where(and(...reEmbedConditions));
+      .where(and(...this.liveConditions()));
 
     const toReEmbed = onlyStale
       ? all.filter((m) => m.embedding && m.embeddingModel !== currentModel)
@@ -2176,7 +2218,7 @@ export class NeuralBrain {
               .update(schema.memories)
               .set({
                 embedding: embeddingBuf,
-                embeddingDim: currentDim,
+                embeddingDim: newEmbedding.length,
                 embeddingModel: currentModel,
                 updatedAt: new Date().toISOString(),
                 deviceId,
@@ -2258,9 +2300,8 @@ export class NeuralBrain {
       .set({ embeddingModel: currentModel, updatedAt: now, deviceId })
       .where(
         and(
-          isNull(schema.memories.archivedAt),
+          ...this.liveConditions(),
           isNull(schema.memories.embeddingModel),
-          ...(this.activeNamespace ? [eq(schema.memories.namespace, this.activeNamespace)] : []),
         )
       );
 
@@ -2270,9 +2311,8 @@ export class NeuralBrain {
       .from(schema.memories)
       .where(
         and(
-          isNull(schema.memories.archivedAt),
+          ...this.liveConditions(),
           isNull(schema.memories.embeddingModel),
-          ...(this.activeNamespace ? [eq(schema.memories.namespace, this.activeNamespace)] : []),
         )
       );
 

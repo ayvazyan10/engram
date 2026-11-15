@@ -27,7 +27,7 @@ const DEFAULT_EMBEDDING_DIM = 384;
  */
 let activeModelId: string = readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL') ?? DEFAULT_MODEL_ID;
 
-/** Known model → dimension mappings. */
+/** Known model dimensions, including dimensions learned by a brain's probe embedding. */
 const MODEL_DIMENSIONS: Record<string, number> = {
   'Xenova/paraphrase-multilingual-MiniLM-L12-v2': 384,
   'Xenova/all-MiniLM-L6-v2': 384,
@@ -92,7 +92,7 @@ export async function getEmbedder(): Promise<typeof embedder> {
 }
 
 /**
- * Embed a single text string into a Float32Array of length 384.
+ * Embed a single text string into a Float32Array of the active model's dimension.
  */
 export async function embed(text: string): Promise<Float32Array> {
   const pipe = await getEmbedder();
