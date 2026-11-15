@@ -35,7 +35,7 @@ beforeEach(() => {
   mocks.git.mockImplementation((_command: string, args: readonly string[]) =>
     args.includes('--show-toplevel') ? '/work/neuralCore\n' : 'feature/memory\n');
   mocks.initialize.mockResolvedValue(undefined);
-  mocks.recall.mockResolvedValue({ context: 'Past project decisions.' });
+  mocks.recall.mockResolvedValue({ context: 'Past project decisions.', memories: [{}] });
   mocks.getByTag.mockResolvedValue([]);
   mocks.getContradictionTasks.mockResolvedValue([]);
   mocks.canAccessNamespace.mockReturnValue(true);
@@ -67,15 +67,15 @@ describe('runSessionStart', () => {
     }));
   });
 
-  it('emits the SessionStart context envelope capped at 6000 characters', async () => {
+  it('emits the SessionStart context envelope without character truncation', async () => {
     const write = vi.fn();
-    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000) });
+    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000), memories: [{}] });
     expect(await runSessionStart('{"cwd":"/work/neuralCore"}', env, write)).toBe(0);
     expect(JSON.parse(write.mock.calls[0]![0] as string)).toEqual({
-      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'x'.repeat(6000) },
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'x'.repeat(7000) },
     });
     expect(mocks.recall).toHaveBeenCalledWith('neuralCore feature/memory', {
-      maxTokens: 1500, source: 'mcp-client',
+      threshold: 0.5, graphDepth: 0, maxTokens: 600, touch: false,
     });
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
@@ -108,38 +108,36 @@ describe('runSessionStart', () => {
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
 
-  it('keeps the recalled context when counting pending sessions fails', async () => {
+  it('keeps the recalled context without counting pending sessions', async () => {
     mocks.getByTag.mockImplementation(() => { throw new Error('brain failed'); });
     const write = vi.fn();
     expect(await runSessionStart('{"cwd":"/work/neuralCore"}', env, write)).toBe(0);
     expect(write).toHaveBeenCalledOnce();
     expect(write.mock.calls[0]![0]).toContain('Past project decisions.');
     expect(write.mock.calls[0]![0]).not.toContain('get_distill_tasks');
+    expect(mocks.getByTag).not.toHaveBeenCalled();
   });
 
-  it('keeps recalled context when counting contradiction candidates fails', async () => {
+  it('keeps recalled context without counting contradiction candidates', async () => {
     mocks.getContradictionTasks.mockRejectedValue(new Error('read failed'));
     const write = vi.fn();
     await runSessionStart('{}', env, write);
     expect(JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext)
       .toBe('Past project decisions.');
+    expect(mocks.getContradictionTasks).not.toHaveBeenCalled();
   });
 
-  it.each([0, 2, 100])('reports %s pending contradictions alongside distillation within the cap', async (count) => {
-    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000) });
+  it.each([0, 2, 100])('omits reminders for %s pending contradictions and pending distillation', async (count) => {
+    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000), memories: [{}] });
     mocks.getByTag.mockResolvedValue([{ namespace: 'work' }]);
     mocks.getContradictionTasks.mockResolvedValue(Array.from({ length: count }, () => ({})));
     const write = vi.fn();
     await runSessionStart('{}', env, write);
     const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
-    expect(output).toHaveLength(6000);
-    expect(output).toContain('get_distill_tasks');
-    expect(mocks.getContradictionTasks).toHaveBeenCalledWith(100);
-    if (count) {
-      expect(output).toContain(`${count === 100 ? '100+' : count} possible contradictions are waiting for your judgment — call get_contradiction_tasks when convenient.`);
-    } else {
-      expect(output).not.toContain('get_contradiction_tasks');
-    }
+    expect(output).toBe('x'.repeat(7000));
+    expect(output).not.toContain('get_distill_tasks');
+    expect(mocks.getContradictionTasks).not.toHaveBeenCalled();
+    expect(output).not.toContain('get_contradiction_tasks');
   });
 
   it('is silent and exits zero when the DB directory cannot be created', async () => {
@@ -158,23 +156,24 @@ describe('runSessionStart', () => {
   });
 
   it('does not inject an empty recall result', async () => {
-    mocks.recall.mockResolvedValue({ context: '' });
+    mocks.recall.mockResolvedValue({ context: '', memories: [] });
     const write = vi.fn();
     expect(await runSessionStart('{}', env, write)).toBe(0);
     expect(write).not.toHaveBeenCalled();
   });
 
-  it.each(['', 'x'.repeat(7000)])('adds one bounded reminder even with empty or full recall', async (context) => {
-    mocks.recall.mockResolvedValue({ context });
+  it.each(['', 'x'.repeat(7000)])('omits distillation reminders with empty or full recall', async (context) => {
+    mocks.recall.mockResolvedValue({ context, memories: context ? [{}] : [] });
     mocks.getByTag.mockResolvedValue([{ namespace: 'work' }, { namespace: null }]);
     const write = vi.fn();
     await runSessionStart('{}', env, write);
-    const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
-    expect(output.length).toBeLessThanOrEqual(6000);
-    expect(output.split('\n').filter((line) => line.includes('get_distill_tasks'))).toEqual([
-      '2 past sessions are waiting to be distilled — call get_distill_tasks when convenient.',
-    ]);
-    expect(mocks.getByTag).toHaveBeenCalledWith('pending-distill', Number.MAX_SAFE_INTEGER);
+    if (context) {
+      const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
+      expect(output).toBe(context);
+    } else {
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(mocks.getByTag).not.toHaveBeenCalled();
   });
 
   it('adds no reminder when pending sessions are outside the caller scope', async () => {

@@ -54,6 +54,7 @@ beforeAll(async () => {
   process.env['ENGRAM_DB_PATH'] = dbPath;
   vi.stubEnv('ENGRAM_NAMESPACE_MODE', 'project');
   vi.stubEnv('ENGRAM_NAMESPACE', 'mcp-tool-project');
+  vi.stubEnv('ENGRAM_ADMIN_TOOLS', '1');
 
   const mod = await import('../server.js');
   brain = mod.brain;

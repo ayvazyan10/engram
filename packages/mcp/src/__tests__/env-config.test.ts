@@ -35,9 +35,9 @@ describe('resolveNamespaceSettings', () => {
       .toEqual({ namespaceMode: 'filter', namespace: directory });
   });
 
-  it.each([undefined, 'project'])('uses none outside a repository with mode %s', (mode) => {
+  it.each([undefined, 'project'])('scopes to the current directory outside a repository with mode %s', (mode) => {
     expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: mode }, directory))
-      .toEqual({ namespaceMode: 'none', namespace: undefined });
+      .toEqual({ namespaceMode: 'filter', namespace: directory });
   });
 
   it('lets an explicit namespace override the git root', () => {
@@ -64,7 +64,7 @@ describe('resolveNamespaceSettings', () => {
 
   it('treats the empty strings a host templates as unset', () => {
     expect(resolveNamespaceSettings({ ENGRAM_NAMESPACE_MODE: '', ENGRAM_NAMESPACE: '' }, directory))
-      .toEqual({ namespaceMode: 'none', namespace: undefined });
+      .toEqual({ namespaceMode: 'filter', namespace: directory });
   });
 
   it('refuses a mode it does not recognise rather than downgrading to none', () => {

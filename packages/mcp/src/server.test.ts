@@ -50,12 +50,12 @@ it('includes deduplicated in store_memory response text', async () => {
   expect(second).toMatchObject({ id: first.id, deduplicated: true });
 });
 
-it('advertises update_memory as a write tool and explains recall ids', async () => {
+it('advertises update_memory as a write tool and respects host instructions', async () => {
   const { tools } = await client.listTools();
   expect(tools.find((tool) => tool.name === 'update_memory')?.annotations).toMatchObject({
     readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false,
   });
-  expect(client.getInstructions()).toContain('[id · date]');
+  expect(client.getInstructions()).toContain('when they disagree, the host and the user win.');
   expect(client.getInstructions()).toContain('update_memory');
 });
 

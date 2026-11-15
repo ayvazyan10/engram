@@ -29,6 +29,7 @@ async function call(name: string, args: Record<string, unknown> = {}): Promise<s
 
 beforeAll(async () => {
   process.env['ENGRAM_DB_PATH'] = dbPath;
+  process.env['ENGRAM_ADMIN_TOOLS'] = '1';
 
   const mod = await import('../server.js');
   brain = mod.brain;

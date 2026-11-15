@@ -35,6 +35,7 @@ async function callJson<T = Record<string, unknown>>(name: string, args: Record<
 
 beforeAll(async () => {
   process.env['ENGRAM_DB_PATH'] = dbPath;
+  process.env['ENGRAM_ADMIN_TOOLS'] = '1';
 
   const mod = await import('../server.js');
   brain = mod.brain;
@@ -55,24 +56,16 @@ afterAll(async () => {
 });
 
 describe('recall_context', () => {
-  it('returns phase-grouped results when progressive is set', async () => {
+  it('returns assembled context text when progressive is set', async () => {
     await call('store_memory', {
       content: 'The vector index is rebuilt from the store on startup when the disk cache is missing',
       type: 'semantic',
     });
 
-    const result = await callJson<{
-      context: string;
-      memoriesUsed: number;
-      phases: { vector: { count: number; memories: unknown[] }; graph: { count: number; memories: unknown[] } };
-    }>('recall_context', { query: 'vector index rebuild', progressive: true });
+    const result = await call('recall_context', { query: 'vector index rebuild', progressive: true });
 
-    // The flat shape has no `phases` at all — this is the streaming branch.
-    expect(result.phases).toBeDefined();
-    expect(result.phases.vector.count).toBe(result.phases.vector.memories.length);
-    expect(result.phases.graph.count).toBe(result.phases.graph.memories.length);
-    expect(result.memoriesUsed).toBe(result.phases.vector.count + result.phases.graph.count);
-    expect(typeof result.context).toBe('string');
+    expect(result).toContain('The vector index is rebuilt from the store on startup when the disk cache is missing');
+    expect(typeof result).toBe('string');
   });
 });
 
@@ -170,7 +163,7 @@ describe('reflection cycle', () => {
     }
 
     const tasks = await call('request_reflection');
-    expect(tasks).toMatch(/reflection task|call store_reflection|Not enough qualifying memories/);
+    expect(tasks).toMatch(/reflection task|store_reflection|Not enough qualifying memories/);
 
     const stored = await call('store_reflection', {
       type: 'pattern',

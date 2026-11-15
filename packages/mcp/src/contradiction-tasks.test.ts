@@ -117,7 +117,7 @@ it('reports read failures explicitly', async () => {
   expect((await call('get_contradiction_tasks')).isError).toBe(true);
   expect(log).toHaveBeenCalledWith('[engram-mcp] get_contradiction_tasks failed:', expect.any(Error));
 });
-it.each(['Old fact', 'Old fact '.repeat(70)])('store_memory includes candidate context and immediate judgment instructions', async (content) => {
+it.each(['Old fact', 'Old fact '.repeat(70)])('store_memory includes candidate context and a possible-conflict message', async (content) => {
   const sourceId = 'new-memory';
   const targetId = 'existing-memory';
   getDb().insert(schema.memories).values([
@@ -140,8 +140,7 @@ it.each(['Old fact', 'Old fact '.repeat(70)])('store_memory includes candidate c
   expect(response).toMatchObject({ id: sourceId, contradictionCandidates: { count: 1, items: [{
     existingMemoryId: targetId, content: content.slice(0, 500), createdAt: '2026-10-01', confidence: 0.8,
   }] } });
-  expect(response.message).toContain(`Judge each now: call complete_contradiction_check with sourceId=${sourceId}, targetId=<existingMemoryId below>, verdict 'contradiction' or 'none'`);
-  expect(response.message).toContain('keep_newest only when the new memory fully replaces the old one; otherwise keep_both or no strategy');
+  expect(response.message).toBe('Possible conflicts: 1 existing memory/memories.');
   expect((await call('complete_contradiction_check', {
     sourceId: response.id, targetId: response.contradictionCandidates.items[0].existingMemoryId, verdict: 'none',
   })).isError).not.toBe(true);
