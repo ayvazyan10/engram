@@ -9,6 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-11-15
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.1 (core republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.12.1. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.9.0 and `@engram-ai-memory/web` 0.7.0.
+
+### Changed
+
+- Engram describes itself as the shared long-term memory for every AI tool the user works with, the same memories in Claude Code, Codex, Cursor and others, and the place to store durable facts. 0.12.0 called it a complement to the host's memory, which read as secondary and kept tools writing durable facts to local files that other tools cannot see. Explicit user instructions (CLAUDE.md, AGENTS.md, rules) still win when a recalled memory conflicts with them. This applies to the MCP instructions, `engram init`, SKILL.md, the desktop bundle and the Claude Code plugin.
+
 ## [0.12.0] — 2026-11-15
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.0, and the Claude Desktop extension bundle 0.12.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.9.0 and `@engram-ai-memory/web` 0.7.0.
