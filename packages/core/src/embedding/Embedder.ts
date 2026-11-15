@@ -1,7 +1,7 @@
 /**
  * Embedder — wraps @xenova/transformers for local WASM-based text embeddings.
  *
- * Uses Xenova/all-MiniLM-L6-v2 (384-dim) — ~25MB download, cached after first use.
+ * Uses Xenova/paraphrase-multilingual-MiniLM-L12-v2 (384-dim), cached after first use.
  * No server round-trip required; runs entirely in Node.js via ONNX/WASM.
  */
 
@@ -14,7 +14,7 @@ let pipeline: any = null;
 let embedder: any = null;
 
 /** Default embedding model. Can be overridden via ENGRAM_EMBEDDING_MODEL env var. */
-const DEFAULT_MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
+const DEFAULT_MODEL_ID = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
 const DEFAULT_EMBEDDING_DIM = 384;
 
 /**
@@ -29,6 +29,7 @@ let activeModelId: string = readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL')
 
 /** Known model → dimension mappings. */
 const MODEL_DIMENSIONS: Record<string, number> = {
+  'Xenova/paraphrase-multilingual-MiniLM-L12-v2': 384,
   'Xenova/all-MiniLM-L6-v2': 384,
   'Xenova/all-MiniLM-L12-v2': 384,
   'Xenova/bge-small-en-v1.5': 384,
@@ -60,7 +61,7 @@ export async function getEmbedder(): Promise<typeof embedder> {
     }
 
     const loaded = await pipeline('feature-extraction', loadingFor, {
-      quantized: true, // use quantized ONNX model (~25MB vs ~90MB)
+      quantized: true, // use quantized ONNX weights (~118MB for the default model)
     });
 
     // The active model was switched while this load was running. The result was
@@ -155,8 +156,8 @@ export function switchEmbeddingModel(modelId: string): number {
   return MODEL_DIMENSIONS[modelId] ?? DEFAULT_EMBEDDING_DIM;
 }
 
-/** All known model IDs and their dimensions. */
-export { MODEL_DIMENSIONS };
+/** Default model and all known model IDs with their dimensions. */
+export { DEFAULT_MODEL_ID, MODEL_DIMENSIONS };
 
 // ─── FP16 compression utilities ──────────────────────────────────────────────
 

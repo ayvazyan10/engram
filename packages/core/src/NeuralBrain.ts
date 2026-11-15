@@ -20,7 +20,7 @@ import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   embed, embedBatch, memoryEmbeddingText, packFP16, unpackFP16,
-  getEmbeddingModelId, getModelDimension, getEmbeddingDimension,
+  getEmbeddingModelId, getModelDimension, getEmbeddingDimension, switchEmbeddingModel, DEFAULT_MODEL_ID,
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
 import { contradictionStatus, insertContradictionCandidate, upsertConnections, visibleConnection } from './graph/connectionStore.js';
@@ -516,6 +516,27 @@ export class NeuralBrain {
     const initStart = Date.now();
 
     const db = getDb(this.config.dbPath);
+    if (!readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL')) {
+      const modelCounts = await db
+        .select({ model: schema.memories.embeddingModel, count: sql<number>`count(*)` })
+        .from(schema.memories)
+        .where(and(
+          isNull(schema.memories.archivedAt),
+          sql`${schema.memories.embedding} IS NOT NULL`,
+          sql`${schema.memories.embeddingModel} IS NOT NULL`,
+        ))
+        .groupBy(schema.memories.embeddingModel)
+        .orderBy(desc(sql`count(*)`), schema.memories.embeddingModel);
+      const storedModel = modelCounts[0]?.model;
+      if (storedModel && (modelCounts.length > 1 || storedModel !== getEmbeddingModelId())) {
+        switchEmbeddingModel(storedModel);
+        console.error(`[engram] Existing embeddings use ${storedModel}; keeping it. To move to ${DEFAULT_MODEL_ID}, set ENGRAM_EMBEDDING_MODEL=${DEFAULT_MODEL_ID} and run re_embed.`);
+      }
+    }
+    const currentModel = getEmbeddingModelId();
+    this.vectorSearch.setDimension(getEmbeddingDimension());
+    this.vectorSearch.setModelId(currentModel);
+    this.indexStatus.dimension = this.vectorSearch.dimension;
     this.decayEngine.updatePolicy(this.getDecayPolicy());
     const indexPath = this.resolveIndexPath();
 
@@ -564,7 +585,12 @@ export class NeuralBrain {
     let dimensionMismatched = 0;
 
     for (const memory of allMemories) {
-      if (memory.embedding) {
+      const compatibleModel = !memory.embeddingModel || memory.embeddingModel === currentModel;
+      if (memory.embedding && !compatibleModel
+        && storedDimension(memory.embedding) !== this.vectorSearch.dimension) {
+        dimensionMismatched++;
+      }
+      if (memory.embedding && compatibleModel) {
         // The cache is checked against the row, not merely for the id. Trusting
         // it blindly is how a vector the database had already replaced — a
         // semantic.update(), a re-embed by another process — survived every
@@ -595,9 +621,11 @@ export class NeuralBrain {
       });
     }
 
-    // Remove entries from cache that no longer exist in DB (archived/deleted since last save)
+    // Remove cached vectors that are no longer live or belong to another model.
     if (cachedIds) {
-      const activeIds = new Set(allMemories.map((m) => m.id));
+      const activeIds = new Set(allMemories
+        .filter((m) => m.embedding && (!m.embeddingModel || m.embeddingModel === currentModel))
+        .map((m) => m.id));
       for (const id of cachedIds) {
         if (!activeIds.has(id)) {
           this.vectorSearch.remove(id);
@@ -752,25 +780,27 @@ export class NeuralBrain {
     this.indexClaim = { counters, baseline, connection: getDatabaseConnection() };
 
     const liveRows = await db
-      .select({ id: schema.memories.id })
+      .select({ id: schema.memories.id, model: schema.memories.embeddingModel })
       .from(schema.memories)
       .where(and(...this.liveConditions()));
 
-    const live = new Set(liveRows.map((r) => r.id));
+    const currentModel = getEmbeddingModelId();
+    const live = new Map(liveRows.map((r) => [r.id, r.model]));
     // Keyed rather than a bare id set: the refresh pass below has to compare the
     // indexed vector against the stored one, and this costs the same to build.
     const indexed = this.vectorSearch.entriesById();
 
     let removed = 0;
     for (const id of indexed.keys()) {
-      if (!live.has(id)) {
+      const model = live.get(id);
+      if (!live.has(id) || (model && model !== currentModel)) {
         this.vectorSearch.remove(id);
-        this.graph.removeNode(id);
+        if (!live.has(id)) this.graph.removeNode(id);
         removed++;
       }
     }
 
-    const missing = [...live].filter((id) => !indexed.has(id));
+    const missing = [...live.keys()].filter((id) => !indexed.has(id));
     let added = 0;
     let skipped = 0;
 
@@ -785,16 +815,15 @@ export class NeuralBrain {
 
       for (const memory of rows) {
         if (memory.embedding) {
-          // A vector from another embedding model has a length this index
-          // cannot hold. Skipping keeps one incompatible row from throwing out
-          // of every search — the count below is what makes that visible rather
-          // than silent, and re_embed is the way to clear it.
-          const ok = upsertIfCompatible(this.vectorSearch, {
-            id: memory.id,
-            vector: storedVector(memory.embedding),
-            type: memory.type as MemoryType,
-            namespace: memory.namespace ?? undefined,
-          });
+          // Another model's vectors are incomparable even at the same dimension.
+          // Count refusals so re_embed can bring these rows back into retrieval.
+          const ok = (!memory.embeddingModel || memory.embeddingModel === currentModel)
+            && upsertIfCompatible(this.vectorSearch, {
+              id: memory.id,
+              vector: storedVector(memory.embedding),
+              type: memory.type as MemoryType,
+              namespace: memory.namespace ?? undefined,
+            });
           if (ok) added++;
           else skipped++;
         }
@@ -892,7 +921,8 @@ export class NeuralBrain {
     for (const memory of rows) {
       const entry = indexed.get(memory.id);
       // Ids the index did not have are the add path's job, and were handled above.
-      if (!entry || !memory.embedding) continue;
+      if (!entry || !memory.embedding
+        || (memory.embeddingModel && memory.embeddingModel !== getEmbeddingModelId())) continue;
       const current = indexEntryIsCurrent(entry, {
         embedding: memory.embedding,
         type: memory.type,
@@ -2545,6 +2575,7 @@ export class NeuralBrain {
         dimensionMismatched++;
         continue;
       }
+      if (memory.embeddingModel && memory.embeddingModel !== getEmbeddingModelId()) continue;
       rebuilt.push({
         id: memory.id,
         vector,
