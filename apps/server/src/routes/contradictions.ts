@@ -160,6 +160,13 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
           const result = await resolve(item);
           results.push(result.resolved ? { ok: true } : { ok: false, error: 'Contradiction not resolved' });
         } catch (err: unknown) {
+          if (err instanceof Error && 'statusCode' in err && (
+            err.statusCode === 404 && err.message === 'Contradiction not found'
+            || err.statusCode === 400 && err.message === 'sourceId and targetId must differ'
+          )) {
+            results.push({ ok: false, error: err.message });
+            continue;
+          }
           const missing = isMemoryNotFound(err) || (err instanceof Error && err.message === 'Memory not found');
           if (!missing) req.log.warn({ err }, 'bulk contradiction resolution failed');
           results.push({ ok: false, error: missing ? 'Memory not found' : 'Failed to resolve contradiction' });

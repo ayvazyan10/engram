@@ -1,5 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { DecayPolicyConfig } from '@engram-ai-memory/core';
+import { homedir } from 'node:os';
+import { sep } from 'node:path';
 import { brain, VERSION, notifySyncWrite, realtime } from '../index.js';
 import { runExclusive, OperationInProgressError } from '../lib/exclusive.js';
 
@@ -78,7 +80,15 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
       tags: ['health'],
       summary: 'Brain memory statistics',
     },
-    handler: async () => brain.stats(),
+    handler: async () => {
+      const stats = await brain.stats();
+      const home = homedir();
+      return {
+        ...stats,
+        dbPath: stats.dbPath === home || stats.dbPath.startsWith(`${home}${sep}`)
+          ? `~${stats.dbPath.slice(home.length)}` : stats.dbPath,
+      };
+    },
   });
 
   app.post('/consolidate', {

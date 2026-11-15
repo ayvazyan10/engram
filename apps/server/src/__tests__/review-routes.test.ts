@@ -283,7 +283,7 @@ describe('bulk contradiction resolution', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ results: [
       { ok: false, error: 'Failed to resolve contradiction' },
-      { ok: false, error: 'Failed to resolve contradiction' },
+      { ok: false, error: 'Contradiction not found' },
       { ok: false, error: 'Contradiction not resolved' },
       { ok: false, error: 'Contradiction not resolved' },
       { ok: true },
@@ -337,7 +337,7 @@ describe('bulk contradiction resolution', () => {
     expect(response.json().results).toHaveLength(500);
     expect(response.json().results[0]).toEqual({ ok: true });
     expect(response.json().results.slice(1)).toEqual(Array.from({ length: 499 }, () => ({
-      ok: false, error: 'Failed to resolve contradiction',
+      ok: false, error: 'Contradiction not found',
     })));
   });
 

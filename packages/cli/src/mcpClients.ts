@@ -243,6 +243,31 @@ export function upsertCodexMcp(contents: string, server: McpServerConfig): strin
     if (statement.header) continue;
     const key = statement.path[0]!;
     if (statement.table.length === 2 && statement.path.length === 1 && managed.has(key)) {
+      if (key === 'env') {
+        const inline = lines.slice(statement.start, statement.end + 1).join('\n')
+          .match(/^[^=]*=\s*\{([\s\S]*)$/)?.[1];
+        if (inline !== undefined) {
+          const existing = new Map<string, string>();
+          const end = /^\}\s*(?:#.*)?$/;
+          let remaining = inline.trim();
+          while (!end.test(remaining)) {
+            const pair = remaining.match(/^([A-Za-z0-9_-]+|"(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')\s*=\s*("(?:[^"\\\r\n]|\\.)*")\s*(?:,\s*(?=[^\s}])|(?=\}))/);
+            if (!pair) break;
+            const rawKey = pair[1]!;
+            let envKey: string;
+            try {
+              envKey = rawKey.startsWith('"') ? JSON.parse(rawKey) as string
+                : rawKey.startsWith("'") ? rawKey.slice(1, -1) : rawKey;
+            } catch { break; }
+            existing.set(envKey, pair[2]!);
+            remaining = remaining.slice(pair[0].length).trim();
+          }
+          if (end.test(remaining)) {
+            const merged = new Map([...existing, ...envValues]);
+            managed.set('env', `{ ${[...merged].map(([name, value]) => `${JSON.stringify(name)} = ${value}`).join(', ')} }`);
+          }
+        }
+      }
       replace(statement, key, managed.get(key)!);
       managed.delete(key);
     } else {
