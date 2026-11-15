@@ -27,6 +27,7 @@
         "ENGRAM_DB_PATH": "${user_config.db_path}",
         "ENGRAM_NAMESPACE_MODE": "${user_config.namespace_mode}",
         "ENGRAM_NAMESPACE": "${user_config.namespace}",
+        "ENGRAM_ADMIN_TOOLS": "${user_config.admin_tools}",
         "ENGRAM_SYNC_URL": "${user_config.sync_url}",
         "ENGRAM_SYNC_MODE": "${user_config.sync_mode}",
         "ENGRAM_SYNC_ENCRYPTION_KEY": "${user_config.sync_encryption_key}",
@@ -70,9 +71,16 @@
     "namespace_mode": {
       "type": "string",
       "title": "Namespace Mode",
-      "description": "Project scopes to the git root or current directory. None disables scoping; filter uses an optional namespace; isolated requires and enforces a configured namespace.",
+      "description": "Project scopes to the main git repository or current directory; outside git, home and filesystem roots use global memories only. None disables scoping; filter uses an optional namespace; isolated requires and enforces a configured namespace.",
       "required": false,
       "default": "project"
+    },
+    "admin_tools": {
+      "type": "boolean",
+      "title": "Admin tools",
+      "description": "Shows the 11 admin tools.",
+      "required": false,
+      "default": false
     },
     "sync_url": {
       "type": "string",

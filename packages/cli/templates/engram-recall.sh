@@ -27,12 +27,26 @@ case "$NAMESPACE_MODE" in
   project)
     if [ -z "$PROJECT" ]; then
       CWD=$(cd -- "${CWD:-.}" 2>/dev/null && pwd -L) || exit 0
+      # Worktrees share the main repository's namespace (common dir <repo>/.git).
+      # Anything else (old git echoing --path-format, submodules) uses the top level.
       if command -v timeout >/dev/null 2>&1; then
-        PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+        if PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+            [[ ( "$PROJECT" = /* || "$PROJECT" = [A-Za-z]:/* ) && "$PROJECT" = */.git ]]; then
+          PROJECT="${PROJECT%/.git}"
+        else
+          PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+        fi
       else
-        PROJECT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+        if PROJECT=$(git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+            [[ ( "$PROJECT" = /* || "$PROJECT" = [A-Za-z]:/* ) && "$PROJECT" = */.git ]]; then
+          PROJECT="${PROJECT%/.git}"
+        else
+          PROJECT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+        fi
       fi
-      [ -n "$PROJECT" ] || PROJECT="$CWD"
+      if [ -z "$PROJECT" ]; then
+        case "$CWD" in /|"$HOME") PROJECT="" ;; *) PROJECT="$CWD" ;; esac
+      fi
     fi
     ;;
   filter|isolated) ;;
@@ -45,8 +59,9 @@ PROMPT=$(printf '%s' "$INPUT" | jq -er '.prompt | if type == "string" then . els
 [ "${#PROMPT}" -lt 12 ] && exit 0
 case "$PROMPT" in /*|!*) exit 0 ;; esac
 
-BODY=$(jq -n --arg q "$PROMPT" --arg ns "$PROJECT" '
-  {query:$q, maxTokens:600, touch:false} + if $ns == "" then {} else {namespace:$ns} end') || exit 0
+BODY=$(jq -n --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE" '
+  {query:$q, maxTokens:600, touch:false}
+  + if $ns != "" then {namespace:$ns} elif $mode == "project" then {global:true} else {} end') || exit 0
 RES=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/recall" \
   -H "Content-Type: application/json" -d "$BODY") || exit 0
 [ -z "$RES" ] && exit 0

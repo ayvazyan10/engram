@@ -33,7 +33,8 @@ vi.mock('@engram-ai-memory/core', async (importOriginal) => ({
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.git.mockImplementation((_command: string, args: readonly string[]) =>
-    args.includes('--show-toplevel') ? '/work/neuralCore\n' : 'feature/memory\n');
+    args.includes('--git-common-dir') ? '/work/neuralCore/.git\n'
+      : args.includes('--show-toplevel') ? '/work/neuralCore\n' : 'feature/memory\n');
   mocks.initialize.mockResolvedValue(undefined);
   mocks.recall.mockResolvedValue({ context: 'Past project decisions.', memories: [{}] });
   mocks.getByTag.mockResolvedValue([]);
@@ -57,14 +58,24 @@ describe('buildRecallQuery', () => {
 describe('runSessionStart', () => {
   const env = { ENGRAM_DB_PATH: '/tmp/engram-hook-test/memory.db' };
 
-  it('derives the project namespace from payload.cwd', async () => {
-    await runSessionStart('{"cwd":"/work/neuralCore/nested"}', env, vi.fn());
+  it('derives the main repository namespace from a linked worktree payload.cwd', async () => {
+    await runSessionStart('{"cwd":"/work/feature-worktree/nested"}', env, vi.fn());
     expect(mocks.git).toHaveBeenCalledWith('git', [
-      '-C', '/work/neuralCore/nested', 'rev-parse', '--show-toplevel',
+      '-C', '/work/feature-worktree/nested', 'rev-parse', '--path-format=absolute', '--git-common-dir',
     ], expect.objectContaining({ timeout: 500 }));
     expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({
       namespaceMode: 'filter', namespace: '/work/neuralCore',
     }));
+  });
+
+  it('falls back to the git top level when old git echoes an unsupported --path-format', async () => {
+    mocks.git.mockImplementation((_command: string, args: readonly string[]) =>
+      args.includes('--path-format=absolute') ? '--path-format=absolute\n.git\n' : '/work/neuralCore\n');
+    await runSessionStart('{"cwd":"/work/neuralCore/nested"}', env, vi.fn());
+    expect(mocks.git).toHaveBeenCalledWith('git', [
+      '-C', '/work/neuralCore/nested', 'rev-parse', '--show-toplevel',
+    ], expect.any(Object));
+    expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({ namespace: '/work/neuralCore' }));
   });
 
   it('emits the SessionStart context envelope without character truncation', async () => {
@@ -98,6 +109,15 @@ describe('runSessionStart', () => {
     mocks.git.mockImplementation(() => { throw new Error('not a repository'); });
     await runSessionStart('{"cwd":"/work/neuralCore"}', env, vi.fn());
     expect(mocks.recall).toHaveBeenCalledWith('neuralCore', expect.any(Object));
+  });
+
+  it('uses only global memories outside git at a filesystem root or the home directory', async () => {
+    mocks.git.mockImplementation(() => { throw new Error('not a repository'); });
+    for (const cwd of [path.parse(process.cwd()).root, os.homedir()]) {
+      await runSessionStart(JSON.stringify({ cwd }), env, vi.fn());
+      expect(mocks.construct).toHaveBeenLastCalledWith(expect.objectContaining({ namespaceMode: 'filter' }));
+      expect(mocks.construct.mock.lastCall?.[0]).not.toHaveProperty('namespace');
+    }
   });
 
   it.each(['initialize', 'recall', 'shutdown'] as const)('is silent and exits zero when %s throws', async (method) => {

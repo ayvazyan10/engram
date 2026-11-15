@@ -168,8 +168,11 @@ function ensureInstalled(version, installDir) {
 
 function startServer(installDir) {
   const invocation = serverInvocation(installDir);
+  const env = { ...process.env };
+  // Desktop templates boolean settings as "true"/"false"; the server requires "1".
+  if (env.ENGRAM_ADMIN_TOOLS === 'true') env.ENGRAM_ADMIN_TOOLS = '1';
   const child = spawn(invocation.file, invocation.args, {
-    env: process.env,
+    env,
     stdio: 'inherit',
   });
 
