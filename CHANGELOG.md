@@ -9,6 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.12.3] — 2026-11-15
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.3 (core and mcp republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.12.3. Private workspace versions unchanged.
+
+### Fixed
+
+- **`engram setup` on Windows.** The prerequisite check reported `pnpm: not found (spawnSync pnpm ENOENT)` even with pnpm installed, because pnpm is a `.cmd` shim that cannot be started without a shell. The check now runs through the shell on Windows.
+
 ## [0.12.2] — 2026-11-15
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.2, and the Claude Desktop extension bundle 0.12.2. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.9.0 and `@engram-ai-memory/web` 0.7.0.
