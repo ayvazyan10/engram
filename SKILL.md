@@ -1,6 +1,6 @@
 ---
 name: engram
-description: "Long-term memory that complements the host AI's memory and instructions. Stores durable facts in local SQLite and recalls relevant context with semantic search and a knowledge graph. Host and user instructions take precedence. Embeddings run locally; no API keys required."
+description: "Shared long-term memory across AI tools. Stores durable facts in local SQLite and recalls relevant context with semantic search and a knowledge graph. Explicit user instructions (CLAUDE.md, AGENTS.md, rules) win on conflict. Embeddings run locally; no API keys required."
 license: MIT
 compatibility: "Requires Node.js 22+ and npm. Works on macOS, Linux, and Windows."
 metadata:
@@ -11,7 +11,7 @@ metadata:
 
 # Engram AI Memory
 
-Engram MCP version 0.12.0 provides long-term memory across sessions, projects, and AI tools. It complements the host's memory and instructions (CLAUDE.md, AGENTS.md, rules, built-in memory); the host and the user win on conflict.
+Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user's explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.
 
 ## Tools (15 visible by default, 26 with admin tools enabled)
 

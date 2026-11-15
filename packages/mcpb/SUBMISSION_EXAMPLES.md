@@ -3,8 +3,8 @@
 Three worked examples for the official Claude MCP Directory submission.
 Each example shows the tool name, input, and expected output.
 
-Engram complements the host's memory and instructions; host and user instructions
-take precedence. There are 15 tools visible by default and 11 admin tools hidden
+Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user's explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.
+There are 15 tools visible by default and 11 admin tools hidden
 unless `ENGRAM_ADMIN_TOOLS=1` (26 total when enabled).
 
 ---
