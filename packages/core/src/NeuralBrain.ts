@@ -1151,12 +1151,12 @@ export class NeuralBrain {
 
   private deduplicateStore(record: NewMemory, embedding: Float32Array, threshold: number): StoreResult | undefined {
     const db = getDb();
-    const [neighbour] = this.vectorSearch.search(embedding, 1, threshold);
+    const [neighbour] = this.vectorSearch.search(embedding, 1, threshold, undefined, record.namespace ?? null);
     if (!neighbour) return undefined;
     const live = and(eq(schema.memories.id, neighbour.id), isNull(schema.memories.archivedAt));
     const existing = db.select().from(schema.memories).where(live).get();
-    // Only the closest live neighbour is eligible; never fall through to a
-    // less similar memory with a matching type, namespace, or content.
+    // Only the closest live neighbour in this namespace is eligible; never
+    // fall through to a less similar memory with a matching type or content.
     if (!existing || !this.canAccessNamespace(existing.namespace)
       || existing.type !== record.type || existing.namespace !== (record.namespace ?? null)
       || this.contradictionDetector.analyzeContradiction(record.content, existing.content).length > 0) {

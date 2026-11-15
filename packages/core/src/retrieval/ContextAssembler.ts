@@ -18,7 +18,7 @@ import type { Memory, MemoryType } from '../db/schema.js';
 import { embed, packFP16, unpackFP16 } from '../embedding/Embedder.js';
 import { KnowledgeGraph } from '../graph/KnowledgeGraph.js';
 import { scoreMemory } from './ImportanceScorer.js';
-import { VectorSearch, type SearchResult } from './VectorSearch.js';
+import { cosineSimilarity, VectorSearch, type SearchResult } from './VectorSearch.js';
 import { hybridSearch } from './HybridSearch.js';
 
 /** Phase of the streaming recall pipeline */
@@ -50,6 +50,8 @@ export interface RecallStreamComplete {
 export interface RecallOptions {
   /** Maximum number of tokens to include in assembled context (approx 4 chars/token) */
   maxTokens?: number;
+  /** Update access statistics and log the recall (default: true). */
+  touch?: boolean;
   /** Filter by source system */
   sources?: string[];
   /** Filter by memory type */
@@ -194,9 +196,13 @@ export class ContextAssembler {
     // Step 2: Retrieval (namespace-scoped when configured)
     const filtered = hasRecallFilters(options);
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const exactNamespace = options.namespace !== undefined || options.global === true;
+    const namespace = options.global === true ? null : options.namespace ?? this.namespace;
     const vectorResults: Array<SearchResult & { relevance?: number }> = this.hybridSearch
-      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal)
-      : this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
+      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types,
+        namespace, !exactNamespace && crossNamespace, !exactNamespace && this.includeGlobal)
+      : this.vectorSearch.search(queryVec, candidateLimit, threshold, types,
+        namespace, !exactNamespace && crossNamespace, !exactNamespace && this.includeGlobal);
     const candidateIds = new Set(vectorResults.map((r) => r.id));
 
     // Step 3: Graph expansion
@@ -238,19 +244,23 @@ export class ContextAssembler {
     }
 
     // Step 4 cont: Score each memory
-    const scored = records.map((record) => {
+    const entries = this.vectorSearch.entriesById();
+    const scored = records.flatMap((record) => {
       const vectorResult = vectorResults.find((r) => r.id === record.id);
-      const similarity = vectorResult?.similarity ?? 0.1; // graph-expanded get lower base
+      const entry = entries.get(record.id);
+      const similarity = vectorResult?.similarity ?? (entry
+        ? cosineSimilarity(queryVec, entry.vector, this.vectorSearch.dimension) : 0);
+      if (!vectorResult && (!entry || similarity < threshold)) return [];
 
       const score = scoreMemory({
         similarity: vectorResult?.relevance ?? similarity,
         createdAt: record.createdAt,
-        lastAccessedAt: record.lastAccessedAt,
+        lastAccessedAt: null,
         importance: record.importance,
         accessCount: record.accessCount,
       });
 
-      return { record, score, similarity };
+      return [{ record, score, similarity }];
     });
 
     // Step 5: Sort by score, deduplicate
@@ -260,10 +270,13 @@ export class ContextAssembler {
     const maxChars = maxTokens * 4;
     let totalChars = 0;
     const selected: typeof scored = [];
+    const selectedTexts = new Set<string>();
     const overBudget = new Set<string>();
 
     for (const item of scored) {
       if (filtered && selected.length >= topK) break;
+      const text = (item.record.summary ?? item.record.content).trim();
+      if (selectedTexts.has(text)) continue;
       // formatContext emits `summary ?? content`, so budget against what is
       // actually rendered. Skip (not break) oversized entries so smaller,
       // lower-ranked memories can still fill the budget, and always admit the
@@ -274,6 +287,7 @@ export class ContextAssembler {
         continue;
       }
       selected.push(item);
+      selectedTexts.add(text);
       totalChars += charLen;
     }
 
@@ -327,7 +341,7 @@ export class ContextAssembler {
   /** Persist the access statistics and audit row for a completed plan. */
   async commit(plan: RecallPlan): Promise<RecallResult> {
     const { context, memories, selected, query, queryVec, startTime, options: { source, sessionId } } = plan;
-    if (!plan.hasCandidates) return { context, memories, latencyMs: plan.latencyMs };
+    if (plan.options.touch === false || !plan.hasCandidates) return { context, memories, latencyMs: plan.latencyMs };
     const db = getDb();
 
     // Update access counts in DB. These must be awaited: drizzle query builders
@@ -418,6 +432,7 @@ export class ContextAssembler {
 
     // Track all yielded memories for final context and dedup
     const yieldedIds = new Set<string>();
+    const yieldedTexts = new Set<string>();
     const allYielded: Array<{ record: Memory; score: number; similarity: number }> = [];
 
     // Step 1: Embed query
@@ -426,9 +441,13 @@ export class ContextAssembler {
     // Step 2: Retrieval — yield results immediately as Phase 1
     const filtered = hasRecallFilters(options);
     const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
+    const exactNamespace = options.namespace !== undefined || options.global === true;
+    const namespace = options.global === true ? null : options.namespace ?? this.namespace;
     const vectorResults: Array<SearchResult & { relevance?: number }> = this.hybridSearch
-      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal)
-      : this.vectorSearch.search(queryVec, candidateLimit, threshold, types, this.namespace, crossNamespace, this.includeGlobal);
+      ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, threshold, types,
+        namespace, !exactNamespace && crossNamespace, !exactNamespace && this.includeGlobal)
+      : this.vectorSearch.search(queryVec, candidateLimit, threshold, types,
+        namespace, !exactNamespace && crossNamespace, !exactNamespace && this.includeGlobal);
 
     for (const vr of vectorResults) {
       if (totalChars >= maxChars || (filtered && allYielded.length >= topK)) break;
@@ -445,16 +464,19 @@ export class ContextAssembler {
       if (types && !types.includes(record.type as MemoryType)) continue;
       if (this.namespace && !crossNamespace && record.namespace !== this.namespace
           && !(this.includeGlobal && record.namespace == null)) continue;
+      const text = (record.summary ?? record.content).trim();
+      if (yieldedTexts.has(text)) continue;
 
       const score = scoreMemory({
         similarity: vr.relevance ?? vr.similarity,
         createdAt: record.createdAt,
-        lastAccessedAt: record.lastAccessedAt,
+        lastAccessedAt: null,
         importance: record.importance,
         accessCount: record.accessCount,
       });
 
       yieldedIds.add(record.id);
+      yieldedTexts.add(text);
       allYielded.push({ record, score, similarity: vr.similarity });
       totalChars += record.content.length;
       rank++;
@@ -482,10 +504,15 @@ export class ContextAssembler {
       vectorResults.slice(0, 10).map((r) => r.id),
       graphDepth
     );
+    const entries = this.vectorSearch.entriesById();
 
     for (const neighbor of graphNeighbors) {
       if (yieldedIds.has(neighbor.id)) continue;
       if (totalChars >= maxChars || (filtered && allYielded.length >= topK)) break;
+      const entry = entries.get(neighbor.id);
+      if (!entry) continue;
+      const similarity = cosineSimilarity(queryVec, entry.vector, this.vectorSearch.dimension);
+      if (similarity < threshold) continue;
 
       const [record] = await db
         .select()
@@ -501,18 +528,19 @@ export class ContextAssembler {
       if (types && !types.includes(record.type as MemoryType)) continue;
       if (this.namespace && !crossNamespace && record.namespace !== this.namespace
           && !(this.includeGlobal && record.namespace == null)) continue;
+      const text = (record.summary ?? record.content).trim();
+      if (yieldedTexts.has(text)) continue;
 
-      // Graph-expanded memories get a lower base similarity
-      const similarity = 0.1;
       const score = scoreMemory({
         similarity,
         createdAt: record.createdAt,
-        lastAccessedAt: record.lastAccessedAt,
+        lastAccessedAt: null,
         importance: record.importance,
         accessCount: record.accessCount,
       });
 
       yieldedIds.add(record.id);
+      yieldedTexts.add(text);
       allYielded.push({ record, score, similarity });
       totalChars += record.content.length;
       rank++;
@@ -541,7 +569,7 @@ export class ContextAssembler {
     const now = new Date().toISOString();
     const accessed = allYielded.filter(({ record }) => !this.includeGlobal
       || record.namespace === this.namespace || record.namespace == null);
-    if (accessed.length > 0) {
+    if (options.touch !== false && accessed.length > 0) {
       await db
         .update(schema.memories)
         .set({
@@ -553,7 +581,7 @@ export class ContextAssembler {
 
     // Log to context_assemblies
     const latencyMs = Date.now() - startTime;
-    await db.insert(schema.contextAssemblies).values({
+    if (options.touch !== false) await db.insert(schema.contextAssemblies).values({
       id: uuidv4(),
       query,
       queryEmbedding: packFP16(queryVec),

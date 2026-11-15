@@ -107,6 +107,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
     Body: {
       query: string;
       maxTokens?: number;
+      touch?: boolean;
       types?: MemoryType[];
       sources?: string[];
       sessionId?: string;
@@ -130,6 +131,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
           // 1..32000. A negative maxTokens disabled context truncation
           // entirely, so one recall could return the whole store.
           maxTokens: { type: 'integer', default: 2000, minimum: 1, maximum: 32000 },
+          touch: { type: 'boolean', default: true },
           types: {
             type: 'array',
             items: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
@@ -160,6 +162,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       }
       const result = await brain.recall(req.body.query, {
         maxTokens: req.body.maxTokens ?? 2000,
+        touch: req.body.touch,
         types: req.body.types,
         sources: req.body.sources,
         since: req.body.since,
