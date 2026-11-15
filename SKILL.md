@@ -5,13 +5,13 @@ license: MIT
 compatibility: "Requires Node.js 22+ and npm. Works on macOS, Linux, and Windows."
 metadata:
   author: ayvazyan10
-  version: "0.11.2"
+  version: "0.12.0"
   homepage: https://engram.am
 ---
 
 # Engram AI Memory
 
-Engram MCP version 0.11.2 provides long-term memory across sessions, projects, and AI tools. It complements the host's memory and instructions (CLAUDE.md, AGENTS.md, rules, built-in memory); the host and the user win on conflict.
+Engram MCP version 0.12.0 provides long-term memory across sessions, projects, and AI tools. It complements the host's memory and instructions (CLAUDE.md, AGENTS.md, rules, built-in memory); the host and the user win on conflict.
 
 ## Tools (15 visible by default, 26 with admin tools enabled)
 

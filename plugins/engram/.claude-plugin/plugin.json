@@ -1,6 +1,6 @@
 {
   "name": "engram",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "Long-term memory that complements Claude Code's memory and instructions; host and user instructions win. 15 tools are visible by default; 11 admin tools are hidden unless ENGRAM_ADMIN_TOOLS=1. Session recall adds context when relevant memories are found.",
   "author": { "name": "ayvazyan10" },
   "repository": "https://github.com/ayvazyan10/engram"

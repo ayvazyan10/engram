@@ -9,6 +9,37 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-11-15
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.0, and the Claude Desktop extension bundle 0.12.0. Private workspace versions: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.9.0 and `@engram-ai-memory/web` 0.7.0.
+
+Engram now works alongside AI coding tools instead of crowding them. Users reported that it filled the context with unrelated memories, insisted on being the primary memory, and mixed projects up. This release fixes the causes.
+
+### Changed
+
+- **Engram complements the host's memory.** The MCP instructions are five neutral lines: Engram complements CLAUDE.md, AGENTS.md, rules and built-in memory, and the host and the user win on conflict. There is no more "do this FIRST", "never ask", "silently", or end-of-session homework. `engram init` writes the same text.
+- **15 tools by default.** The 11 admin tools (`decay_sweep`, `decay_policy`, `plugin_list`, `webhook_subscribe`, `webhook_list`, `index_status`, `embedding_status`, `re_embed`, `memory_stats`, `check_contradictions`, `resolve_contradiction`) appear only with `ENGRAM_ADMIN_TOOLS=1`.
+- **Multilingual embeddings by default** (`Xenova/paraphrase-multilingual-MiniLM-L12-v2`, 384-dim). The English-only model matched a Russian prompt to any Russian memory and almost never to an English one. An existing database keeps the model its rows were embedded with. To move it over, set `ENGRAM_EMBEDDING_MODEL` (or `engram configure set embeddingModel …`) and run `re_embed`. The CLI default for `embeddingModel` is now empty, meaning automatic.
+- **Recall stays on topic.** Recency is a memory's age, not its last recall, so recall no longer reinforces whatever it returned before. Identical text appears once. Graph neighbours must clear the similarity threshold. An explicit namespace or global recall searches only that scope. Recall items include `createdAt`.
+- **Quieter hooks.** The prompt hook injects at most 3 memories that each clear 0.35, with `[id · date]`, and does not touch access stats. Session start uses the same threshold and 600 tokens, returns nothing when nothing is relevant, and no longer nags about contradictions or distillation. Session end cuts text without breaking UTF-8, stores at importance 0.3, and skips `/clear` and resume.
+- **Outside a git repository** the MCP server scopes to the current directory instead of reading and writing every project's memories.
+- `search_memory` and `get_contradiction_tasks` cap content at 500 characters, and contradiction excerpts say when they are truncated. `recall_context` returns the context text only.
+
+### Added
+
+- `engram setup --source codex` registers Engram in `~/.codex/config.toml`, and `--source opencode` registers it in `~/.config/opencode/opencode.json`. `engram init` writes `AGENTS.md` for Codex.
+- `touch: false` on recall (`POST /api/recall` and the core API) recalls without updating access stats or the audit log.
+- `engram doctor` warns about a legacy `mcpServers.engram` in `~/.claude/settings.json`.
+
+### Fixed
+
+- `engram update` refreshes the Claude Code MCP entry, and unchanged config files are no longer rewritten or backed up.
+- The session-start hook keeps working when an older CLI performs the update.
+
+### Upgrading
+
+`engram update` runs the CLI you already have installed, so run it twice. The second run lets the new CLI refresh the MCP entry. If your config says `namespaceMode: "none"`, MCP clients will read and write every project. `engram configure set namespaceMode project` scopes them per project.
+
 ## [0.11.2] — 2026-10-30
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.11.2 (core and mcp republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.11.2. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.8.0 and `@engram-ai-memory/web` 0.7.0.
