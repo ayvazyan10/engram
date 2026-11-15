@@ -3,6 +3,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     testTimeout: 60000,
+    // beforeAll hooks load the embedding model; the multilingual default takes
+    // longer than the 10 s vitest default on a cold CI runner.
+    hookTimeout: 60000,
     // Route tests share one module-level brain singleton, so they must not run
     // in parallel against the same database.
     fileParallelism: false,
