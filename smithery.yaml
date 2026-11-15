@@ -38,7 +38,7 @@ startCommand:
         title: Embedding Model
         description: >
           Xenova (ONNX) embedding model to use for semantic similarity.
-          Defaults to Xenova/all-MiniLM-L6-v2 (384-dim, runs 100% locally).
+          Defaults to Xenova/paraphrase-multilingual-MiniLM-L12-v2 (384-dim, ~118 MB quantized, multilingual, runs 100% locally).
         default: ""
       syncUrl:
         type: string

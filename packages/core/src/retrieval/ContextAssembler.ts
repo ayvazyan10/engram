@@ -94,7 +94,7 @@ export interface RecallResult {
   /** Formatted context string ready for injection into AI prompt */
   context: string;
   /** Raw memories used, with scores */
-  memories: RecalledMemory[];
+  memories: Array<RecalledMemory & { createdAt: string }>;
   /** Time taken in milliseconds */
   latencyMs: number;
 }
@@ -130,7 +130,7 @@ export interface RecallExplanation {
 }
 
 export interface RecallPlan extends RecallExplanation {
-  memories: RecalledMemory[];
+  memories: RecallResult['memories'];
   query: string;
   queryVec: Float32Array;
   options: RecallOptions;
@@ -318,6 +318,7 @@ export class ContextAssembler {
       context,
       memories: selected.map((s) => ({
         id: s.record.id,
+        createdAt: s.record.createdAt,
         type: s.record.type as MemoryType,
         content: s.record.content,
         summary: s.record.summary,

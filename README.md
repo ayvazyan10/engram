@@ -96,7 +96,7 @@ CLI            ──direct───────→ ┘
 
 | Integration | Method | How |
 |---|---|---|
-| **Claude Code** | MCP (26 native tools) | `store_memory`, `recall_context`, `request_reflection`, … |
+| **Claude Code** | MCP (15 tools visible by default; 11 admin tools shown with `ENGRAM_ADMIN_TOOLS=1`) | `store_memory`, `recall_context`, `request_reflection`, … |
 | **Claude Desktop** | 1-click Desktop Extension | [Smithery](https://smithery.ai/skills/ayvazyan10/engram) or `.mcpb` from releases |
 | **Ollama** | Transparent HTTP proxy | Point client at `:11435` instead of `:11434` |
 | **Any app** | Direct REST API | `POST /api/recall` + `POST /api/memory` |
@@ -292,7 +292,7 @@ If you installed via `engram setup`, you can point to the local build instead:
 }
 ```
 
-Restart your AI client. **26 tools** are now available:
+Restart your AI client. **15 tools** are visible by default; **11 admin tools** are shown with `ENGRAM_ADMIN_TOOLS=1`:
 
 | Category | Tools |
 |---|---|
@@ -359,7 +359,7 @@ Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan
 
 Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/engram/releases/latest) and open it in Claude Desktop (File → Open Extension). The bundle auto-installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` on first launch — no setup required.
 
-> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. All 26 MCP tools are then available in Claude Desktop.
+> **How the bootstrap works:** on first run the `.mcpb` bundle installs `@engram-ai-memory/mcp@<version>` via npm into `~/.engram/mcp/`. A marker file prevents re-installation on subsequent launches. 15 MCP tools are visible by default; 11 admin tools are shown with `ENGRAM_ADMIN_TOOLS=1`.
 
 ---
 
@@ -368,7 +368,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | Package | Description | npm |
 |---|---|---|
 | `@engram-ai-memory/core` | The Brain — memory engine, embeddings, graph, retrieval, decay, reflection | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/core?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/core) |
-| `@engram-ai-memory/mcp` | MCP Server — 26 tools for Claude Code and MCP-compatible clients | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
+| `@engram-ai-memory/mcp` | MCP Server for Claude Code and MCP-compatible clients — 15 tools visible by default; 11 admin tools shown with `ENGRAM_ADMIN_TOOLS=1` | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/mcp?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/mcp) |
 | `@engram-ai-memory/cli` | CLI — store, search, recall, reflections, stats, export, import from the terminal | [![npm](https://img.shields.io/npm/v/@engram-ai-memory/cli?color=6366f1)](https://npmjs.com/package/@engram-ai-memory/cli) |
 | `@engram-ai-memory/server` | Fastify REST API + Socket.io WebSocket (53 endpoints) | — |
 | `@engram-ai-memory/web` | Atlas dashboard — Map, Recall, Review, Timeline, Insights, Settings | — |
@@ -388,7 +388,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_NAMESPACE_MODE` | `project` | Namespace behavior: `project`, `none`, `filter`, or `isolated` |
 | `ENGRAM_NAMESPACE` | *(none)* | Namespace value used when mode is `filter` or `isolated`; overrides `project` detection |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
-| `ENGRAM_EMBEDDING_MODEL` | *(automatic)* | New databases use `Xenova/paraphrase-multilingual-MiniLM-L12-v2`; existing databases keep their model. Set to override. |
+| `ENGRAM_EMBEDDING_MODEL` | *(automatic)* | New databases use `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384-dim, ~118 MB quantized, multilingual); existing databases keep their model until `ENGRAM_EMBEDDING_MODEL` is set and `re_embed` runs. |
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Auto-decay sweep interval (ms) |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived |
 | `ENGRAM_ALLOWED_ORIGINS` | localhost dashboard origins | Comma-separated browser origins allowed to call the API (CORS + WebSocket). Non-browser clients (CLI, MCP, curl) are unaffected. |

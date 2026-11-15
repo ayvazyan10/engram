@@ -62,11 +62,11 @@ brain.shutdown();
 | `ENGRAM_NAMESPACE_MODE` | `none` | `none`, `filter`, or `isolated` |
 | `ENGRAM_NAMESPACE` | — | Namespace used by `filter`/`isolated` modes |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Persistent vector index path |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
+| `ENGRAM_EMBEDDING_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Embedding model |
 
 ## Embedding
 
-Uses `Xenova/all-MiniLM-L6-v2` (384-dim) via ONNX/WASM — runs locally, no API calls, no cost. FP16 compressed for 2x storage savings.
+Uses `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384-dim, ~118 MB quantized, multilingual) via ONNX/WASM — runs locally, no API calls, no cost. FP16 compressed for 2x storage savings.
 
 ## Links
 

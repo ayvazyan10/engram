@@ -1,6 +1,6 @@
 # @engram-ai-memory/mcp
 
-MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to any AI client (Claude Code, Cursor, Windsurf, Cline, and any MCP-compatible client). 24 tools for memory management, search, recall, decay, contradictions, tags, webhooks, reflection, distillation, and more.
+MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to any AI client (Claude Code, Cursor, Windsurf, Cline, and any MCP-compatible client). 15 tools are visible by default; 11 admin tools are shown with `ENGRAM_ADMIN_TOOLS=1`. Tools cover memory management, search, recall, decay, contradictions, tags, webhooks, reflection, distillation, and more.
 
 ## Install
 
@@ -55,7 +55,7 @@ one of them:
 
 Set `ENGRAM_SOURCE` to your AI client: `claude-code`, `cursor`, `windsurf`, `cline`.
 
-Restart your AI client. 24 tools appear automatically.
+Restart your AI client. 15 tools appear by default; 11 admin tools are shown with `ENGRAM_ADMIN_TOOLS=1`.
 
 ## Tools
 
@@ -87,7 +87,7 @@ End of session → store_memory(session summary)
 | `ENGRAM_NAMESPACE_MODE` | `none` (`filter` when `ENGRAM_NAMESPACE` is set) | `none`, `filter`, or `isolated` |
 | `ENGRAM_NAMESPACE` | — | Namespace used by `filter`/`isolated` modes |
 | `ENGRAM_SOURCE` | `mcp-client` | AI client identifier (e.g. `claude-code`, `cursor`, `windsurf`) |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model (must match the API server when sharing a database) |
+| `ENGRAM_EMBEDDING_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Embedding model (must match the API server when sharing a database) |
 | `ENGRAM_SYNC_URL` | — | PostgreSQL connection string for multi-device sync. Unset = no sync engine is constructed |
 | `ENGRAM_SYNC_MODE` | `auto` | `auto`, `manual`, or `off` |
 | `ENGRAM_SYNC_INTERVAL` | — | Background sync interval, in milliseconds |

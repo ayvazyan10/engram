@@ -1042,7 +1042,7 @@ Check the status of the embedding model and memory coverage.
 **Response `200`**
 ```json
 {
-  "model": "all-MiniLM-L6-v2",
+  "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
   "dimensions": 384,
   "totalMemories": 101,
   "embeddedMemories": 101,
@@ -1588,7 +1588,7 @@ Unknown query parameters and invalid values return `400`. Combining `namespace` 
   "computeMs": 12.4,
   "method": "fallback",
   "explainedVariance": [0, 0],
-  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "embeddingModel": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
   "nodes": [{
     "id": "memory-id", "x": 0.2, "y": -0.3,
     "type": "semantic", "importance": 0.7, "retention": 0.42,
@@ -1693,7 +1693,7 @@ No query parameters. Unknown ones are ignored.
   "explainedVariance": [0.24093698985178116, 0.09472036395954171, 0.046422251410887],
   "fingerprint": "m:651:2026-09-04T12:59:20.787Z:2026-09-04T11:27:59.722Z:-",
   "generatedAt": "2026-09-04T16:23:26.925Z",
-  "embeddingModel": "Xenova/all-MiniLM-L6-v2",
+  "embeddingModel": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
   "computeMs": 157,
   "nodes": [
     {

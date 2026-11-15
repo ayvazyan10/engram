@@ -19,7 +19,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
 │  MCP Server  │  │  Ollama Proxy    │  │   REST API :4901      │
 │  @engram-ai-memory/mcp     │  │  @engram-ai-memory/adapter-    │  │   @engram-ai-memory/server          │
 │              │  │  ollama          │  │   Fastify 5           │
-│ 18 MCP tools │  │  :11435→:11434   │  │   + Socket.io /neural │
+│ 15 MCP tools │  │  :11435→:11434   │  │   + Socket.io /neural │
 └──────┬───────┘  └────────┬─────────┘  └──────────┬────────────┘
        │                   │                        │
        └──────────────┬────┘────────────────────────┘
@@ -47,7 +47,7 @@ Engram is a **monorepo** composed of a core brain engine, integration interfaces
        │                                           │
        │  ┌──────────────────────────────────────┐ │
        │  │       Embedder (@xenova/transformers) │ │
-       │  │       all-MiniLM-L6-v2, 384-dim       │ │
+       │  │ paraphrase-multilingual-MiniLM-L12-v2 │ │
        │  │       WASM — runs 100% locally        │ │
        │  └──────────────────────────────────────┘ │
        └──────────────────┬───────────────────────┘
@@ -138,7 +138,7 @@ Each type is handled by a dedicated class that applies type-specific defaults:
 
 ### Embedder
 
-Uses `@xenova/transformers` with the `Xenova/all-MiniLM-L6-v2` model.
+Uses `@xenova/transformers` with the default `Xenova/paraphrase-multilingual-MiniLM-L12-v2` model (384-dim, ~118 MB quantized, multilingual).
 
 - **Inference**: ONNX Runtime WASM — runs entirely in Node.js, zero network calls, no API keys
 - **Dimensions**: 384 float32 values per embedding

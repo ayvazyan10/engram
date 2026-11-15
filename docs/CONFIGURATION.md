@@ -18,7 +18,7 @@ One exception to "environment variables only": the CLI keeps `~/.engram/config.j
 | `ENGRAM_DECAY_INTERVAL` | `3600000` | Decay sweep interval in milliseconds (0 = disabled). Must be 0–2147483647; a finite value outside that range aborts startup |
 | `ENGRAM_DECAY_THRESHOLD` | `0.05` | Retention score below which memories are archived. Must be 0–1; a finite value outside that range aborts startup |
 | `ENGRAM_INDEX_PATH` | `{dbPath}.index` | Path to persist the vector index for fast startup |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model used for vectorization |
+| `ENGRAM_EMBEDDING_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Embedding model used for vectorization |
 | `ENGRAM_HYBRID_SEARCH` | `false` | Opt in to vector + FTS5 BM25 retrieval fused by RRF with `1` or `true`; explicit `NeuralBrain` config `hybridSearch` overrides the environment |
 | `ENGRAM_DATABASE` | *(unset)* | Legacy backend selector. Setting it to `postgresql` aborts startup by design — see [Database](#database) |
 
@@ -74,7 +74,7 @@ ENGRAM_EMBEDDING_MODEL=Xenova/bge-small-en-v1.5 \
 | `ENGRAM_NAMESPACE` | *(none)* | Namespace for memory isolation; an explicit value wins over `project` detection |
 | `ENGRAM_NAMESPACE_MODE` | `project` | `project`, `none`, `filter` or `isolated` (see [Namespace behavior](#api-server-appsserver)) |
 | `ENGRAM_SOURCE` | `mcp-client` | Client identifier stamped on every stored memory (`claude-code`, `cursor`, `windsurf`, …) |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/all-MiniLM-L6-v2` | Embedding model (must match the API server if sharing a database) |
+| `ENGRAM_EMBEDDING_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Embedding model (must match the API server if sharing a database) |
 | `ENGRAM_SYNC_URL`, `ENGRAM_SYNC_MODE`, `ENGRAM_SYNC_INTERVAL`, `ENGRAM_SYNC_ENCRYPTION_KEY` | *(see [Cloud Sync](#cloud-sync))* | The MCP server **validates** these strictly and refuses to start on a bad value, where the REST server does not |
 
 The MCP server runs as a stdio process — it shares a database file with the REST API server. Both must point to the same `ENGRAM_DB_PATH`.
@@ -120,6 +120,8 @@ The CLI does not read `ENGRAM_DB_PATH` or `ENGRAM_INDEX_PATH` itself — it read
 | `repo/` | The clone `engram setup` creates (`repoPath`) |
 
 Read and change configuration with `engram configure show`, `engram configure set <key> <value>` and `engram configure path`. Data commands (`store`, `search`, `recall`, `stats`, …) talk to the running server over HTTP at `http://<host>:<port>` from that same file.
+
+`embeddingModel` defaults to `''` (empty string), meaning automatic model selection.
 
 ### Example
 
@@ -296,24 +298,24 @@ PostgreSQL instance. See [Cloud Sync](CLOUD-SYNC.md) for setup instructions.
 
 ## Embedder
 
-The embedder runs locally via ONNX Runtime WASM — no GPU, no external API calls. The model downloads automatically on the first embed call (~25 MB).
+The embedder runs locally via ONNX Runtime WASM — no GPU, no external API calls. The model downloads automatically on the first embed call (~118 MB quantized).
 
 | Setting | Value | Notes |
 |---|---|---|
-| Model | `Xenova/all-MiniLM-L6-v2` | 384-dim, 23M params, fast |
+| Model | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 384-dim, multilingual |
 | Runtime | ONNX Runtime WASM | Runs in Node.js, no GPU required |
-| Cache dir | `./models` (relative to CWD) | Downloaded on first use (~23 MB) |
-| Quantization | FP32 internally, FP16 stored | 2x storage compression |
+| Cache dir | `./models` (relative to CWD) | Downloaded on first use (~118 MB quantized) |
+| Quantization | Quantized ONNX weights, FP16 stored | 2x storage compression |
 
 ### `ENGRAM_EMBEDDING_MODEL`
 
-Set this environment variable on any component (server, MCP, CLI) to override the default model. After changing the model, run a re-embed to update existing vectors.
+Set this environment variable on any component (server, MCP, CLI) to override the default model. An existing database keeps the model its rows were embedded with until `ENGRAM_EMBEDDING_MODEL` is set and `re_embed` runs.
 
 ### Supported models
 
 | Model | Dimensions | Approximate size | Notes |
 |---|---|---|---|
-| `Xenova/all-MiniLM-L6-v2` | 384 | 23 MB | **Default** — fast, good quality |
+| `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 384 | ~118 MB quantized | **Default** — multilingual |
 | `Xenova/bge-small-en-v1.5` | 384 | 33 MB | BGE small, comparable quality |
 | `Xenova/bge-base-en-v1.5` | 768 | 110 MB | BGE base, higher quality |
 | `Xenova/gte-small` | 384 | 33 MB | GTE small |

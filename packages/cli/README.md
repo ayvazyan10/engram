@@ -170,7 +170,7 @@ Config file: `~/.engram/config.json` (mode `0600` — it can hold a Postgres pas
 | `host` | `127.0.0.1` | Bind address |
 | `namespace` | `null` | Memory namespace |
 | `namespaceMode` | `none` | `none`, `filter`, or `isolated` |
-| `embeddingModel` | `Xenova/all-MiniLM-L6-v2` | Embedding model |
+| `embeddingModel` | `''` (automatic) | Empty string selects the default `Xenova/paraphrase-multilingual-MiniLM-L12-v2` for new databases |
 | `indexPath` | `~/.engram/engram.db.index` | Vector index path |
 | `repoPath` | `~/.engram/repo` | Cloned repo path |
 | `syncUrl` | *(unset)* | PostgreSQL connection string — set by `cloud connect` |
