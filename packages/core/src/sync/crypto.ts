@@ -115,10 +115,10 @@ export class EncryptionError extends Error {
  * place.
  *
  * NOT bound: `updated_at`, `archived_at`, `device_id` and the rest of the
- * plaintext metadata. Those are rewritten server-side by legitimate
- * operations that never touch content — `backfillNullDeviceIds` stamps
- * `device_id`, and the LWW upsert's `GREATEST` merge moves access
- * bookkeeping — so binding them would turn ordinary maintenance into a
+ * plaintext metadata. Legitimate operations rewrite them without touching
+ * content — device attribution can change locally, and the LWW upsert's
+ * `GREATEST` merge moves access bookkeeping — so binding them would turn
+ * ordinary maintenance into a
  * permanently undecryptable row. They remain unauthenticated; see the
  * module docs in `./syncCrypto.ts` for what the server can still see and do.
  */

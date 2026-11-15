@@ -21,11 +21,14 @@
  * which live entirely outside this class.
  */
 
-import { getDb } from '../db/index.js';
+import { eq, isNull } from 'drizzle-orm';
+import { getDb, schema } from '../db/index.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import { createPgSyncConnection, redactSyncUrl } from '../db/pg/connection.js';
 import type { PgSyncConnection } from '../db/pg/connection.js';
 import { getEmbeddingModelId } from '../embedding/Embedder.js';
+import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from '../lifecycle/DecayPolicy.js';
+import type { DecayPolicyConfig } from '../lifecycle/DecayPolicy.js';
 import { getDeviceId } from './deviceId.js';
 import {
   computeSyncId, migrateLegacySyncState, pullCursorWithOverlap, readCursor, writeCursor,
@@ -330,10 +333,6 @@ export class SyncEngine {
         pool: this.pgConn.pool,
         batchSize: LOCAL_BATCH_SIZE,
       });
-      // Runs once per connection lifetime, right after migrations (above)
-      // and before the first push/pull — see PgSyncClient.backfillNullDeviceIds
-      // for why NULL device_id rows must never reach the per-cycle sync path.
-      await this.pgClient.backfillNullDeviceIds(this.deviceId);
       await this.checkEmbeddingModelCompatibility();
       await this.initializeEncryption();
     } catch (err) {
@@ -408,11 +407,23 @@ export class SyncEngine {
   private async doPush(): Promise<SyncResult['pushed']> {
     this.currentPhase = 'push';
     const client = await this.ensureConnected();
+    // Attribute legacy rows on the device that owns them, without changing
+    // their edit timestamps. The server cannot determine a NULL row's owner.
+    this.db.transaction((tx) => {
+      for (const table of [schema.memories, schema.memoryConnections, schema.sessions]) {
+        tx.update(table).set({ deviceId: this.deviceId }).where(isNull(table.deviceId)).run();
+      }
+    }, { behavior: 'immediate' });
+
+    const storedPolicy = this.db.select().from(schema.localMeta)
+      .where(eq(schema.localMeta.key, 'decay_policy')).get();
+    const policy = storedPolicy ? JSON.parse(storedPolicy.value) as Partial<DecayPolicyConfig> : {};
+    const overlapMs = policy.decayConflictWindowMs ?? DEFAULT_DECAY_CONFLICT_WINDOW_MS;
     const cursor = readCursor(this.db, this.syncId);
     const startCursor = cursor?.lastPushAt ?? null;
 
     const memories = await drainPushBatches(
-      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId),
+      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
       // `pushMemoriesMerging` rather than `pushMemories`: the MAX merge on
       // access bookkeeping happens server-side, and a device that wins
       // last-write-wins never pulls its own row back, so this is the only
@@ -430,7 +441,7 @@ export class SyncEngine {
       LOCAL_BATCH_SIZE
     );
     const connections = await drainPushBatches(
-      (c) => selectConnectionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId),
+      (c) => selectConnectionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
       (rows) => client.pushConnections(encryptConnectionsForPush(this.encryptionManager, rows)),
       (row) => row.updatedAt,
       (row) => row.id,
@@ -438,7 +449,7 @@ export class SyncEngine {
       LOCAL_BATCH_SIZE
     );
     const sessions = await drainPushBatches(
-      (c) => selectSessionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId),
+      (c) => selectSessionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
       (rows) => client.pushSessions(encryptSessionsForPush(this.encryptionManager, rows)),
       (row) => row.updatedAt,
       (row) => row.id,

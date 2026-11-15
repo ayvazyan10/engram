@@ -1,8 +1,7 @@
 /**
  * Local SQLite reads for the push side of sync: paged "what changed since
- * this cursor" queries against the three synced tables, plus the same
- * query used (unpaged, once) by `SyncEngine.status()` to estimate the
- * pending-push backlog.
+ * this cursor" queries against the three synced tables, plus bounded scans
+ * without overlap for `SyncEngine.status()` to estimate the pending backlog.
  */
 
 import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from '../lifecycle/DecayPolicy.js';
@@ -49,17 +48,24 @@ interface PushColumns {
 function pushPageFilter(
   columns: PushColumns,
   cursor: PushCursor | null,
-  deviceId: string
+  deviceId: string,
+  overlapMs: number
 ): SQL | undefined {
   const ours = or(isNull(columns.deviceId), eq(columns.deviceId, deviceId));
   if (cursor === null) return ours;
 
+  // Overlap only the first page; subsequent pages use their exact (time, id)
+  // boundary so a backdated group larger than one page still drains once.
+  // A zero overlap is also used by status to count only rows after the cursor.
+  const cursorTs = cursor.id === null && overlapMs > 0
+    ? new Date(Date.parse(cursor.ts) - overlapMs - 1).toISOString()
+    : cursor.ts;
   const afterCursor =
     cursor.id === null
-      ? gt(columns.updatedAt, cursor.ts)
+      ? gt(columns.updatedAt, cursorTs)
       : or(
-          gt(columns.updatedAt, cursor.ts),
-          and(eq(columns.updatedAt, cursor.ts), gt(columns.id, cursor.id))
+          gt(columns.updatedAt, cursorTs),
+          and(eq(columns.updatedAt, cursorTs), gt(columns.id, cursor.id))
         );
 
   return and(ours, afterCursor);
@@ -69,13 +75,9 @@ export function selectMemoriesBatch(
   db: SyncDb,
   cursor: PushCursor | null,
   batchSize: number,
-  deviceId: string
+  deviceId: string,
+  overlapMs = DEFAULT_DECAY_CONFLICT_WINDOW_MS
 ): Memory[] {
-  // Overlap only the first page; subsequent pages use their exact (time, id)
-  // boundary so a backdated group larger than one page still drains once.
-  const start = cursor?.id === null
-    ? { ...cursor, ts: new Date(Date.parse(cursor.ts) - DEFAULT_DECAY_CONFLICT_WINDOW_MS - 1).toISOString() }
-    : cursor;
   const columns: PushColumns = {
     id: schema.memories.id,
     updatedAt: schema.memories.updatedAt,
@@ -84,7 +86,7 @@ export function selectMemoriesBatch(
   return db
     .select()
     .from(schema.memories)
-    .where(pushPageFilter(columns, start, deviceId))
+    .where(pushPageFilter(columns, cursor, deviceId, overlapMs))
     .orderBy(schema.memories.updatedAt, schema.memories.id)
     .limit(batchSize)
     .all();
@@ -94,7 +96,8 @@ export function selectConnectionsBatch(
   db: SyncDb,
   cursor: PushCursor | null,
   batchSize: number,
-  deviceId: string
+  deviceId: string,
+  overlapMs = DEFAULT_DECAY_CONFLICT_WINDOW_MS
 ): MemoryConnection[] {
   const columns: PushColumns = {
     id: schema.memoryConnections.id,
@@ -104,7 +107,7 @@ export function selectConnectionsBatch(
   return db
     .select()
     .from(schema.memoryConnections)
-    .where(pushPageFilter(columns, cursor, deviceId))
+    .where(pushPageFilter(columns, cursor, deviceId, overlapMs))
     .orderBy(schema.memoryConnections.updatedAt, schema.memoryConnections.id)
     .limit(batchSize)
     .all();
@@ -114,7 +117,8 @@ export function selectSessionsBatch(
   db: SyncDb,
   cursor: PushCursor | null,
   batchSize: number,
-  deviceId: string
+  deviceId: string,
+  overlapMs = DEFAULT_DECAY_CONFLICT_WINDOW_MS
 ): Session[] {
   const columns: PushColumns = {
     id: schema.sessions.id,
@@ -124,7 +128,7 @@ export function selectSessionsBatch(
   return db
     .select()
     .from(schema.sessions)
-    .where(pushPageFilter(columns, cursor, deviceId))
+    .where(pushPageFilter(columns, cursor, deviceId, overlapMs))
     .orderBy(schema.sessions.updatedAt, schema.sessions.id)
     .limit(batchSize)
     .all();
@@ -145,8 +149,8 @@ export function countPendingPush(
   const cursor: PushCursor | null = lastPushAt === null ? null : { ts: lastPushAt, id: null };
 
   return (
-    selectMemoriesBatch(db, cursor, batchSize, deviceId).length +
-    selectConnectionsBatch(db, cursor, batchSize, deviceId).length +
-    selectSessionsBatch(db, cursor, batchSize, deviceId).length
+    selectMemoriesBatch(db, cursor, batchSize, deviceId, 0).length +
+    selectConnectionsBatch(db, cursor, batchSize, deviceId, 0).length +
+    selectSessionsBatch(db, cursor, batchSize, deviceId, 0).length
   );
 }

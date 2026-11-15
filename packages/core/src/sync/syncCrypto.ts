@@ -24,10 +24,10 @@
  * row id and column (`FieldBinding` in `./crypto.ts`), so a hostile or
  * compromised operator can no longer move ciphertext between rows or between
  * columns — either now fails to decrypt and is quarantined below. The
- * plaintext columns above are NOT authenticated, though, and cannot be:
- * `backfillNullDeviceIds` rewrites `device_id`, and the LWW upsert's
- * `GREATEST` merge rewrites the access counters, both without touching
- * content. So an operator can still push `updated_at` into the future to win
+ * plaintext columns above are NOT authenticated, though: device attribution
+ * can change locally, and the LWW upsert's `GREATEST` merge rewrites the access
+ * counters server-side, both without touching content. So an operator can
+ * still push `updated_at` into the future to win
  * last-write-wins everywhere, clear `archived_at` to resurrect a deleted
  * memory, or move a row between namespaces. Closing that needs a MAC over
  * the row's metadata carried in its own column, which is a schema change

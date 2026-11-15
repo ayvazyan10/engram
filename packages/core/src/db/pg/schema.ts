@@ -108,11 +108,8 @@ export const pgMemories = pgTable(
   (t) => ({
     serverUpdatedIdx: index('idx_pg_memories_server_updated_at').on(t.serverUpdatedAt),
     namespaceIdx: index('idx_pg_memories_namespace').on(t.namespace),
-    // `PgSyncClient.backfillNullDeviceIds` runs `UPDATE ... WHERE device_id
-    // IS NULL` on every connect, and without this it is a full seq scan every
-    // single time even once there is nothing left to backfill (measured on a
-    // 20k-row table: 605 buffers / 1.8 ms -> 2 buffers / 0.03 ms). Postgres
-    // btree indexes do store NULLs, so `IS NULL` seeks here.
+    // Indexes device attribution, including legacy NULLs (Postgres btree
+    // indexes store NULLs too).
     deviceIdx: index('idx_pg_memories_device_id').on(t.deviceId),
   })
 );

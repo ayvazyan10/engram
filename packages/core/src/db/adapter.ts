@@ -180,7 +180,6 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
 
   // Auto-migrations for SQLite
   runSqliteMigrations(sqlite);
-  runMemoryFtsMigration(sqlite);
 
   const db = drizzle(sqlite, { schema });
 
@@ -278,266 +277,263 @@ function addColumnIfMissing(sqlite: SqliteHandle, table: string, column: string,
 }
 
 function runSqliteMigrations(sqlite: SqliteHandle): void {
-  // v0.1.0: Create base tables if they don't exist (fresh database)
-  if (!tableExists(sqlite, 'memories')) {
-    sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS memories (
-        id TEXT PRIMARY KEY NOT NULL,
-        type TEXT NOT NULL,
-        content TEXT NOT NULL,
-        summary TEXT,
-        embedding BLOB,
-        embedding_dim INTEGER NOT NULL DEFAULT 384,
-        importance REAL NOT NULL DEFAULT 0.5,
-        confidence REAL NOT NULL DEFAULT 1,
-        access_count INTEGER NOT NULL DEFAULT 0,
-        last_accessed_at TEXT,
-        event_at TEXT,
-        session_id TEXT,
-        source TEXT,
-        concept TEXT,
-        trigger_pattern TEXT,
-        action_pattern TEXT,
-        metadata TEXT NOT NULL DEFAULT '{}',
-        tags TEXT NOT NULL DEFAULT '[]',
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        archived_at TEXT,
-        namespace TEXT,
-        embedding_model TEXT,
-        device_id TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_memories_type ON memories (type);
-      CREATE INDEX IF NOT EXISTS idx_memories_source ON memories (source);
-      CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories (importance);
-      CREATE INDEX IF NOT EXISTS idx_memories_session ON memories (session_id);
-      CREATE INDEX IF NOT EXISTS idx_memories_concept ON memories (concept);
-      CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories (archived_at);
-      CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace);
-      CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at);
-      CREATE INDEX IF NOT EXISTS idx_memories_sync_push ON memories (device_id, updated_at, id);
-
-      CREATE TABLE IF NOT EXISTS memory_connections (
-        id TEXT PRIMARY KEY NOT NULL,
-        source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-        target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-        relationship TEXT NOT NULL,
-        strength REAL NOT NULL DEFAULT 1,
-        bidirectional INTEGER NOT NULL DEFAULT false,
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        updated_at TEXT,
-        deleted_at TEXT,
-        device_id TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_connections_source ON memory_connections (source_id);
-      CREATE INDEX IF NOT EXISTS idx_connections_target ON memory_connections (target_id);
-      CREATE INDEX IF NOT EXISTS idx_connections_relationship ON memory_connections (relationship);
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_unique_pair ON memory_connections (source_id, target_id, relationship);
-      CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at);
-      CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at);
-      CREATE INDEX IF NOT EXISTS idx_connections_sync_push ON memory_connections (device_id, updated_at, id);
-
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY NOT NULL,
-        source TEXT NOT NULL,
-        context TEXT,
-        started_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        ended_at TEXT,
-        namespace TEXT,
-        updated_at TEXT,
-        deleted_at TEXT,
-        device_id TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source);
-      CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions (started_at);
-      CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace);
-      CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at);
-      CREATE INDEX IF NOT EXISTS idx_sessions_sync_push ON sessions (device_id, updated_at, id);
-
-      CREATE TABLE IF NOT EXISTS context_assemblies (
-        id TEXT PRIMARY KEY NOT NULL,
-        query TEXT NOT NULL,
-        query_embedding BLOB,
-        assembled_context TEXT NOT NULL,
-        source TEXT,
-        session_id TEXT,
-        latency_ms INTEGER,
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        namespace TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_assemblies_source ON context_assemblies (source);
-      CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies (session_id);
-      CREATE INDEX IF NOT EXISTS idx_assemblies_created ON context_assemblies (created_at);
-      CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace);
-
-      CREATE TABLE IF NOT EXISTS webhooks (
-        id TEXT PRIMARY KEY,
-        url TEXT NOT NULL,
-        secret TEXT,
-        events TEXT NOT NULL DEFAULT '[]',
-        active INTEGER NOT NULL DEFAULT 1,
-        description TEXT,
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        last_triggered_at TEXT,
-        fail_count INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active);
-
-      CREATE TABLE IF NOT EXISTS local_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS sync_state (
-        id TEXT PRIMARY KEY,
-        device_id TEXT NOT NULL,
-        pull_cursor TEXT,
-        last_push_at TEXT,
-        last_sync_at TEXT,
-        last_error TEXT,
-        embedding_model TEXT,
-        created_at TEXT NOT NULL
-      );
-    `);
-    return; // Fresh DB — no need for incremental migrations
-  }
-
-  // v0.2.0: namespace column
-  const memoriesNamespaceIsNew = !columnExists(sqlite, 'memories', 'namespace');
-  addColumnIfMissing(sqlite, 'memories', 'namespace', 'text');
-  if (memoriesNamespaceIsNew) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
-  }
-
-  const sessionsNamespaceIsNew = !columnExists(sqlite, 'sessions', 'namespace');
-  addColumnIfMissing(sqlite, 'sessions', 'namespace', 'text');
-  if (sessionsNamespaceIsNew) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace)');
-  }
-
-  const assembliesNamespaceIsNew = !columnExists(sqlite, 'context_assemblies', 'namespace');
-  addColumnIfMissing(sqlite, 'context_assemblies', 'namespace', 'text');
-  if (assembliesNamespaceIsNew) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace)');
-  }
-
-  // v0.3.0: embedding_model column
-  addColumnIfMissing(sqlite, 'memories', 'embedding_model', 'text');
-
-  // v0.4.0: webhooks table
-  if (!tableExists(sqlite, 'webhooks')) {
-    sqlite.exec(`
-      CREATE TABLE webhooks (
-        id TEXT PRIMARY KEY,
-        url TEXT NOT NULL,
-        secret TEXT,
-        events TEXT NOT NULL DEFAULT '[]',
-        active INTEGER NOT NULL DEFAULT 1,
-        description TEXT,
-        metadata TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
-        last_triggered_at TEXT,
-        fail_count INTEGER NOT NULL DEFAULT 0
-      )
-    `);
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active)');
-  }
-
-  // v0.5.0: multi-device sync foundation (schema only — see .claude/PRPs/plans/postgres-cloud-sync.md)
-  addColumnIfMissing(sqlite, 'memories', 'device_id', 'text');
-
-  // Needed by the future sync push query: WHERE updated_at > cursor. `updated_at`
-  // itself has existed on `memories` since v0.1.0, so only the index is new
-  // here — there's no "column just added" event to hang the CREATE INDEX off
-  // of, so it's gated on the index's own existence instead, to keep this
-  // running once per database file rather than on every connection open.
-  if (!indexExists(sqlite, 'idx_memories_updated_at')) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at)');
-  }
-
-  const connectionsUpdatedAtIsNew = !columnExists(sqlite, 'memory_connections', 'updated_at');
-  addColumnIfMissing(sqlite, 'memory_connections', 'updated_at', 'text');
-  if (connectionsUpdatedAtIsNew) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at)');
-  }
-
-  const connectionsDeletedAtIsNew = !columnExists(sqlite, 'memory_connections', 'deleted_at');
-  addColumnIfMissing(sqlite, 'memory_connections', 'deleted_at', 'text');
-  if (connectionsDeletedAtIsNew) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at)');
-  }
-
-  addColumnIfMissing(sqlite, 'memory_connections', 'device_id', 'text');
-
-  addColumnIfMissing(sqlite, 'sessions', 'updated_at', 'text');
-
-  const sessionsDeletedAtIsNew = !columnExists(sqlite, 'sessions', 'deleted_at');
-  addColumnIfMissing(sqlite, 'sessions', 'deleted_at', 'text');
-  if (sessionsDeletedAtIsNew) {
-    sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at)');
-  }
-
-  addColumnIfMissing(sqlite, 'sessions', 'device_id', 'text');
-
-  // The sync push query selects only rows this device owns and pages on a
-  // composite boundary:
-  //
-  //   WHERE (device_id IS NULL OR device_id = ?)
-  //     AND (updated_at > ? OR (updated_at = ? AND id > ?))
-  //   ORDER BY updated_at, id LIMIT ?
-  //
-  // On `(updated_at)` alone SQLite can only seek by timestamp and then
-  // discard every peer-written row it lands on, so a device that has pulled
-  // a lot from its peers walks most of the table to fill one page. Leading
-  // with `device_id` lets the MULTI-INDEX OR seek straight into this
-  // device's own rows: measured at 19.3 ms -> 2.7 ms for one 500-row page of
-  // a 200k-row table that is 90% peer-written.
-  //
-  // `(updated_at, id)` WITHOUT the device_id prefix is actively worse than
-  // what we have — SQLite abandons the OR optimization for a full index scan
-  // (~1000x slower in the same measurement) — so this must stay a
-  // three-column index, not a two-column one.
-  //
-  // Gated on the index's own existence: `device_id` was added above and may
-  // already have existed, so there is no "column just added" event to hang
-  // this off, and it must not re-run on every connection open.
-  for (const [indexName, table] of [
-    ['idx_memories_sync_push', 'memories'],
-    ['idx_connections_sync_push', 'memory_connections'],
-    ['idx_sessions_sync_push', 'sessions'],
-  ] as const) {
-    if (!indexExists(sqlite, indexName)) {
-      sqlite.exec(
-        `CREATE INDEX IF NOT EXISTS ${indexName} ON ${table} (device_id, updated_at, id)`
-      );
+  sqlite.transaction(() => {
+    // Create missing tables before upgrading columns, including databases
+    // left partially bootstrapped by an older, non-atomic migration.
+    if (!tableExists(sqlite, 'memories')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS memories (
+          id TEXT PRIMARY KEY NOT NULL,
+          type TEXT NOT NULL,
+          content TEXT NOT NULL,
+          summary TEXT,
+          embedding BLOB,
+          embedding_dim INTEGER NOT NULL DEFAULT 384,
+          importance REAL NOT NULL DEFAULT 0.5,
+          confidence REAL NOT NULL DEFAULT 1,
+          access_count INTEGER NOT NULL DEFAULT 0,
+          last_accessed_at TEXT,
+          event_at TEXT,
+          session_id TEXT,
+          source TEXT,
+          concept TEXT,
+          trigger_pattern TEXT,
+          action_pattern TEXT,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          tags TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+          updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+          archived_at TEXT,
+          namespace TEXT,
+          embedding_model TEXT,
+          device_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_memories_type ON memories (type);
+        CREATE INDEX IF NOT EXISTS idx_memories_source ON memories (source);
+        CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories (importance);
+        CREATE INDEX IF NOT EXISTS idx_memories_session ON memories (session_id);
+        CREATE INDEX IF NOT EXISTS idx_memories_concept ON memories (concept);
+        CREATE INDEX IF NOT EXISTS idx_memories_archived ON memories (archived_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace);
+        CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at);
+        CREATE INDEX IF NOT EXISTS idx_memories_sync_push ON memories (device_id, updated_at, id);
+      `);
     }
-  }
 
-  if (!tableExists(sqlite, 'local_meta')) {
-    sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS local_meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `);
-  }
+    if (!tableExists(sqlite, 'memory_connections')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS memory_connections (
+          id TEXT PRIMARY KEY NOT NULL,
+          source_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+          target_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+          relationship TEXT NOT NULL,
+          strength REAL NOT NULL DEFAULT 1,
+          bidirectional INTEGER NOT NULL DEFAULT false,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+          updated_at TEXT,
+          deleted_at TEXT,
+          device_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_connections_source ON memory_connections (source_id);
+        CREATE INDEX IF NOT EXISTS idx_connections_target ON memory_connections (target_id);
+        CREATE INDEX IF NOT EXISTS idx_connections_relationship ON memory_connections (relationship);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_unique_pair ON memory_connections (source_id, target_id, relationship);
+        CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at);
+        CREATE INDEX IF NOT EXISTS idx_connections_sync_push ON memory_connections (device_id, updated_at, id);
+      `);
+    }
 
-  if (!tableExists(sqlite, 'sync_state')) {
-    sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS sync_state (
-        id TEXT PRIMARY KEY,
-        device_id TEXT NOT NULL,
-        pull_cursor TEXT,
-        last_push_at TEXT,
-        last_sync_at TEXT,
-        last_error TEXT,
-        embedding_model TEXT,
-        created_at TEXT NOT NULL
-      )
-    `);
-  }
+    if (!tableExists(sqlite, 'sessions')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY NOT NULL,
+          source TEXT NOT NULL,
+          context TEXT,
+          started_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+          ended_at TEXT,
+          namespace TEXT,
+          updated_at TEXT,
+          deleted_at TEXT,
+          device_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions (source);
+        CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions (started_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace);
+        CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_sync_push ON sessions (device_id, updated_at, id);
+      `);
+    }
+
+    if (!tableExists(sqlite, 'context_assemblies')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS context_assemblies (
+          id TEXT PRIMARY KEY NOT NULL,
+          query TEXT NOT NULL,
+          query_embedding BLOB,
+          assembled_context TEXT NOT NULL,
+          source TEXT,
+          session_id TEXT,
+          latency_ms INTEGER,
+          created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+          namespace TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_assemblies_source ON context_assemblies (source);
+        CREATE INDEX IF NOT EXISTS idx_assemblies_session ON context_assemblies (session_id);
+        CREATE INDEX IF NOT EXISTS idx_assemblies_created ON context_assemblies (created_at);
+        CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace);
+      `);
+    }
+
+    if (!tableExists(sqlite, 'webhooks')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS webhooks (
+          id TEXT PRIMARY KEY,
+          url TEXT NOT NULL,
+          secret TEXT,
+          events TEXT NOT NULL DEFAULT '[]',
+          active INTEGER NOT NULL DEFAULT 1,
+          description TEXT,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+          last_triggered_at TEXT,
+          fail_count INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active);
+      `);
+    }
+
+    if (!tableExists(sqlite, 'local_meta')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS local_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      `);
+    }
+
+    if (!tableExists(sqlite, 'sync_state')) {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS sync_state (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          pull_cursor TEXT,
+          last_push_at TEXT,
+          last_sync_at TEXT,
+          last_error TEXT,
+          embedding_model TEXT,
+          created_at TEXT NOT NULL
+        );
+      `);
+    }
+
+    // v0.2.0: namespace column
+    const memoriesNamespaceIsNew = !columnExists(sqlite, 'memories', 'namespace');
+    addColumnIfMissing(sqlite, 'memories', 'namespace', 'text');
+    if (memoriesNamespaceIsNew) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_namespace ON memories (namespace)');
+    }
+
+    const sessionsNamespaceIsNew = !columnExists(sqlite, 'sessions', 'namespace');
+    addColumnIfMissing(sqlite, 'sessions', 'namespace', 'text');
+    if (sessionsNamespaceIsNew) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_namespace ON sessions (namespace)');
+    }
+
+    const assembliesNamespaceIsNew = !columnExists(sqlite, 'context_assemblies', 'namespace');
+    addColumnIfMissing(sqlite, 'context_assemblies', 'namespace', 'text');
+    if (assembliesNamespaceIsNew) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_assemblies_namespace ON context_assemblies (namespace)');
+    }
+
+    // v0.3.0: embedding_model column
+    addColumnIfMissing(sqlite, 'memories', 'embedding_model', 'text');
+
+    // v0.5.0: multi-device sync foundation (schema only — see .claude/PRPs/plans/postgres-cloud-sync.md)
+    addColumnIfMissing(sqlite, 'memories', 'device_id', 'text');
+
+    // Needed by the future sync push query: WHERE updated_at > cursor. `updated_at`
+    // itself has existed on `memories` since v0.1.0, so only the index is new
+    // here — there's no "column just added" event to hang the CREATE INDEX off
+    // of, so it's gated on the index's own existence instead, to keep this
+    // running once per database file rather than on every connection open.
+    if (!indexExists(sqlite, 'idx_memories_updated_at')) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_memories_updated_at ON memories (updated_at)');
+    }
+
+    const connectionsUpdatedAtIsNew = !columnExists(sqlite, 'memory_connections', 'updated_at');
+    addColumnIfMissing(sqlite, 'memory_connections', 'updated_at', 'text');
+    if (connectionsUpdatedAtIsNew) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_connections_updated_at ON memory_connections (updated_at)');
+    }
+
+    const connectionsDeletedAtIsNew = !columnExists(sqlite, 'memory_connections', 'deleted_at');
+    addColumnIfMissing(sqlite, 'memory_connections', 'deleted_at', 'text');
+    if (connectionsDeletedAtIsNew) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_connections_deleted_at ON memory_connections (deleted_at)');
+    }
+
+    addColumnIfMissing(sqlite, 'memory_connections', 'device_id', 'text');
+
+    addColumnIfMissing(sqlite, 'sessions', 'updated_at', 'text');
+
+    const sessionsDeletedAtIsNew = !columnExists(sqlite, 'sessions', 'deleted_at');
+    addColumnIfMissing(sqlite, 'sessions', 'deleted_at', 'text');
+    if (sessionsDeletedAtIsNew) {
+      sqlite.exec('CREATE INDEX IF NOT EXISTS idx_sessions_deleted_at ON sessions (deleted_at)');
+    }
+
+    addColumnIfMissing(sqlite, 'sessions', 'device_id', 'text');
+
+    // The sync push query selects only rows this device owns and pages on a
+    // composite boundary:
+    //
+    //   WHERE (device_id IS NULL OR device_id = ?)
+    //     AND (updated_at > ? OR (updated_at = ? AND id > ?))
+    //   ORDER BY updated_at, id LIMIT ?
+    //
+    // On `(updated_at)` alone SQLite can only seek by timestamp and then
+    // discard every peer-written row it lands on, so a device that has pulled
+    // a lot from its peers walks most of the table to fill one page. Leading
+    // with `device_id` lets the MULTI-INDEX OR seek straight into this
+    // device's own rows: measured at 19.3 ms -> 2.7 ms for one 500-row page of
+    // a 200k-row table that is 90% peer-written.
+    //
+    // `(updated_at, id)` WITHOUT the device_id prefix is actively worse than
+    // what we have — SQLite abandons the OR optimization for a full index scan
+    // (~1000x slower in the same measurement) — so this must stay a
+    // three-column index, not a two-column one.
+    //
+    // Gated on the index's own existence: `device_id` was added above and may
+    // already have existed, so there is no "column just added" event to hang
+    // this off, and it must not re-run on every connection open.
+    for (const [indexName, table] of [
+      ['idx_memories_sync_push', 'memories'],
+      ['idx_connections_sync_push', 'memory_connections'],
+      ['idx_sessions_sync_push', 'sessions'],
+    ] as const) {
+      if (!indexExists(sqlite, indexName)) {
+        sqlite.exec(
+          `CREATE INDEX IF NOT EXISTS ${indexName} ON ${table} (device_id, updated_at, id)`
+        );
+      }
+    }
+
+    // Repair legacy timestamps once, then re-push rows that an already-advanced
+    // shared cursor may have skipped. The marker and reset commit atomically.
+    const timestampBackfillKey = 'sync_null_updated_at_v1';
+    if (!sqlite.prepare('SELECT 1 FROM local_meta WHERE key = ?').get(timestampBackfillKey)) {
+      sqlite.exec(`
+        UPDATE memory_connections SET updated_at = created_at WHERE updated_at IS NULL;
+        UPDATE sessions SET updated_at = started_at WHERE updated_at IS NULL;
+        UPDATE sync_state SET last_push_at = NULL;
+      `);
+      sqlite.prepare('INSERT INTO local_meta (key, value) VALUES (?, ?)').run(timestampBackfillKey, '1');
+    }
+
+    runMemoryFtsMigration(sqlite);
+  }).immediate();
 }
 
 /** FTS5 is custom SQL (Drizzle cannot model virtual tables); mirror 0002_memory_fts.sql. */

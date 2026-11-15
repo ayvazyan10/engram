@@ -1,6 +1,6 @@
 /**
  * Applies the Postgres sync schema migrations (drizzle-kit generated SQL
- * under ./migrations, see drizzle.pg.config.ts) and then (re)creates the
+ * under ./migrations, see drizzle.pg.config.ts) and then recreates the
  * `server_updated_at` triggers that drizzle-kit itself can't express as
  * table/column/index DDL.
  *
@@ -68,10 +68,8 @@ export async function runPgSyncMigrations(
 
 /**
  * `CREATE OR REPLACE FUNCTION` plus one `DROP TRIGGER IF EXISTS` /
- * `CREATE TRIGGER` pair per synced table. All idempotent, and each
- * statement runs as its own `pool.query()` call so a failure names exactly
- * which one broke instead of rolling back an implicit multi-statement
- * transaction silently.
+ * `CREATE TRIGGER` pair per synced table. The pairs run in one transaction
+ * on one client so concurrent writes cannot miss the timestamp trigger.
  */
 async function createServerUpdatedAtTriggers(pool: Pool): Promise<void> {
   try {
@@ -90,22 +88,31 @@ async function createServerUpdatedAtTriggers(pool: Pool): Promise<void> {
     );
   }
 
-  for (const table of SYNCED_TABLES) {
-    const triggerName = `trg_${table}_server_updated_at`;
-    try {
-      // DROP + CREATE (rather than Postgres 14+'s CREATE OR REPLACE
-      // TRIGGER) keeps this working on any supported Postgres version.
-      await pool.query(`DROP TRIGGER IF EXISTS ${triggerName} ON ${table};`);
-      await pool.query(`
-        CREATE TRIGGER ${triggerName}
-          BEFORE UPDATE ON ${table}
-          FOR EACH ROW
-          EXECUTE FUNCTION engram_touch_server_updated_at();
-      `);
-    } catch (err) {
-      throw new Error(
-        `PostgreSQL sync migration failed creating trigger "${triggerName}" on "${table}": ${errorMessage(err)}`
-      );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const table of SYNCED_TABLES) {
+      const triggerName = `trg_${table}_server_updated_at`;
+      try {
+        // Transactional DROP + CREATE also supports PostgreSQL 12 and 13.
+        await client.query(`DROP TRIGGER IF EXISTS ${triggerName} ON ${table};`);
+        await client.query(`
+          CREATE TRIGGER ${triggerName}
+            BEFORE UPDATE ON ${table}
+            FOR EACH ROW
+            EXECUTE FUNCTION engram_touch_server_updated_at();
+        `);
+      } catch (err) {
+        throw new Error(
+          `PostgreSQL sync migration failed creating trigger "${triggerName}" on "${table}": ${errorMessage(err)}`
+        );
+      }
     }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
 }

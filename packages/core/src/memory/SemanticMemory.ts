@@ -61,7 +61,6 @@ export class SemanticMemory {
     if (input.importance !== undefined) assertValidImportance(input.importance);
 
     const db = getDb();
-    const now = new Date().toISOString();
     const deviceId = getDeviceId();
 
     const fullText = memoryEmbeddingText({ ...input, type: 'semantic' });
@@ -81,8 +80,6 @@ export class SemanticMemory {
       namespace: this.storeNamespace(input.namespace),
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
-      createdAt: now,
-      updatedAt: now,
       deviceId,
     };
 
@@ -94,8 +91,6 @@ export class SemanticMemory {
       strength: rel.strength ?? 1.0,
       bidirectional: rel.relationship === 'relates_to',
       metadata: '{}',
-      createdAt: now,
-      updatedAt: now,
       deviceId,
     }));
 
@@ -115,6 +110,13 @@ export class SemanticMemory {
     // leaving an orphaned, edge-less memory behind, and a retry then created a
     // duplicate. Embedding happens above because the callback must stay sync.
     this.indexSink?.beforeMemoryWrite?.();
+    const now = new Date().toISOString();
+    record.createdAt = now;
+    record.updatedAt = now;
+    for (const connection of connections) {
+      connection.createdAt = now;
+      connection.updatedAt = now;
+    }
     db.transaction((tx) => {
       tx.insert(schema.memories).values(record).run();
       if (connections.length > 0) {

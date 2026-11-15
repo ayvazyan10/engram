@@ -96,9 +96,10 @@ interface UpsertSpec {
   returning?: string[];
 }
 
-/** Last-write-wins: newer `updated_at`, ties broken by the greater `device_id`. */
+/** Last-write-wins: NULL timestamps lose, newer wins, then greater `device_id`. */
 function lastWriteWins(table: string): string {
-  return `(EXCLUDED.updated_at > ${table}.updated_at
+  return `(${table}.updated_at IS NULL
+           OR EXCLUDED.updated_at > ${table}.updated_at
            OR (EXCLUDED.updated_at = ${table}.updated_at
                AND EXCLUDED.device_id > ${table}.device_id))`;
 }
@@ -442,41 +443,6 @@ export class PgSyncClient {
 
     const result: QueryResult = await this.pool.query(text, values);
     return result.rowCount ?? 0;
-  }
-
-  // ─── one-time backfill (post-connect) ────────────────────────────────
-
-  /**
-   * Stamps `device_id` onto any `memories` / `memory_connections` /
-   * `sessions` rows that were written before per-row device attribution
-   * existed (pre-sync era). A row with `device_id IS NULL` is never "ours"
-   * to any device's pull filter (`isNull(...) OR ne(...)` in `pullMemories`
-   * et al. always includes it), so it gets re-pulled — and re-applied —
-   * every single sync cycle, which is the 100%-CPU bug this fixes.
-   *
-   * Called once per connection lifetime from `SyncEngine.ensureConnected()`
-   * right after migrations run, never from the per-cycle sync path.
-   * Idempotent: a no-op (no log, returns 0) once no NULL rows remain.
-   */
-  async backfillNullDeviceIds(deviceId: string): Promise<number> {
-    const memories = await this.pool.query(
-      'UPDATE memories SET device_id = $1 WHERE device_id IS NULL',
-      [deviceId]
-    );
-    const connections = await this.pool.query(
-      'UPDATE memory_connections SET device_id = $1 WHERE device_id IS NULL',
-      [deviceId]
-    );
-    const sessions = await this.pool.query(
-      'UPDATE sessions SET device_id = $1 WHERE device_id IS NULL',
-      [deviceId]
-    );
-
-    const total = (memories.rowCount ?? 0) + (connections.rowCount ?? 0) + (sessions.rowCount ?? 0);
-    if (total > 0) {
-      console.warn(`[engram] Backfilled device_id on ${total} orphan row(s) from pre-sync era`);
-    }
-    return total;
   }
 
   // ─── pull ─────────────────────────────────────────────────────────────
