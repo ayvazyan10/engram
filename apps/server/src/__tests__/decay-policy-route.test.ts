@@ -177,10 +177,10 @@ describe('decay and consolidation exclusivity', () => {
     const sweep = vi.spyOn(brain, 'runDecaySweep').mockImplementation(() =>
       new Promise(resolve => { release = () => resolve(result); }));
     try {
-      expect((await putPolicy({ decayIntervalMs: 100 })).statusCode).toBe(200);
-      await vi.advanceTimersByTimeAsync(100);
+      expect((await putPolicy({ decayIntervalMs: 1000 })).statusCode).toBe(200);
+      await vi.advanceTimersByTimeAsync(1000);
       expect(sweep).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(2000);
       expect(sweep).toHaveBeenCalledTimes(1);
       for (const url of ['/api/consolidate', '/api/decay']) {
         expect((await app.inject({ method: 'POST', url, payload: {} })).statusCode).toBe(409);
@@ -188,8 +188,8 @@ describe('decay and consolidation exclusivity', () => {
       release();
       await vi.advanceTimersByTimeAsync(0);
       sweep.mockResolvedValue(result);
-      await putPolicy({ decayIntervalMs: 250 });
-      await vi.advanceTimersByTimeAsync(249);
+      await putPolicy({ decayIntervalMs: 2500 });
+      await vi.advanceTimersByTimeAsync(2499);
       expect(sweep).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(sweep).toHaveBeenCalledTimes(2);

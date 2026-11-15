@@ -32,13 +32,13 @@ it('enables, changes and disables the decay timer without resetting consolidatio
   const consolidation = { enabled: true, minClusterSize: 8, similarityThreshold: 0.9, minEpisodicAgeMs: 1234 };
   const put = (payload: Record<string, unknown>) => app.inject({ method: 'PUT', url: '/api/decay/policy', payload });
   try {
-    expect((await put({ consolidation, decayIntervalMs: 100 })).statusCode).toBe(200);
-    await vi.advanceTimersByTimeAsync(100);
+    expect((await put({ consolidation, decayIntervalMs: 1000 })).statusCode).toBe(200);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(sweep).toHaveBeenCalledTimes(1);
-    const response = await put({ consolidation: { enabled: false }, decayIntervalMs: 250 });
+    const response = await put({ consolidation: { enabled: false }, decayIntervalMs: 2500 });
     expect(response.statusCode).toBe(200);
     expect(response.json().consolidation).toEqual({ ...consolidation, enabled: false });
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(2499);
     expect(sweep).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(sweep).toHaveBeenCalledTimes(2);

@@ -141,7 +141,7 @@ describe('recordBuild / currentBuildStatus', () => {
 });
 
 describe('configureMcpClient', () => {
-  const server = { command: 'node', args: ['/repo/packages/mcp/dist/server.js'] };
+  const server = { command: 'node', args: ['/repo/packages/mcp/dist/server.js'], env: {} };
 
   it('writes the file the named client actually loads', () => {
     const home = tempDir('home');
@@ -307,7 +307,7 @@ describe('setupClaudeCode', () => {
       // The API base placeholder has to be substituted, or the hook posts nowhere.
       expect(fs.readFileSync(script, 'utf8')).not.toContain('__API_BASE__');
       expect(fs.readFileSync(script, 'utf8')).toContain(script.endsWith('engram-session-start.sh')
-        ? config.repoPath : 'http://localhost:4901');
+        ? config.repoPath : 'http://127.0.0.1:4901');
     }
   });
 

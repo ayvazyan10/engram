@@ -369,24 +369,24 @@ printf '%s' '{"memories":[{"id":"a","content":"remember this","similarity":0.8}]
     }
   }
 
-  it.each([true, false])('scopes session-end only inside git: %s', (git) => {
+  it.each([true, false])('scopes session-end to the git root or current directory: git=%s', (git) => {
     if (git) expect(spawnSync('git', ['init', '-q', dir], { stdio: 'ignore', timeout: 3000 }).status).toBe(0);
     expect(run('engram-session-end.sh', dir).status).toBe(0);
     const args: string[] = JSON.parse(fs.readFileSync(calls, 'utf8'));
     const body = JSON.parse(args[args.indexOf('-d') + 1]);
-    expect(body.namespace).toBe(git ? fs.realpathSync(dir) : undefined);
+    expect(body.namespace).toBe(fs.realpathSync(dir));
     expect(args).toContain('--max-time');
   });
 
-  it.each([true, false])('recalls project and shared separately inside git: %s', (git) => {
+  it.each([true, false])('recalls project and shared separately inside or outside git: git=%s', (git) => {
     if (git) expect(spawnSync('git', ['init', '-q', dir], { stdio: 'ignore', timeout: 3000 }).status).toBe(0);
     const result = run('engram-recall.sh', dir);
     expect(result.status).toBe(0);
     const args: string[][] = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-    expect(args).toHaveLength(git ? 2 : 1);
+    expect(args).toHaveLength(2);
     const bodies = args.map((call) => JSON.parse(call[call.indexOf('-d') + 1]));
-    expect(bodies[0].namespace).toBe(git ? fs.realpathSync(dir) : undefined);
-    if (git) expect(bodies[1]).toMatchObject({ global: true });
+    expect(bodies[0].namespace).toBe(fs.realpathSync(dir));
+    expect(bodies[1]).toMatchObject({ global: true });
     expect(bodies.every((body) => !(body.global && body.namespace))).toBe(true);
     expect(String(result.stdout).match(/remember this/g)).toHaveLength(1);
   });

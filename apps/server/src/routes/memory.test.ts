@@ -130,27 +130,28 @@ it('GET /api/stats passes through namespace counts and the database path', async
   });
 });
 
-it('PATCH delegates to core and returns the updated memory for a prefix', async () => {
+it('PATCH delegates an exact id to core and returns the updated memory without its embedding', async () => {
   const memory = await brain.episodic.store({ content: 'Old fact' });
   const update = vi.spyOn(brain, 'updateMemory');
   const payload = { content: 'Corrected fact', importance: 0.8, tags: ['fixed'], concept: 'Fact' };
   try {
-    const response = await app.inject({ method: 'PATCH', url: `/api/memory/${memory.id.slice(0, 8)}`, payload });
+    const response = await app.inject({ method: 'PATCH', url: `/api/memory/${memory.id}`, payload });
     expect(response.statusCode).toBe(200);
-    expect(update).toHaveBeenCalledWith(memory.id.slice(0, 8), payload);
+    expect(update).toHaveBeenCalledWith(memory.id, payload);
     expect(response.json()).toMatchObject({ ...payload, id: memory.id, tags: '["fixed"]' });
+    expect(response.json()).not.toHaveProperty('embedding');
   } finally {
     update.mockRestore();
   }
 });
 
-it('PATCH returns the same 404 body for ambiguous, missing, short, and archived ids', async () => {
+it('PATCH returns the same 404 body for unique prefixes, ambiguous, missing, short, and archived ids', async () => {
   const memory = await brain.episodic.store({ content: 'Prefix collision' });
   for (const id of ['12345678-1111-4111-8111-111111111111', '12345678-2222-4222-8222-222222222222']) {
     getDb().insert(schema.memories).values({ ...memory, id }).run();
   }
   await brain.forget(memory.id);
-  for (const id of ['12345678', '1234567', 'missing-id', memory.id, memory.id.slice(0, 8)]) {
+  for (const id of ['12345678-1111', '12345678', '1234567', 'missing-id', memory.id, memory.id.slice(0, 8)]) {
     const response = await app.inject({ method: 'PATCH', url: `/api/memory/${id}`, payload: { content: 'Changed' } });
     expect(response.statusCode).toBe(404);
     expect(response.json()).toEqual({ error: 'Memory not found' });
@@ -159,7 +160,7 @@ it('PATCH returns the same 404 body for ambiguous, missing, short, and archived 
 
 it('PATCH preserves validation failures', async () => {
   const memory = await brain.episodic.store({ content: 'Validation' });
-  for (const payload of [{ importance: 2 }, { content: '' }]) {
+  for (const payload of [{}, { importance: 2 }, { content: '' }]) {
     const response = await app.inject({ method: 'PATCH', url: `/api/memory/${memory.id}`, payload });
     expect(response.statusCode).toBe(400);
   }

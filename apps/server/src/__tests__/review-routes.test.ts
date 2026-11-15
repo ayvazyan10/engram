@@ -112,11 +112,21 @@ describe('Review API', () => {
     Object.assign(configured, { activeNamespace: 'alpha', namespaceMode: 'isolated' });
     try {
       expect((await get('/api/review/summary')).json()).toMatchObject({ contradictions: 1, duplicates: 1, fading: 2, secrets: 2 });
-      for (const query of ['namespace=beta', 'global=true', 'namespace=alpha&global=true']) {
-        expect((await get(`/api/review/summary?${query}`)).json()).toMatchObject({ contradictions: 0, duplicates: 0, fading: 0, secrets: 0 });
+      expect((await get('/api/review/summary?namespace=beta')).json())
+        .toMatchObject({ contradictions: 0, duplicates: 0, fading: 0, secrets: 0 });
+      for (const query of ['global=true', 'namespace=alpha&global=true']) {
+        const response = await get(`/api/review/summary?${query}`);
+        expect(response.statusCode).toBe(400);
+        expect(response.json().error).toBe('global access is not allowed in isolated mode');
       }
       expect((await post('/api/review/dismiss', { queue: 'secrets', ids: ['b1'] })).statusCode).toBe(404);
       expect((await post('/api/memory/b1/redact', {})).statusCode).toBe(404);
+      Object.assign(configured, { namespaceMode: 'filter' });
+      const globals = (await get('/api/review/summary?global=true')).json();
+      expect(globals).toMatchObject({ contradictions: 1, duplicates: 1, fading: 2, secrets: 2 });
+      for (const queue of ['contradictions', 'duplicates', 'fading', 'secrets']) {
+        expect((await get(`/api/review/${queue}?global=true`)).json().total).toBe(globals[queue]);
+      }
     } finally { Object.assign(configured, original); }
   });
 
@@ -261,6 +271,7 @@ describe('bulk contradiction resolution', () => {
   it('returns ordered partial failures, continues, and sanitizes internal errors', async () => {
     memory('a'); memory('b'); memory('archived', { archivedAt: now });
     edge('ab', 'a', 'b', { relationship: 'contradicts' });
+    edge('archived-edge', 'a', 'archived', { relationship: 'contradicts' });
     vi.spyOn(brain, 'resolveContradiction').mockRejectedValueOnce(new Error('private database details'));
     const response = await post(url, { items: [
       { sourceId: 'a', targetId: 'b', strategy: 'keep_both' },
@@ -272,7 +283,7 @@ describe('bulk contradiction resolution', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ results: [
       { ok: false, error: 'Failed to resolve contradiction' },
-      { ok: false, error: 'Memory not found' },
+      { ok: false, error: 'Failed to resolve contradiction' },
       { ok: false, error: 'Contradiction not resolved' },
       { ok: false, error: 'Contradiction not resolved' },
       { ok: true },
@@ -321,8 +332,13 @@ describe('bulk contradiction resolution', () => {
     expect(await brain.getContradictions()).toHaveLength(1);
     const response = await post(url, { items: Array.from({ length: 500 }, () => item) });
     expect(response.statusCode).toBe(200);
-    expect(response.json().summary).toEqual({ total: 500, resolved: 500, failed: 0 });
+    // The first item tombstones the edge; repeated resolutions no longer have a live pair.
+    expect(response.json().summary).toEqual({ total: 500, resolved: 1, failed: 499 });
     expect(response.json().results).toHaveLength(500);
+    expect(response.json().results[0]).toEqual({ ok: true });
+    expect(response.json().results.slice(1)).toEqual(Array.from({ length: 499 }, () => ({
+      ok: false, error: 'Failed to resolve contradiction',
+    })));
   });
 
   it('uses the existing API authentication and bounded bulk write rate tier', async () => {

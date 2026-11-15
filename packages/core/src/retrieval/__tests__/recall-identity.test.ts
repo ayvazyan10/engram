@@ -50,10 +50,10 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-// Snapshots captured from fd8bf0d04f13ad2d237cb21465b1afb7ecb35dc1 before the split.
+// Recall snapshots predate the shared plan; streaming now uses the same selection and writes.
 // Freeze Date so even latency, recency scores and persisted timestamps compare exactly.
 it.each<RecallOptions>([{}, { maxTokens: 20 }, { types: ['procedural'], sources: ['fixture'] }, { threshold: 1.1 }])(
-  'preserves pre-B2 recall/stream bytes and writes for %j', async (options) => {
+  'preserves recall bytes and shares stream selection and writes for %j', async (options) => {
     const db = getDb();
     const recall = await brain.recall('deployment', options);
     const recallWrites = {
@@ -68,22 +68,22 @@ it.each<RecallOptions>([{}, { maxTokens: 20 }, { types: ['procedural'], sources:
       memories: db.select().from(schema.memories).all(),
       audits: db.select().from(schema.contextAssemblies).all().map(({ id: _id, ...row }) => row),
     };
-    // REST sends recall directly; SSE serializes these same chunks verbatim.
+    // REST sends recall directly; the stream's complete frame has the same result.
     expect(JSON.stringify(recall)).toMatchSnapshot('recall JSON');
     // The recall_context MCP tool's existing text payload projection.
     expect(JSON.stringify({
       context: recall.context, memoriesUsed: recall.memories.length, latencyMs: recall.latencyMs,
       memories: recall.memories.map((m) => ({ id: m.id, type: m.type, score: m.score.toFixed(3), source: m.source })),
     })).toMatchSnapshot('MCP recall_context text');
-    expect(chunks.map((chunk) => `event: ${chunk.phase}\ndata: ${JSON.stringify(chunk)}\n\n`).join(''))
-      .toMatchSnapshot('SSE bytes');
+    expect(chunks.at(-1)).toEqual({ phase: 'complete', ...recall });
+    expect(chunks.flatMap((chunk) => chunk.phase === 'complete' ? [] : [chunk.memory]))
+      .toEqual(recall.memories);
+    expect(streamWrites).toEqual(recallWrites);
     // Embeddings are unchanged fixture data, so avoid a large binary snapshot.
-    for (const writes of [recallWrites, streamWrites]) {
-      expect(JSON.stringify({
-        memories: writes.memories.map(({ embedding: _embedding, ...row }) => row),
-        audits: writes.audits.map(({ queryEmbedding: _embedding, ...row }) => row),
-      })).toMatchSnapshot('writes');
-    }
+    expect(JSON.stringify({
+      memories: recallWrites.memories.map(({ embedding: _embedding, ...row }) => row),
+      audits: recallWrites.audits.map(({ queryEmbedding: _embedding, ...row }) => row),
+    })).toMatchSnapshot('writes');
   },
 );
 

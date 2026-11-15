@@ -449,11 +449,14 @@ describe('memory payload regressions', () => {
     expect(record.concept).toBe('kept');
   });
 
-  it('omits only embedding from list rows', async () => {
+  it('omits embedding from both detail and list rows', async () => {
     const id = await storeMemory('List projection', { source: 'projection-test' });
     const detail = (await app.inject({ method: 'GET', url: `/api/memory/${id}` })).json();
-    const { embedding, ...expected } = detail;
-    expect(embedding).toBeDefined();
+    expect(detail).not.toHaveProperty('embedding');
+    const stored = getDb().select().from(schema.memories).where(eq(schema.memories.id, id)).get()!;
+    const { embedding, ...expected } = stored;
+    expect(embedding).not.toBeNull();
+    expect(detail).toEqual(expected);
     const list = await app.inject({ method: 'GET', url: '/api/memory?source=projection-test' });
     expect(list.json()).toEqual({ count: 1, memories: [expected] });
   });

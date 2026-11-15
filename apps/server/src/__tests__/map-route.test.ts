@@ -168,7 +168,9 @@ describe('Atlas map routes', () => {
     const scoped = await ready();
     expect(scoped.nodes).toHaveLength(10);
     expect((await ready('?namespace=beta')).nodes).toEqual([]);
-    expect((await ready('?global=true')).nodes).toEqual([]);
+    const globals = await request('/api/map?global=true');
+    expect(globals.statusCode).toBe(400);
+    expect(globals.json()).toEqual({ error: 'global access is not allowed in isolated mode' });
     expect(scoped.regions.reduce((sum, r) => sum + r.count, 0)).toBe(10);
   });
 
