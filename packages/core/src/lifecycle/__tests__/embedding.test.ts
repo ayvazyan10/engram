@@ -444,7 +444,6 @@ describe('Embedding — re-embed persists the index', () => {
     await brain.store({ content: 'Memory stored before the path breaks' });
 
     const db = getDb();
-    await db.update(schema.memories).set({ embeddingModel: 'old-model/v1' });
 
     // Point persistence at a path that cannot be created: an existing *file*
     // stands where the directory would have to be.
@@ -457,6 +456,8 @@ describe('Embedding — re-embed persists the index', () => {
     });
     await broken.initialize();
 
+    // Mark stale after startup so model auto-detection keeps the real model.
+    await db.update(schema.memories).set({ embeddingModel: 'old-model/v1' });
     const result = await broken.reEmbed(true, 10);
 
     expect(result.processed).toBe(1);

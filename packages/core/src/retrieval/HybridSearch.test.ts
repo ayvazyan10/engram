@@ -137,9 +137,9 @@ describe.each(['search', 'recall', 'stream', 'explain'])('%s hybrid retrieval', 
   });
 
   it('keeps own+global scope and only crosses projects when requested', async () => {
-    insert('own', 0, { content: 'keyword' });
-    insert('global', 0, { content: 'keyword', namespace: null });
-    insert('foreign', 0, { content: 'keyword', namespace: 'project-b' });
+    insert('own', 0, { content: 'keyword own' });
+    insert('global', 0, { content: 'keyword global', namespace: null });
+    insert('foreign', 0, { content: 'keyword foreign', namespace: 'project-b' });
     expect((await retrieve(mode, 'keyword')).sort()).toEqual(['global', 'own']);
     expect((await retrieve(mode, 'keyword', { crossNamespace: true })).sort()).toEqual(['foreign', 'global', 'own']);
   });

@@ -102,14 +102,16 @@ describe.each(['search', 'recall', 'stream', 'explain'])('%s filters', (mode) =>
 describe.each(['recall', 'stream', 'explain'])('%s graph filters', (mode) => {
   it('filters graph neighbors that were not vector candidates', async () => {
     insert('seed', 1, { eventAt: SINCE, tags: '["keep"]' });
-    insert('neighbor-tags', 0, { eventAt: SINCE });
-    insert('neighbor-date', 0, { tags: '["keep"]' });
-    insert('neighbor-keep', 0, { eventAt: SINCE, tags: '["keep"]' });
+    insert('neighbor-tags', 0.9, { eventAt: SINCE });
+    insert('neighbor-date', 0.9, { tags: '["keep"]' });
+    insert('neighbor-keep', 0.9, { eventAt: SINCE, tags: '["keep"]' });
     for (const targetId of ['neighbor-tags', 'neighbor-date', 'neighbor-keep']) {
       getDb().insert(schema.memoryConnections).values({
         id: targetId, sourceId: 'seed', targetId, relationship: 'related_to', strength: 1,
       }).run();
     }
+    // Reach similar neighbors through the graph so their filters are exercised.
+    vi.spyOn(brain.getVectorSearch(), 'search').mockReturnValueOnce([{ id: 'seed', type: 'semantic', similarity: 1 }]);
     expect((await retrieve(mode, { since: SINCE, until: UNTIL, tags: ['keep'] })).sort())
       .toEqual(['neighbor-keep', 'seed']);
   });

@@ -96,6 +96,8 @@ describe('NeuralBrain — vectors from another embedding model', () => {
   let brain: NeuralBrain;
 
   beforeEach(() => {
+    // Keep the chosen model stable while exercising incompatible vectors.
+    vi.stubEnv('ENGRAM_EMBEDDING_MODEL', getEmbeddingModelId());
     dbPath = createTestDb();
   });
 
@@ -107,6 +109,7 @@ describe('NeuralBrain — vectors from another embedding model', () => {
     }
     closeDb();
     cleanupTestDb(dbPath);
+    vi.unstubAllEnvs();
   });
 
   it('initialize() skips the incompatible vector instead of throwing', async () => {

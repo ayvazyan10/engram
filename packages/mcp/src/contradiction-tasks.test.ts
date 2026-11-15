@@ -60,8 +60,8 @@ it('returns complete pending pairs, including legacy and shared, filtering befor
   const tasks = JSON.parse(result.text).tasks;
   expect(tasks).toHaveLength(2);
   expect(tasks).toEqual(expect.arrayContaining([
-    expect.objectContaining({ source: { id: own.sourceId, content: 'New fact', createdAt: '2026-10-02', source: 'client' },
-      target: { id: own.targetId, content: 'Old fact', createdAt: '2026-10-01', source: 'notes' },
+    expect.objectContaining({ source: { id: own.sourceId, content: 'New fact', truncated: false, createdAt: '2026-10-02', source: 'client' },
+      target: { id: own.targetId, content: 'Old fact', truncated: false, createdAt: '2026-10-01', source: 'notes' },
       confidence: 0.8, signals: ['negation'], suggestedStrategy: 'keep_both' }),
     expect.objectContaining({ source: expect.objectContaining({ id: shared.sourceId }) }),
   ]));

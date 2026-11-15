@@ -96,17 +96,17 @@ it('explains ranks, section positions, exact offsets and budget omissions withou
   expect(db.select().from(schema.memories).all()).toEqual(before);
   expect(db.select().from(schema.contextAssemblies).all()).toEqual(audits);
   expect(db.get(sql`SELECT total_changes() AS n`)).toEqual(changes);
-  expect(explanation.candidates).toBe(5);
-  expect(explanation.items.map((item) => item.rank)).toEqual([1, 2, 3, 4, 5]);
+  expect(explanation.candidates).toBe(4);
+  expect(explanation.items.map((item) => item.rank)).toEqual([1, 2, 3, 4]);
   expect(explanation.items.find((item) => item.id === 'large-0002')).toMatchObject({
     included: false, reason: 'over_budget', position: null, offset: null,
   });
-  expect(explanation.items.find((item) => item.id === 'graph-0005')).toMatchObject({ via: 'graph', similarity: 0.1 });
+  expect(explanation.items.find((item) => item.id === 'graph-0005')).toBeUndefined();
   expect(explanation.items.find((item) => item.id === 'known-0004')).toMatchObject({ chars: 0, tokens: 0, included: true });
   const included = explanation.items.filter((item) => item.included);
   const ordered = [...included].sort((a, b) => a.position! - b.position!);
-  expect(ordered.map((item) => item.id)).toEqual(['known-0004', 'graph-0005', 'skill-0003', 'event-0001']);
-  expect(ordered.map((item) => item.position)).toEqual([1, 2, 3, 4]);
+  expect(ordered.map((item) => item.id)).toEqual(['known-0004', 'skill-0003', 'event-0001']);
+  expect(ordered.map((item) => item.position)).toEqual([1, 2, 3]);
   for (const item of ordered) {
     expect(explanation.context.slice(item.offset!)).toMatch(new RegExp(`^• \\[${item.id.slice(0, 8)}`));
     expect(item.tokens).toBe(Math.ceil(item.chars / 4));
@@ -129,7 +129,7 @@ it('does not call recall hooks; normal recall still does', async () => {
   await brain.explainRecall('deployment');
   expect(hook).not.toHaveBeenCalled();
   await brain.recall('deployment');
-  expect(hook).toHaveBeenCalledWith('onRecall', expect.objectContaining({ query: 'deployment', memoriesUsed: 5 }));
+  expect(hook).toHaveBeenCalledWith('onRecall', expect.objectContaining({ query: 'deployment', memoriesUsed: 4 }));
   hook.mockRestore();
 });
 
