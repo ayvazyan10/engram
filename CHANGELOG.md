@@ -9,6 +9,25 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.12.2] — 2026-11-15
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.2, and the Claude Desktop extension bundle 0.12.2. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.9.0 and `@engram-ai-memory/web` 0.7.0.
+
+A bug-fix release from a full review of 0.12.1.
+
+### Fixed
+
+- **Embedding model switches made by another process.** A long-running MCP server now notices when the store has been re-embedded with another model and follows it, instead of writing memories that no other process can search. `re_embed` and `embedding_status` cover every live memory, not only the active project. Unknown models take their dimension from a probe embedding.
+- **Recall consistency.** The streaming recall selects and budgets exactly like `recall_context`. A `filter` client with no namespace reads global memories only, on every path. The `sources` filter no longer lets memories without a source through. `update_memory` refreshes the auto-derived concept and drops a stale summary when the content changes.
+- **Sync.** Legacy connections and sessions with no `updated_at` no longer stall the push queue, and a second device can no longer claim the first device's legacy rows. The first sync after upgrading re-sends everything once. SQLite migrations and device-id re-minting are atomic across processes.
+- **Server.** Socket.IO handshakes are checked against the Host allowlist (DNS rebinding over long-polling). Resolving a contradiction requires a live contradiction between two different memories. The secret scanner can no longer freeze the server on long identifiers. Embeddings are no longer sent in API responses or realtime events. Non-GET API requests from disallowed origins are refused. `decayIntervalMs` must be 0 or at least one second.
+- **Hooks and CLI.** The hooks no longer need GNU `timeout` (stock macOS), follow the configured namespace mode, and use the same namespace as the MCP server outside git. Git worktrees share their main repository's namespace; a server started in `/` or the home directory (Claude Desktop, global editor configs) uses global memories only. `engram setup`/`update` keep user-added MCP env such as `ENGRAM_ADMIN_TOOLS`, edit the Codex TOML in place, and no longer rewrite `~/.claude.json` (or leave a backup) when nothing changed. Session summaries keep the most recent 1500 characters.
+- **Dashboard.** The map's Recent list no longer loops on "load more" after a memory stored over MCP. Archived memories stay gone from the Timeline. A redacted memory no longer shows its old text. Undo works for every pending action, not only the last one.
+
+### Added
+
+- Claude Desktop extension: an **Admin tools** setting that shows the 11 admin tools.
+
 ## [0.12.1] — 2026-11-15
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.1 (core republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.12.1. Private workspace versions unchanged: `@engram-ai-memory/desktop-extension` 0.2.0, `@engram-ai-memory/server` 0.9.0 and `@engram-ai-memory/web` 0.7.0.
