@@ -20,8 +20,6 @@ export const CLAUDE_HOOKS: ReadonlyArray<{ event: string; file: string; timeout:
   { event: 'SessionEnd', file: 'engram-session-end.sh', timeout: 15 },
 ];
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- reading/merging free-form user JSON config */
-
 /** A config file that exists but could not be parsed. Never write over one. */
 export class ConfigParseError extends Error {
   constructor(readonly file: string, readonly reason: string) {
@@ -46,7 +44,7 @@ export class ConfigParseError extends Error {
  * Claude Code rewrites it constantly, so a single torn read was enough to log
  * the user out and untrust every project, with no backup written anywhere.
  */
-export function readJson(file: string): Record<string, any> {
+export function readJson(file: string): Record<string, unknown> {
   let raw: string;
   try {
     raw = fs.readFileSync(file, 'utf8');
@@ -71,7 +69,16 @@ export function readJson(file: string): Record<string, any> {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new ConfigParseError(file, 'top-level value is not a JSON object');
   }
-  return parsed as Record<string, any>;
+  return parsed as Record<string, unknown>;
+}
+
+/** Validate nested config objects before merging, preserving unrelated keys. */
+export function configObject(value: unknown, field: string): Record<string, unknown> {
+  if (value === undefined) return {};
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${field} must be a JSON object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 /**
@@ -80,8 +87,11 @@ export function readJson(file: string): Record<string, any> {
  * Never use this before a write: answering {} for an unreadable file is
  * exactly the behaviour that destroyed configs.
  */
-export function readJsonOrEmpty(file: string): Record<string, any> {
-  try { return readJson(file); } catch { return {}; }
+export function readJsonOrEmpty(file: string): Record<string, unknown> {
+  try { return readJson(file); } catch (err) {
+    console.error(`Could not inspect ${file}: ${err instanceof Error ? err.message : String(err)}`);
+    return {};
+  }
 }
 
 /**
@@ -97,16 +107,21 @@ export function backupPathFor(file: string, now: Date, taken: (candidate: string
 }
 
 /**
- * Write a JSON config the way a file holding somebody's login deserves:
+ * Write config text the way a file holding somebody's login deserves:
  * a timestamped backup of what was there first, then a temp file + rename so
  * a crash or a full disk mid-write cannot leave a truncated config behind.
  *
  * The temp file is a sibling on purpose — rename is only atomic within one
  * filesystem, and the system temp dir is routinely a different one.
  *
- * Returns the backup path, or null when the file did not exist yet.
+ * Returns the backup path, or null when the file is new or unchanged.
  */
-export function writeJsonConfig(file: string, data: Record<string, any>, now: Date = new Date()): string | null {
+export function writeConfigFile(file: string, contents: string, now: Date = new Date()): string | null {
+  try {
+    if (fs.readFileSync(file, 'utf8') === contents) return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
 
   let backup: string | null = null;
@@ -123,7 +138,7 @@ export function writeJsonConfig(file: string, data: Record<string, any>, now: Da
   try {
     const fd = fs.openSync(temp, 'wx', mode);
     try {
-      fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n');
+      fs.writeFileSync(fd, contents);
       // Rename is only as durable as the bytes behind it.
       fs.fsyncSync(fd);
     } finally {
@@ -132,11 +147,17 @@ export function writeJsonConfig(file: string, data: Record<string, any>, now: Da
     fs.chmodSync(temp, mode);
     fs.renameSync(temp, file);
   } catch (err) {
-    try { fs.unlinkSync(temp); } catch { /* never created — nothing to clean */ }
+    try { fs.unlinkSync(temp); } catch (cleanupError) {
+      if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') console.error(cleanupError);
+    }
     throw err;
   }
 
   return backup;
+}
+
+export function writeJsonConfig(file: string, data: Record<string, unknown>, now: Date = new Date()): string | null {
+  return writeConfigFile(file, JSON.stringify(data, null, 2) + '\n', now);
 }
 
 /**
@@ -146,22 +167,31 @@ export function writeJsonConfig(file: string, data: Record<string, any>, now: Da
  */
 export function updateJsonConfig(
   file: string,
-  update: (current: Record<string, any>) => Record<string, any>,
+  update: (current: Record<string, unknown>) => Record<string, unknown>,
 ): string | null {
   return writeJsonConfig(file, update(readJson(file)));
 }
 
-/** Substitute the API-base placeholder in a hook template. */
-export function renderHook(templateBody: string, apiBase: string, repoPath = '', dbPath = ''): string {
-  return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__/g, (placeholder) => {
+/** Render hook paths, API base and the same environment as its MCP entry. */
+export function renderHook(
+  templateBody: string, apiBase: string, repoPath = '', dbPath = '',
+  mcpEnv: Readonly<Record<string, string>> = { ENGRAM_DB_PATH: dbPath, ENGRAM_SOURCE: 'claude-code' },
+): string {
+  return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__|__MCP_ENV__/g, (placeholder) => {
     if (placeholder === '__API_BASE__') return apiBase;
+    if (placeholder === '__MCP_ENV__') {
+      return Object.entries(mcpEnv).map(([key, value]) => quoteHookCommand(`${key}=${value}`)).join(' ');
+    }
     return quoteHookCommand(placeholder === '__REPO_PATH__' ? repoPath : dbPath);
   });
 }
 
 /** Copy a hook template into hooksDir with the API base baked in; returns dest path. */
-export function installHookScript(templateDir: string, hooksDir: string, file: string, apiBase: string, repoPath = '', dbPath = ''): string {
-  const body = renderHook(fs.readFileSync(path.join(templateDir, file), 'utf8'), apiBase, repoPath, dbPath);
+export function installHookScript(
+  templateDir: string, hooksDir: string, file: string, apiBase: string, repoPath = '', dbPath = '',
+  mcpEnv?: Readonly<Record<string, string>>,
+): string {
+  const body = renderHook(fs.readFileSync(path.join(templateDir, file), 'utf8'), apiBase, repoPath, dbPath, mcpEnv);
   fs.mkdirSync(hooksDir, { recursive: true });
   const dest = path.join(hooksDir, file);
   fs.writeFileSync(dest, body);
@@ -194,8 +224,15 @@ function unquoteHookCommand(command: string): string {
 export function registerHook(
   settings: Record<string, unknown>, event: string, command: string, timeout: number,
 ): Record<string, unknown> {
-  const hooks = (settings.hooks ?? {}) as Record<string, Array<{ hooks?: Array<Record<string, unknown>> }>>;
-  const entries = hooks[event] ?? [];
+  const hooks = configObject(settings.hooks, 'hooks');
+  const rawEntries = hooks[event] ?? [];
+  if (!Array.isArray(rawEntries)) throw new Error(`hooks.${event} must be an array`);
+  const entries = rawEntries.map((entry: unknown) => {
+    const group = configObject(entry, `hooks.${event} entry`);
+    const handlers = group.hooks ?? [];
+    if (!Array.isArray(handlers)) throw new Error(`hooks.${event} entry.hooks must be an array`);
+    return { ...group, hooks: handlers.map((hook: unknown) => configObject(hook, `hooks.${event} handler`)) };
+  });
   const matches = (hook: Record<string, unknown>): boolean =>
     typeof hook.command === 'string' && path.basename(unquoteHookCommand(hook.command)) === path.basename(command);
   const replacement = { type: 'command', command: quoteHookCommand(command), timeout };
@@ -207,16 +244,24 @@ export function registerHook(
   return { ...settings, hooks: { ...hooks, [event]: next } };
 }
 
-/** Detect installed hooks, including quoted commands and legacy locations. */
-export function hasClaudeHooks(settingsFile: string): boolean {
-  const hooks: unknown = readJsonOrEmpty(settingsFile).hooks;
-  if (!hooks || typeof hooks !== 'object') return false;
-  return Object.values(hooks).some((entries: unknown) => Array.isArray(entries) && entries.some((entry: unknown) => {
-    if (!entry || typeof entry !== 'object' || !('hooks' in entry) || !Array.isArray(entry.hooks)) return false;
-    return entry.hooks.some((hook: unknown) => hook && typeof hook === 'object' && 'command' in hook
-      && typeof hook.command === 'string'
-      && CLAUDE_HOOKS.some((h) => h.file === path.basename(unquoteHookCommand(hook.command as string))));
-  }));
+/** Validate an event's handlers and resolve the paths we quote at install. */
+export function claudeHookCommands(settings: Record<string, unknown>, event: string): string[] {
+  const entries = configObject(settings.hooks, 'hooks')[event] ?? [];
+  if (!Array.isArray(entries)) throw new Error(`hooks.${event} must be an array`);
+  return entries.flatMap((entry: unknown) => {
+    const handlers = configObject(entry, `hooks.${event} entry`).hooks ?? [];
+    if (!Array.isArray(handlers)) throw new Error(`hooks.${event} entry.hooks must be an array`);
+    return handlers.flatMap((handler: unknown) => {
+      const { command } = configObject(handler, `hooks.${event} handler`);
+      if (command === undefined) return [];
+      if (typeof command !== 'string') throw new Error(`hooks.${event} command must be a string`);
+      return [unquoteHookCommand(command)];
+    });
+  });
 }
 
-/* eslint-enable @typescript-eslint/no-explicit-any */
+/** Detect installed hooks, including quoted commands and legacy locations. */
+export function hasClaudeHooks(settingsFile: string): boolean {
+  const settings = readJson(settingsFile);
+  return CLAUDE_HOOKS.some((h) => claudeHookCommands(settings, h.event).some((command) => path.basename(command) === h.file));
+}

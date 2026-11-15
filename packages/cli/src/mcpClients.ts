@@ -7,6 +7,8 @@
  *   Claude Code   ~/.claude.json          (user scope; `.mcp.json` is PROJECT scope)
  *   Cursor        ~/.cursor/mcp.json
  *   Windsurf      ~/.codeium/windsurf/mcp_config.json
+ *   Codex         ~/.codex/config.toml
+ *   OpenCode      ~/.config/opencode/opencode.json
  *
  * So `engram setup --source cursor --no-claude-hooks` printed "MCP configured"
  * and "Engram installed successfully!" having registered Engram with nothing.
@@ -18,6 +20,7 @@
  */
 
 import path from 'path';
+import type { EngramConfig } from './engramConfig.ts';
 
 /** The file setup used to write. Kept only so `doctor` can call it out. */
 export const LEGACY_GLOBAL_MCP_FILE = '.mcp.json';
@@ -30,7 +33,8 @@ export type McpClientTarget =
     /** Absolute path of the config file this client loads. */
     path: string;
     /** Top-level key the server entry goes under. */
-    key: 'mcpServers';
+    key: 'mcpServers' | 'mcp';
+    format: 'json' | 'toml' | 'opencode';
     /** What to tell the user after writing it. */
     activation: string;
   }
@@ -42,6 +46,7 @@ interface KnownClient {
   readonly aliases: readonly string[];
   readonly relativePath: readonly string[];
   readonly activation: string;
+  readonly format?: 'toml' | 'opencode';
 }
 
 const KNOWN_CLIENTS: readonly KnownClient[] = [
@@ -66,6 +71,22 @@ const KNOWN_CLIENTS: readonly KnownClient[] = [
     relativePath: ['.codeium', 'windsurf', 'mcp_config.json'],
     activation: 'Restart Windsurf to activate.',
   },
+  {
+    id: 'codex',
+    label: 'Codex CLI',
+    aliases: ['codex', 'codex-cli'],
+    relativePath: ['.codex', 'config.toml'],
+    activation: 'Restart Codex CLI to activate.',
+    format: 'toml',
+  },
+  {
+    id: 'opencode',
+    label: 'OpenCode',
+    aliases: ['opencode', 'open-code'],
+    relativePath: ['.config', 'opencode', 'opencode.json'],
+    activation: 'Restart OpenCode to activate.',
+    format: 'opencode',
+  },
 ];
 
 export const KNOWN_CLIENT_IDS: readonly string[] = KNOWN_CLIENTS.map((c) => c.id);
@@ -89,9 +110,52 @@ export function resolveMcpClient(source: string, home: string): McpClientTarget 
     id: client.id,
     label: client.label,
     path: path.join(home, ...client.relativePath),
-    key: 'mcpServers',
+    key: client.format === 'opencode' ? 'mcp' : 'mcpServers',
+    format: client.format ?? 'json',
     activation: client.activation,
   };
+}
+
+export interface McpServerConfig extends Record<string, unknown> {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+/** One environment for setup, update and the installed SessionStart hook. */
+export function mcpServerConfig(config: EngramConfig, source: string, useNpx = false): McpServerConfig {
+  const env: Record<string, string> = {
+    ENGRAM_DB_PATH: config.dbPath,
+    ENGRAM_SOURCE: resolveMcpClient(source, '').id,
+    ENGRAM_NAMESPACE_MODE: config.namespaceMode,
+    ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
+  };
+  return useNpx
+    ? { command: 'npx', args: ['-y', '@engram-ai-memory/mcp@latest'], env }
+    : { command: 'node', args: [path.resolve(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')], env };
+}
+
+export const CODEX_ENGRAM_TABLE = /^[ \t]*\[\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*\.\s*(?:engram|"engram"|'engram')\s*(?:\.|\])/m;
+
+/** Replace only Engram tables, including separated child tables. */
+export function upsertCodexMcp(contents: string, server: McpServerConfig): string {
+  const newline = contents.includes('\r\n') ? '\r\n' : '\n';
+  const env = Object.entries(server.env).map(([key, value]) => `${JSON.stringify(key)} = ${JSON.stringify(value)}`);
+  const table = [
+    '[mcp_servers.engram]',
+    `command = ${JSON.stringify(server.command)}`,
+    `args = [${server.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
+    `env = { ${env.join(', ')} }`, '',
+  ].join(newline);
+  let replaced = false;
+  const next = contents.split(/(?=^[ \t]*\[)/m).map((section) => {
+    if (!CODEX_ENGRAM_TABLE.test(section)) return section;
+    const replacement = replaced ? '' : table + newline;
+    replaced = true;
+    return replacement;
+  }).join('');
+  return replaced ? next : next + (next.endsWith(newline + newline) || !next ? ''
+    : next.endsWith(newline) ? newline : newline + newline) + table + newline;
 }
 
 /** The block a user pastes into their own client's config. */

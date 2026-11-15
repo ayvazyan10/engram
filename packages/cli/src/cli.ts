@@ -15,7 +15,7 @@ import fs from 'fs';
 import os from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid } from './serverControl.js';
-import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, readJsonOrEmpty } from './claudeSetup.js';
+import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, configObject, readJson, claudeHookCommands } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
 import {
@@ -25,10 +25,11 @@ import {
 import { stopProcess, describeStopOutcome } from './stopServer.js';
 import {
   resolveMcpClient, supportedClientList, KNOWN_CLIENT_IDS, LEGACY_GLOBAL_MCP_FILE,
+  mcpServerConfig,
 } from './mcpClients.js';
 import {
   shortHead, checkPrerequisites, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
-  CLAUDE_PATHS,
+  CLAUDE_PATHS, hasMcpClientConfig,
 } from './setupSteps.js';
 import {
   choosePassphraseSource, passphraseWarning, readHiddenLine, encryptionInstructions, PASSPHRASE_ENV,
@@ -166,7 +167,7 @@ program
   .option('--no-mcp', 'Skip MCP configuration')
   .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP + recall/session-start/session-end hooks)')
   .option('--npx', 'Use npx instead of cloning repo (fastest setup)')
-  .option('--source <name>', 'AI client identifier (e.g. claude-code, cursor, windsurf)', 'mcp-client')
+  .option('--source <name>', `AI client identifier (${supportedClientList()})`, 'mcp-client')
   // Kept because commander rejects unknown options: dropping it would break
   // any script already passing it. Setup asks nothing — git runs with
   // GIT_TERMINAL_PROMPT=0 and stdin closed, and no other step prompts — so the
@@ -270,15 +271,7 @@ program
       ok('Using npx mode — skipping clone/build');
     }
 
-    const engramEnv: Record<string, string> = {
-      ENGRAM_DB_PATH: config.dbPath,
-      ENGRAM_SOURCE: opts.source,
-      ENGRAM_NAMESPACE_MODE: config.namespaceMode,
-    };
-    if (config.namespace) engramEnv['ENGRAM_NAMESPACE'] = config.namespace;
-    const engramServer: Record<string, unknown> = opts.npx
-      ? { command: 'npx', args: ['-y', '@engram-ai-memory/mcp@latest'], env: engramEnv }
-      : { command: 'node', args: [path.join(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')], env: engramEnv };
+    const engramServer = mcpServerConfig(config, opts.source, opts.npx === true);
 
     // Every user config file setup declined to touch lands here. Setup still
     // exits 0 — the rest of the install is usable — but the banner has to say
@@ -527,9 +520,14 @@ program
     for (const id of KNOWN_CLIENT_IDS) {
       const target = resolveMcpClient(id, os.homedir());
       if (target.kind !== 'file' || !fs.existsSync(target.path)) continue;
-      if (readJsonOrEmpty(target.path).mcpServers?.engram) {
-        ok(`MCP: registered for ${target.label} (${target.path})`);
-        anyClientConfigured = true;
+      try {
+        if (hasMcpClientConfig(target)) {
+          ok(`MCP: registered for ${target.label} (${target.path})`);
+          anyClientConfigured = true;
+        }
+      } catch (err) {
+        warn(`MCP: could not inspect ${target.path}: ${err instanceof Error ? err.message : String(err)}`);
+        issues++;
       }
     }
     if (!anyClientConfigured) {
@@ -538,29 +536,32 @@ program
     }
 
     const legacyGlobalMcp = path.join(os.homedir(), LEGACY_GLOBAL_MCP_FILE);
-    if (fs.existsSync(legacyGlobalMcp) && readJsonOrEmpty(legacyGlobalMcp).mcpServers?.engram) {
-      warn(`Legacy: ${legacyGlobalMcp} holds an engram entry, but no MCP client reads that file — it can be removed`);
-    }
     const legacyClaudeSettings = path.join(os.homedir(), '.claude', 'settings.json');
-    if (fs.existsSync(legacyClaudeSettings) && readJsonOrEmpty(legacyClaudeSettings).mcpServers?.engram) {
-      warn('Legacy: engram found in ~/.claude/settings.json — Claude Code reads MCP servers from ~/.claude.json');
+    for (const { file, message } of [
+      { file: legacyGlobalMcp, message: `Legacy: ${legacyGlobalMcp} holds an engram entry, but no MCP client reads that file — it can be removed` },
+      { file: legacyClaudeSettings, message: 'Legacy: engram found in ~/.claude/settings.json — Claude Code reads MCP servers from ~/.claude.json' },
+    ]) {
+      try {
+        if (configObject(readJson(file).mcpServers, 'mcpServers').engram) warn(message);
+      } catch (err) {
+        warn(`Legacy MCP: could not inspect ${file}: ${err instanceof Error ? err.message : String(err)}`);
+        issues++;
+      }
     }
 
     // Claude Code auto-memory: the three hooks (its user-scope MCP entry is
     // covered by the client loop above, which reads the same ~/.claude.json).
     if (fs.existsSync(CLAUDE_DIR)) {
-      const settings = readJsonOrEmpty(CLAUDE_SETTINGS);
-      for (const h of CLAUDE_HOOKS) {
-        // Find the registered command for this event (by script basename, so a
-        // custom install location still counts), then confirm the file exists.
-        let registeredPath: string | undefined;
-        for (const e of (settings.hooks?.[h.event] || [])) {
-          for (const x of (e.hooks || [])) {
-            if (typeof x.command === 'string' && path.basename(x.command) === h.file) registeredPath = x.command;
-          }
+      try {
+        const settings = readJson(CLAUDE_SETTINGS);
+        for (const h of CLAUDE_HOOKS) {
+          const registeredPath = claudeHookCommands(settings, h.event).find((command) => path.basename(command) === h.file);
+          if (registeredPath && fs.existsSync(registeredPath)) ok(`Claude Code hook: ${h.event} (${h.file})`);
+          else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
         }
-        if (registeredPath && fs.existsSync(registeredPath)) ok(`Claude Code hook: ${h.event} (${h.file})`);
-        else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
+      } catch (err) {
+        warn(`Claude Code hooks: ${err instanceof Error ? err.message : String(err)}`);
+        issues++;
       }
     }
 
@@ -852,15 +853,11 @@ cloudCmd
 
 const MEMORY_INSTRUCTIONS = `# Memory (Engram)
 
-This project uses Engram for persistent AI memory across sessions.
-
-## Behavior
-
-1. **Start of every conversation**: call \`recall_context\` with what the user is asking about.
-2. **Store automatically**: architecture decisions, coding conventions, bug fixes, build commands, user preferences. Never ask — just store.
-3. **Before answering history questions**: call \`search_memory\` to check for stored context.
-4. **End of session**: store a brief summary with tags=["session-summary"].
-5. **Never announce** memory operations — use them silently.
+Engram is long-term memory that persists across sessions, projects and AI tools. It complements the host's own memory and instructions (CLAUDE.md, AGENTS.md, rules, built-in memory); when they disagree, the host and the user win.
+- Recall when prior decisions or project history would help: recall_context for broad context, search_memory for a specific fact. Recalled memories can be stale — verify before relying on them.
+- Store durable facts worth keeping beyond this session: decisions and their reasons, conventions, fixes, user preferences. Not routine chatter. Follow the user's wishes about what to store.
+- Memories are scoped to the current project by default. Use global: true only for facts about the user that hold in every project.
+- Correct a stale fact with update_memory (by id); retire one with forget.
 `;
 
 const AI_CLIENT_FILES: Record<string, string> = {
@@ -868,12 +865,14 @@ const AI_CLIENT_FILES: Record<string, string> = {
   cursor: '.cursorrules',
   windsurf: '.windsurfrules',
   cline: '.clinerules',
+  codex: 'AGENTS.md',
+  opencode: 'AGENTS.md',
 };
 
 program
   .command('init')
   .description('Add Engram memory instructions to the current project for your AI client')
-  .option('--client <name>', 'AI client: claude, cursor, windsurf, cline, all (default: all)', 'all')
+  .option('--client <name>', 'AI client: claude, cursor, windsurf, cline, codex, opencode, all (default: all)', 'all')
   .action((opts) => {
     const cwd = process.cwd();
     const clients = opts.client === 'all' ? Object.keys(AI_CLIENT_FILES) : [opts.client];
@@ -932,8 +931,13 @@ program
       if (build.current) {
         // Hook templates can change without a new commit reaching this CLI:
         // the update that brought them in ran the previous CLI. Refresh anyway.
-        refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, []);
-        ok('Already up to date.');
+        const degraded: string[] = [];
+        refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, degraded);
+        if (degraded.length === 0) ok('Already up to date.');
+        else {
+          warn(`Already built, with ${degraded.length} integration refresh step(s) skipped.`);
+          process.exitCode = 1;
+        }
         console.log();
         return;
       }
