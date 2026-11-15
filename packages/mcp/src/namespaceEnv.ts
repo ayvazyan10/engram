@@ -10,6 +10,7 @@
  * keeps the two entrypoints from drifting apart again.
  */
 
+import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { NamespaceMode } from '@engram-ai-memory/core';
 
@@ -51,9 +52,9 @@ export function resolveNamespaceSettings(env: NamespaceEnv, cwd = process.cwd())
       }).trim();
       if (root) return { namespaceMode: 'filter', namespace: root };
     } catch {
-      // Outside a repository (or without git), use the shared memory pool.
+      // Outside a repository (or without git), scope memories to this directory.
     }
-    return { namespaceMode: 'none', namespace: undefined };
+    return { namespaceMode: 'filter', namespace: path.resolve(cwd) };
   }
 
   return { namespaceMode: raw as NamespaceMode, namespace };

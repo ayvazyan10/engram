@@ -3,8 +3,8 @@
   "name": "engram-mcp",
   "display_name": "Engram AI Memory",
   "version": "0.11.2",
-  "description": "Universal AI memory — store, search, and recall memories with semantic similarity and knowledge graph traversal.",
-  "long_description": "Engram gives any AI model persistent, structured memory across sessions.\n\nOn first launch it installs `@engram-ai-memory/mcp` from npm (requires Node.js ≥ 22 and npm). The embedding model (all-MiniLM-L6-v2) downloads automatically on first use (~25 MB).\n\n**24 tools across 9 categories:**\n- **Memory** — `store_memory`, `search_memory`, `recall_context`, `add_knowledge`, `update_memory`, `forget`\n- **Stats** — `memory_stats`, `index_status`, `embedding_status`\n- **Lifecycle** — `decay_sweep`, `decay_policy`, `re_embed`\n- **Contradictions** — `check_contradictions`, `resolve_contradiction`\n- **Tags** — `list_tags`, `tag_memory`\n- **Webhooks** — `webhook_subscribe`, `webhook_list`\n- **Plugins** — `plugin_list`\n- **Reflection** — `request_reflection`, `store_reflection`, `get_reflections`\n- **Sessions** — `get_distill_tasks`, `complete_distill`\n\n**Recommended workflow:**\n```\nSession start  → recall_context(task description)\nDuring work    → store_memory(decisions, findings)\nEnd of session → store_memory(session summary)\n```\n\nReflection is AI-driven: `request_reflection` returns prompts, the connected AI reasons over them and calls `store_reflection`. Engram runs no LLM — no API keys, no external calls. All embeddings run 100% locally.",
+  "description": "Long-term memory that complements the host AI's memory and instructions, with 15 tools visible by default.",
+  "long_description": "Engram is long-term memory across sessions, projects, and AI tools. It complements the host's own memory and instructions (CLAUDE.md, AGENTS.md, rules, built-in memory); the host and the user win on conflict.\n\nOn first launch it installs `@engram-ai-memory/mcp` from npm (requires Node.js ≥ 22 and npm). The multilingual embedding model (paraphrase-multilingual-MiniLM-L12-v2) downloads automatically on first use (~118 MB).\n\n**15 tools visible by default:**\n- **Memory** — `store_memory`, `search_memory`, `recall_context`, `add_knowledge`, `update_memory`, `forget`\n- **Contradictions** — `get_contradiction_tasks`, `complete_contradiction_check`\n- **Tags** — `list_tags`, `tag_memory`\n- **Reflection** — `request_reflection`, `store_reflection`, `get_reflections`\n- **Sessions** — `get_distill_tasks`, `complete_distill`\n\n**11 admin tools are hidden unless ENGRAM_ADMIN_TOOLS=1** (26 tools total when enabled): `decay_sweep`, `decay_policy`, `plugin_list`, `webhook_subscribe`, `webhook_list`, `index_status`, `embedding_status`, `re_embed`, `memory_stats`, `check_contradictions`, `resolve_contradiction`.\n\nRecall when prior decisions or project history would help: `recall_context` returns only context text; `search_memory` finds specific facts. Recalled memories can be stale — verify before relying on them. Store durable facts following the user's wishes. Memories are scoped to the current project by default; `global: true` is only for facts about the user that hold in every project. Correct stale facts with `update_memory` by ID, or retire them with `forget`.\n\nReflection returns prompts for the connected AI to reason over and stores its insights. Engram runs no LLM and needs no LLM API keys. All embeddings run locally.",
   "author": {
     "name": "engram-ai-memory",
     "email": "contact@engram.am"
@@ -41,19 +41,10 @@
     { "name": "add_knowledge",         "description": "Add a semantic fact or concept" },
     { "name": "update_memory",         "description": "Edit an existing memory by ID or unique prefix" },
     { "name": "forget",                "description": "Archive (soft-delete) memories" },
-    { "name": "memory_stats",          "description": "Brain statistics: counts, sources, types" },
-    { "name": "index_status",          "description": "Vector index status and performance info" },
-    { "name": "embedding_status",      "description": "Embedding model status and re-embed needs" },
-    { "name": "decay_sweep",           "description": "Run memory decay based on Ebbinghaus forgetting curve" },
-    { "name": "decay_policy",          "description": "View or update decay configuration" },
-    { "name": "re_embed",              "description": "Re-embed memories with the current model" },
-    { "name": "check_contradictions",  "description": "Find contradictions between memories" },
-    { "name": "resolve_contradiction", "description": "Resolve a contradiction using a strategy" },
+    { "name": "get_contradiction_tasks", "description": "Get unverified possible contradictions with bounded memory excerpts" },
+    { "name": "complete_contradiction_check", "description": "Record a judgment and optional resolution for a possible contradiction" },
     { "name": "list_tags",             "description": "Get tag cloud or memories by tag" },
     { "name": "tag_memory",            "description": "Add or remove a tag on a memory" },
-    { "name": "webhook_subscribe",     "description": "Subscribe a URL to memory events (HMAC-signed)" },
-    { "name": "webhook_list",          "description": "List webhook subscriptions" },
-    { "name": "plugin_list",           "description": "List registered Engram plugins" },
     { "name": "request_reflection",    "description": "Get reflection tasks (prompts) for the connected AI to reason over" },
     { "name": "store_reflection",      "description": "Store an insight the AI generated from a reflection task" },
     { "name": "get_reflections",       "description": "Retrieve stored reflection insights" },
@@ -72,16 +63,16 @@
     "namespace": {
       "type": "string",
       "title": "Namespace",
-      "description": "Namespace value used by filter or isolated mode. Isolated mode requires this value.",
+      "description": "Leave unset; the server scopes to the current project.",
       "required": false,
       "default": ""
     },
     "namespace_mode": {
       "type": "string",
       "title": "Namespace Mode",
-      "description": "Namespace behavior. None disables namespaces; filter enables optional scoping; isolated enforces the configured namespace.",
+      "description": "Project scopes to the git root or current directory. None disables scoping; filter uses an optional namespace; isolated requires and enforces a configured namespace.",
       "required": false,
-      "default": "none"
+      "default": "project"
     },
     "sync_url": {
       "type": "string",

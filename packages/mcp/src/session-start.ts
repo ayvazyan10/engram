@@ -40,20 +40,9 @@ async function recallContext(cwd: string, env: NamespaceEnv): Promise<string> {
   try {
     await brain.initialize();
     const result = await brain.recall(buildRecallQuery(cwd, currentBranch(cwd)), {
-      maxTokens: 1500, source,
+      threshold: 0.5, graphDepth: 0, maxTokens: 600, touch: false,
     });
-    // The reminder is extra: failing to count must not cost the recalled context.
-    const { getPendingDistillSessions }: typeof StoreModule = await import(storeModulePath);
-    const pending = await getPendingDistillSessions(brain).then((s) => s.length, () => 0);
-    const contradictions = await brain.getContradictionTasks(100).then((tasks) => tasks.length, () => 0);
-    const reminder = [
-      pending > 0 ? `${pending} past sessions are waiting to be distilled — call get_distill_tasks when convenient.` : '',
-      contradictions > 0
-        ? `${contradictions === 100 ? '100+' : contradictions} possible contradictions are waiting for your judgment — call get_contradiction_tasks when convenient.`
-        : '',
-    ].filter(Boolean).join('\n');
-    const context = result.context.slice(0, 6000 - (reminder ? reminder.length + 1 : 0));
-    return [context, reminder].filter(Boolean).join('\n');
+    return result.memories.length > 0 ? result.context : '';
   } finally {
     brain.shutdown();
   }
