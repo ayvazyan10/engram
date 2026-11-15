@@ -40,7 +40,7 @@ async function recallContext(cwd: string, env: NamespaceEnv): Promise<string> {
   try {
     await brain.initialize();
     const result = await brain.recall(buildRecallQuery(cwd, currentBranch(cwd)), {
-      threshold: 0.5, graphDepth: 0, maxTokens: 600, touch: false,
+      threshold: 0.35, graphDepth: 0, maxTokens: 600, touch: false,
     });
     return result.memories.length > 0 ? result.context : '';
   } finally {

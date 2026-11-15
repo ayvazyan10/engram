@@ -11,7 +11,7 @@
 # Tunables: ENGRAM_API, ENGRAM_RECALL_MIN_SIM.
 
 ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
-MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.5}"
+MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.35}"
 
 command -v jq >/dev/null 2>&1 || { printf '%s\n' 'Engram recall hook requires jq' >&2; exit 0; }
 

@@ -308,7 +308,7 @@ Restart your AI client. **26 tools** are now available:
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.5 by default. SessionEnd uses importance 0.3 and skips `clear`/`resume`. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
+Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.35 by default (calibrated for the multilingual model). SessionEnd uses importance 0.3 and skips `clear`/`resume`. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
 
 Add a Claude Code hook to automatically save conversation summaries to engram when a session ends:
 

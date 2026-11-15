@@ -75,7 +75,7 @@ describe('runSessionStart', () => {
       hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'x'.repeat(7000) },
     });
     expect(mocks.recall).toHaveBeenCalledWith('neuralCore feature/memory', {
-      threshold: 0.5, graphDepth: 0, maxTokens: 600, touch: false,
+      threshold: 0.35, graphDepth: 0, maxTokens: 600, touch: false,
     });
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
