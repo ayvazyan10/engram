@@ -16,7 +16,7 @@ import fs from 'fs';
 import { timingSafeEqual } from 'crypto';
 import { installErrorHandler } from './lib/errorHandler.js';
 import { pathnameOf } from './lib/requestPath.js';
-import { installHostGuard, readHostPolicy } from './security/hostGuard.js';
+import { installHostGuard, isAllowedHost, readHostPolicy } from './security/hostGuard.js';
 import { installRateLimit, readRateLimitConfig } from './security/rateLimit.js';
 import { installSecurityHeaders, readSecurityHeaderPolicy } from './security/securityHeaders.js';
 // Read the real release version instead of hardcoding it. This package has no
@@ -231,7 +231,7 @@ export function notifySyncWrite(): void {
  */
 export function setupRealtime(server: HttpServer): Namespace {
   io = new SocketIOServer(server, {
-    // The Origin allowlist has to be enforced HERE, in allowRequest.
+    // The Origin and Host allowlists have to be enforced HERE, in allowRequest.
     //
     // `cors` cannot refuse a socket: returning false from its origin callback
     // only makes the cors package omit the Access-Control-* headers and then
@@ -244,12 +244,12 @@ export function setupRealtime(server: HttpServer): Namespace {
     // websocket alike, which is the one place the connection can be refused.
     allowRequest: (req, callback) => {
       const origin = req.headers.origin;
-      if (isAllowedOrigin(origin)) {
+      if (isAllowedOrigin(origin) && isAllowedHost(req.headers.host, readHostPolicy())) {
         callback(null, true);
         return;
       }
-      console.warn(`WebSocket handshake refused: origin '${origin}' is not allowlisted`);
-      callback('Forbidden origin', false);
+      console.warn(`Socket.IO handshake refused for origin '${origin}' and host '${req.headers.host}'`);
+      callback('Forbidden origin or host', false);
     },
     // Kept for the polling transport's response headers on allowed origins.
     // This is a header policy, never an access control — see above.
@@ -321,14 +321,15 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   // rate-limit slot on it, and rate-limit before the key check so that a flood
   // of wrong-key requests is bounded too.
   //
-  // Host allowlist — the REST half of the DNS-rebinding defense the WebSocket
-  // half already had. See security/hostGuard.ts for why Origin cannot do this.
+  // Host allowlist — also enforced by Socket.IO's allowRequest above.
+  // See security/hostGuard.ts for why Origin cannot prevent DNS rebinding.
   installHostGuard(app, readHostPolicy());
 
-  // MCP browser requests use the same Origin allowlist as CORS and WebSocket.
+  // MCP and state-changing API requests enforce the browser Origin allowlist.
   app.addHook('onRequest', async (req, reply) => {
     const pathname = req.routeOptions.url ?? pathnameOf(req.url);
-    if (pathname === '/mcp' && !isAllowedOrigin(req.headers.origin)) {
+    if ((pathname === '/mcp' || (pathname.startsWith('/api/') && req.method !== 'GET'))
+      && !isAllowedOrigin(req.headers.origin)) {
       await reply.code(403).send({ error: 'Forbidden origin' });
     }
   });

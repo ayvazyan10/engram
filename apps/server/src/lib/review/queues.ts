@@ -48,12 +48,15 @@ function pair(a: MemoryLite, b: MemoryLite, edge: { id: string; strength: number
 export function reviewReader() {
   let cached: ReviewSnapshot | undefined;
   return async (scope: Scope): Promise<ReviewSnapshot> => {
+    if (scope.global === 'true' && brain.getNamespaceMode() === 'isolated') {
+      throw Object.assign(new Error('global access is not allowed in isolated mode'), { statusCode: 400 });
+    }
     const db = getDb();
     const conditions = [isNull(schema.memories.archivedAt)];
     if (scope.namespace !== undefined) conditions.push(eq(schema.memories.namespace, scope.namespace));
     if (scope.global === 'true') conditions.push(isNull(schema.memories.namespace));
     const namespace = brain.getNamespace();
-    if (namespace) conditions.push(eq(schema.memories.namespace, namespace));
+    if (namespace && scope.global !== 'true') conditions.push(eq(schema.memories.namespace, namespace));
     const { embedding: _embedding, ...columns } = getTableColumns(schema.memories);
     const rows = db.select(columns).from(schema.memories).where(and(...conditions)).orderBy(schema.memories.id).all()
       .filter((row) => brain.canAccessNamespace(row.namespace)).map((row) => ({ ...row, embedding: null }));
@@ -64,7 +67,9 @@ export function reviewReader() {
       isNull(schema.memoryConnections.deletedAt), inArray(schema.memoryConnections.sourceId, visible),
       inArray(schema.memoryConnections.targetId, visible),
     )).orderBy(schema.memoryConnections.id).all().filter((e) => e.sourceId !== e.targetId && byId.has(e.sourceId) && byId.has(e.targetId));
-    const contradictions = await brain.getContradictions(scope.namespace, undefined, 0, scope.global === 'true');
+    // Core's exact REST scope also adds the active namespace for global=true.
+    // Use soft visibility for global reads; the scoped row IDs below filter pairs.
+    const contradictions = await brain.getContradictions(scope.namespace, undefined, 0, scope.global === 'true' ? undefined : false);
     const dismissed = new Set(readDismissals());
     const policy = brain.getDecayPolicy();
     const decay = new DecayEngine(policy);

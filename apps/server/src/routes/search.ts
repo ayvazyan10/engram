@@ -97,7 +97,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       return {
         count: memories.length,
         latencyMs: Date.now() - start,
-        results: memories,
+        results: memories.map(({ embedding: _embedding, ...memory }) => memory),
       };
     },
   });
@@ -323,9 +323,8 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
           }
         }
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
         if (!clientGone) {
-          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`);
+          reply.raw.write(`event: error\ndata: ${JSON.stringify({ error: 'Recall stream failed' })}\n\n`);
         }
         req.log.error({ err }, 'recall stream failed');
       } finally {

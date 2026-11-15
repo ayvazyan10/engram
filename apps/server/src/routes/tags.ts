@@ -66,7 +66,10 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
         req.query.limit ?? 50,
         req.query.offset ?? 0,
       );
-      return { tag: req.params.tag, count: memories.length, memories };
+      return {
+        tag: req.params.tag, count: memories.length,
+        memories: memories.map(({ embedding: _embedding, ...memory }) => memory),
+      };
     },
   });
 

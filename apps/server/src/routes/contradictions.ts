@@ -1,4 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { getDb, schema } from '@engram-ai-memory/core';
+import { and, eq, isNull, or } from 'drizzle-orm';
 import { brain, realtime, notifySyncWrite } from '../index.js';
 import { isMemoryNotFound } from '../lib/notFound.js';
 import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
@@ -97,6 +99,22 @@ export const contradictionRoutes: FastifyPluginAsync = async (app) => {
 
   // Keep bulk and single resolution on the same core, sync and realtime path.
   const resolve = async (item: ResolutionInput) => {
+    if (item.sourceId === item.targetId) {
+      throw Object.assign(new Error('sourceId and targetId must differ'), { statusCode: 400 });
+    }
+    const edge = getDb().select({ id: schema.memoryConnections.id })
+      .from(schema.memoryConnections)
+      .where(and(
+        eq(schema.memoryConnections.relationship, 'contradicts'),
+        isNull(schema.memoryConnections.deletedAt),
+        or(
+          and(eq(schema.memoryConnections.sourceId, item.sourceId), eq(schema.memoryConnections.targetId, item.targetId)),
+          and(eq(schema.memoryConnections.sourceId, item.targetId), eq(schema.memoryConnections.targetId, item.sourceId)),
+        ),
+      )).get();
+    if (!edge) {
+      throw Object.assign(new Error('Contradiction not found'), { statusCode: 404 });
+    }
     const result = await brain.resolveContradiction(item.sourceId, item.targetId, item.strategy);
     if (result.resolved) {
       notifySyncWrite();

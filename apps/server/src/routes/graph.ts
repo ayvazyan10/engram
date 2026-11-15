@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { visibleConnection, getDb, getDeviceId, schema, upsertConnection } from '@engram-ai-memory/core';
-import { and, eq, inArray, isNull, or } from 'drizzle-orm';
+import { and, eq, getTableColumns, inArray, isNull, or } from 'drizzle-orm';
 import { brain, notifySyncWrite } from '../index.js';
 import { strictQueryString } from '../lib/strictBody.js';
 
@@ -29,10 +29,11 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         const db = getDb();
         const { id } = req.params;
         const depth = req.query.depth ?? 2;
+        const { embedding: _embedding, ...columns } = getTableColumns(schema.memories);
 
         // Get the root node
         const [rootMemory] = await db
-          .select()
+          .select(columns)
           .from(schema.memories)
           .where(eq(schema.memories.id, id))
           .limit(1);
@@ -82,7 +83,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         const neighborIds = [...visited].filter((v) => v !== id);
         const neighbors = neighborIds.length
           ? await db
-              .select()
+              .select(columns)
               .from(schema.memories)
               .where(and(inArray(schema.memories.id, neighborIds), isNull(schema.memories.archivedAt)))
           : [];

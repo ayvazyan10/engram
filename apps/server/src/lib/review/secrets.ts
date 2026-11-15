@@ -51,10 +51,12 @@ export function scanSecrets(memory: { content: string; concept?: string | null; 
         }
       } catch { /* Other base64 strings are not tunnel credentials. */ }
     }
-    for (const match of text.matchAll(/\b[a-z][a-z0-9+.-]*:\/\/([^\s/:@]+):([^\s@]{3,})@/gi)) {
-      if (match[1] === 'user' && match[2] === 'password') continue;
-      const credentials = `${match[1]}:${match[2]}`;
-      if (!placeholder(match[2]!)) add('url-credentials', match.index + match[0].indexOf('://') + 3, credentials);
+    if (text.includes('://')) {
+      for (const match of text.matchAll(/\b[a-z][a-z0-9+.-]{0,31}:\/\/([^\s/:@]+):([^\s@]{3,})@/gi)) {
+        if (match[1] === 'user' && match[2] === 'password') continue;
+        const credentials = `${match[1]}:${match[2]}`;
+        if (!placeholder(match[2]!)) add('url-credentials', match.index + match[0].indexOf('://') + 3, credentials);
+      }
     }
     for (const match of text.matchAll(/(?<![\p{L}\p{N}])(?:password|passwd|passphrase|pass|secret|api[ _-]?key|token|access[ _-]?key|пароль)(?![\p{L}\p{N}])\s*[:=]\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s,;`]+))/giu)) {
       const value = match[1] ?? match[2] ?? match[3]!;

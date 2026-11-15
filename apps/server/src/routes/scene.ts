@@ -115,10 +115,14 @@ function shellPosition(id: string, radius: number): Vec3 {
  * Scope the node set exactly as `GET /api/memory` scopes its list, so the
  * scene and the sidebar can never disagree about which memories exist.
  */
-function memoryScope(): SQL[] {
+function memoryScope(globalOnly = false): SQL[] {
+  if (globalOnly && brain.getNamespaceMode() === 'isolated') {
+    throw Object.assign(new Error('global access is not allowed in isolated mode'), { statusCode: 400 });
+  }
   const conditions: SQL[] = [isNull(schema.memories.archivedAt)];
   const namespace = brain.getNamespace();
-  if (namespace) conditions.push(eq(schema.memories.namespace, namespace));
+  if (globalOnly) conditions.push(isNull(schema.memories.namespace));
+  else if (namespace) conditions.push(eq(schema.memories.namespace, namespace));
   return conditions;
 }
 
@@ -242,7 +246,7 @@ export async function memoryFingerprint(conditions: SQL[] = memoryScope()): Prom
   return `m:${row?.total ?? 0}:${row?.newest ?? '-'}:${row?.created ?? '-'}:${brain.getNamespace() ?? '-'}`;
 }
 
-async function buildLayout(fingerprint: string): Promise<LayoutPayload> {
+async function buildLayout(fingerprint: string, conditions: SQL[]): Promise<LayoutPayload> {
   const db = getDb();
   const startedAt = Date.now();
   const rows = (await db
@@ -260,7 +264,7 @@ async function buildLayout(fingerprint: string): Promise<LayoutPayload> {
       embeddingDim: schema.memories.embeddingDim,
     })
     .from(schema.memories)
-    .where(and(...memoryScope()))
+    .where(and(...conditions))
     // Fixed order, so the PCA fit subsample is the same set on every call.
     .orderBy(schema.memories.id)) as LoadedRow[];
 
@@ -304,14 +308,14 @@ async function edgeFingerprint(memory: string): Promise<string> {
  * it to — so it is excluded here and counted separately rather than dropped in
  * silence, which is what the client used to do with its pagination window.
  */
-async function loadVisibleEdges(): Promise<{ edges: SceneEdge[]; stored: number }> {
+async function loadVisibleEdges(conditions: SQL[]): Promise<{ edges: SceneEdge[]; stored: number }> {
   const db = getDb();
   const visible = new Set(
     (
       await db
         .select({ id: schema.memories.id })
         .from(schema.memories)
-        .where(and(...memoryScope()))
+        .where(and(...conditions))
     ).map((row) => row.id)
   );
 
@@ -344,23 +348,29 @@ export const sceneRoutes: FastifyPluginAsync = async (app) => {
   // Registered after graphRoutes' `/graph/:id`; find-my-way matches the static
   // segment first, so this is not shadowed by the parametric route. The test
   // 'serves the layout, not the :id handler' pins that.
-  app.get('/graph/layout', {
+  app.get<{ Querystring: { global?: 'true' } }>('/graph/layout', {
     schema: {
       tags: ['graph'],
       summary:
         'PCA projection of every memory embedding into a fixed 3D box. Cached until the memory set changes.',
+      querystring: {
+        type: 'object', additionalProperties: false,
+        properties: { global: { type: 'string', enum: ['true'] } },
+      },
     },
-    handler: async () => {
-      const fingerprint = await memoryFingerprint();
+    preValidation: strictQueryString(['global']),
+    handler: async (req) => {
+      const conditions = memoryScope(req.query.global === 'true');
+      const fingerprint = `${await memoryFingerprint(conditions)}:global=${req.query.global ?? 'false'}`;
       if (layoutCache?.fingerprint === fingerprint) return layoutCache.payload;
-      const payload = await buildLayout(fingerprint);
+      const payload = await buildLayout(fingerprint, conditions);
       layoutCache = { fingerprint, payload };
       return payload;
     },
   });
 
   // GET /api/graph/edges — every renderable edge, with honest totals.
-  app.get<{ Querystring: { minStrength?: number; limit?: number } }>('/graph/edges', {
+  app.get<{ Querystring: { minStrength?: number; limit?: number; global?: 'true' } }>('/graph/edges', {
     schema: {
       tags: ['graph'],
       summary: 'All connections whose endpoints are both visible memories, strongest first',
@@ -368,6 +378,7 @@ export const sceneRoutes: FastifyPluginAsync = async (app) => {
         type: 'object',
         additionalProperties: false,
         properties: {
+          global: { type: 'string', enum: ['true'] },
           minStrength: { type: 'number', minimum: 0, maximum: 1, default: 0 },
           limit: { type: 'integer', minimum: 1, maximum: EDGE_LIMIT_MAX, default: EDGE_LIMIT_MAX },
         },
@@ -378,14 +389,16 @@ export const sceneRoutes: FastifyPluginAsync = async (app) => {
     // removeAdditional and strips an unknown key in silence, so
     // ?minStrenght=0.9 (a typo) was answered 200 with every edge in the store
     // and read as a filtered set. Same guard, same reason, as /api/analytics.
-    preValidation: strictQueryString(['minStrength', 'limit']),
+    preValidation: strictQueryString(['minStrength', 'limit', 'global']),
     handler: async (req) => {
       const minStrength = req.query.minStrength ?? 0;
       const limit = req.query.limit ?? EDGE_LIMIT_MAX;
 
-      const fingerprint = await edgeFingerprint(await memoryFingerprint());
+      const conditions = memoryScope(req.query.global === 'true');
+      const memory = `${await memoryFingerprint(conditions)}:global=${req.query.global ?? 'false'}`;
+      const fingerprint = await edgeFingerprint(memory);
       if (edgeCache?.fingerprint !== fingerprint) {
-        const loaded = await loadVisibleEdges();
+        const loaded = await loadVisibleEdges(conditions);
         edgeCache = { fingerprint, edges: loaded.edges, stored: loaded.stored };
       }
 

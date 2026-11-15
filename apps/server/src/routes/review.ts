@@ -17,7 +17,7 @@ export const reviewRoutes: FastifyPluginAsync = async (app) => {
     handler: async (req) => {
       const queues = await read(req.query);
       return {
-        contradictions: await brain.getContradictionCount(req.query.namespace, req.query.global === 'true'), duplicates: queues.duplicates.length,
+        contradictions: queues.contradictions.length, duplicates: queues.duplicates.length,
         fading: queues.fading.length, secrets: queues.secrets.length, fingerprint: queues.fingerprint,
       };
     },
@@ -38,8 +38,7 @@ export const reviewRoutes: FastifyPluginAsync = async (app) => {
       }
       const items = (await read(req.query))[queue];
       const { offset = 0, limit = 50 } = req.query;
-      const total = queue === 'contradictions'
-        ? await brain.getContradictionCount(req.query.namespace, req.query.global === 'true') : items.length;
+      const total = items.length;
       return { total, items: items.slice(offset, offset + limit) };
     },
   });

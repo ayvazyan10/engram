@@ -160,9 +160,12 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
         properties: {
           halfLifeDays: { type: 'number', minimum: 1, maximum: 36500 },
           archiveThreshold: { type: 'number', minimum: 0, maximum: 1 },
-          // Node's setInterval collapses anything past the signed 32-bit max
-          // to a 1ms delay, turning a "run yearly" typo into a hot loop.
-          decayIntervalMs: { type: 'number', minimum: 0, maximum: 2147483647 },
+          // Zero disables the timer; enabled intervals are whole milliseconds
+          // of at least one second, within Node's signed 32-bit timer limit.
+          decayIntervalMs: {
+            type: 'integer', maximum: 2147483647,
+            anyOf: [{ const: 0 }, { minimum: 1000 }],
+          },
           batchSize: { type: 'integer', minimum: 1, maximum: 100000 },
           importanceDecayRate: { type: 'number', minimum: 0, maximum: 1 },
           importanceFloor: { type: 'number', minimum: 0, maximum: 1 },

@@ -101,8 +101,12 @@ export const webhookRoutes: FastifyPluginAsync = async (app) => {
       summary: 'Delete a webhook subscription',
     },
     handler: async (req, reply) => {
-      await mgr.unsubscribe(req.params.id);
+      if (!(await mgr.unsubscribe(req.params.id))) {
+        reply.code(404);
+        return { error: 'Webhook not found' };
+      }
       reply.code(204);
+      return undefined;
     },
   });
 

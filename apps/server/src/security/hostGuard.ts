@@ -5,8 +5,8 @@ import { pathnameOf } from '../lib/requestPath.js';
 /**
  * Host header allowlist — the REST half of the DNS-rebinding defense.
  *
- * The WebSocket half was closed last round with an Origin allowlist in
- * `allowRequest`. Origin cannot close this half: `isAllowedOrigin(undefined)`
+ * Socket.IO enforces this Host policy alongside its Origin allowlist in
+ * `allowRequest`. Origin alone is insufficient: `isAllowedOrigin(undefined)`
  * returns true because non-browser clients (CLI, MCP, curl) send no Origin at
  * all, and a same-origin browser GET sends none either. So an attacker page
  * served from `http://attacker.example:4901`, whose A record then flips to

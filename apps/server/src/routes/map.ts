@@ -42,7 +42,7 @@ async function snapshot(scope: Scope): Promise<Snapshot> {
   if (scope.namespace !== undefined) conditions.push(eq(schema.memories.namespace, scope.namespace));
   if (scope.global === 'true') conditions.push(isNull(schema.memories.namespace));
   const namespace = brain.getNamespace();
-  if (namespace) conditions.push(eq(schema.memories.namespace, namespace));
+  if (namespace && scope.global !== 'true') conditions.push(eq(schema.memories.namespace, namespace));
   const rows = db.select().from(schema.memories).where(and(...conditions)).orderBy(asc(schema.memories.id))
     .all().filter((row) => brain.canAccessNamespace(row.namespace));
   const visible = new Set(rows.map((row) => row.id));
@@ -148,21 +148,28 @@ const querystring = {
   type: 'object', additionalProperties: false,
   properties: { namespace: { type: 'string' }, global: { type: 'string', enum: ['true'] } },
 };
+const MAX_CACHED_SCOPES = 8;
 
 export const mapRoutes: FastifyPluginAsync = async (app) => {
   // Per app and project scope. Nothing is persisted, including region names.
   const caches = new Map<string, CachedMap>();
   const pending = new Map<string, Promise<void>>();
   const failures = new Map<string, unknown>();
+  const cacheResult = (key: string, cache: CachedMap) => {
+    caches.delete(key);
+    caches.set(key, cache);
+    if (caches.size > MAX_CACHED_SCOPES) caches.delete(caches.keys().next().value!);
+  };
   const keyFor = (scope: Scope) => JSON.stringify([brain.getNamespaceMode(), brain.getNamespace(), scope.namespace, scope.global]);
   const start = (key: string, input: Snapshot, force = false) => {
     failures.delete(key);
     const work = runExclusive('map', async () => {
-      caches.set(key, await compute(input, caches.get(key), force));
+      cacheResult(key, await compute(input, caches.get(key), force));
     });
     pending.set(key, work);
     void work.catch((error: unknown) => {
       failures.set(key, error);
+      if (failures.size > MAX_CACHED_SCOPES) failures.delete(failures.keys().next().value!);
       app.log.error(error, 'Map compute failed');
     }).finally(() => pending.delete(key));
     return work;
@@ -173,19 +180,29 @@ export const mapRoutes: FastifyPluginAsync = async (app) => {
     schema: { tags: ['map'], summary: 'Get the Atlas memory map', querystring },
     preValidation: strictQueryString(['namespace', 'global']),
     handler: async (req, reply) => {
+      if (req.query.global === 'true' && brain.getNamespaceMode() === 'isolated') {
+        return reply.code(400).send({ error: 'global access is not allowed in isolated mode' });
+      }
       const key = keyFor(req.query);
-      if (failures.has(key)) throw failures.get(key);
-      const cached = caches.get(key);
-      if (!cached && pending.has(key)) return reply.code(503).send({ error: 'map not ready', retryAfterMs: 250 });
-      if (pending.has(key)) await pending.get(key);
-      const input = await snapshot(req.query);
-      const current = caches.get(key);
-      if (current?.snapshot.fingerprint === input.fingerprint) return payload(current);
-      if (isRunning('map')) return reply.code(503).send({ error: 'map not ready', retryAfterMs: 250 });
-      const work = start(key, input);
-      if (!current) return reply.code(503).send({ error: 'map not ready', retryAfterMs: 250 });
-      await work;
-      return payload(caches.get(key)!);
+      try {
+        if (failures.has(key)) throw failures.get(key);
+        const cached = caches.get(key);
+        if (!cached && pending.has(key)) return reply.code(503).send({ error: 'map not ready', retryAfterMs: 250 });
+        if (pending.has(key)) await pending.get(key);
+        const input = await snapshot(req.query);
+        const current = caches.get(key);
+        if (current) cacheResult(key, current);
+        if (current?.snapshot.fingerprint === input.fingerprint) return payload(current);
+        if (isRunning('map')) return reply.code(503).send({ error: 'map not ready', retryAfterMs: 250 });
+        const work = start(key, input);
+        if (!current) return reply.code(503).send({ error: 'map not ready', retryAfterMs: 250 });
+        await work;
+        return payload(caches.get(key)!);
+      } catch (error) {
+        // A reported failure must not prevent the next GET from recomputing.
+        failures.delete(key);
+        throw error;
+      }
     },
   });
   app.post<{ Querystring: Scope }>('/map/rebuild', {
@@ -197,12 +214,15 @@ export const mapRoutes: FastifyPluginAsync = async (app) => {
       if (req.body === undefined) req.body = {};
     }, strictObjectBody([])],
     handler: async (req, reply) => {
+      if (req.query.global === 'true' && brain.getNamespaceMode() === 'isolated') {
+        return reply.code(400).send({ error: 'global access is not allowed in isolated mode' });
+      }
       const key = keyFor(req.query);
       // Claim before reading inputs so two rebuilds cannot race their snapshots.
       await runExclusive('map', async () => {
         failures.delete(key);
         const result = compute(await snapshot(req.query), caches.get(key), true);
-        const work = result.then((cache) => { caches.set(key, cache); });
+        const work = result.then((cache) => { cacheResult(key, cache); });
         pending.set(key, work);
         try { await work; } finally { pending.delete(key); }
       });

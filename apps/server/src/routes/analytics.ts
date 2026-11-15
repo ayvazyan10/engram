@@ -173,7 +173,7 @@ async function readWindowed(db: Db, where: Where, win: AnalyticsWindow, baseline
 }
 
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
-  app.get<{ Querystring: { days?: number } }>('/analytics', {
+  app.get<{ Querystring: { days?: number; global?: 'true' } }>('/analytics', {
     schema: {
       tags: ['analytics'],
       summary: 'Aggregated memory analytics, scoped to an explicit time window',
@@ -210,6 +210,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         type: 'object',
         additionalProperties: false,
         properties: {
+          global: { type: 'string', enum: ['true'] },
           days: {
             type: 'integer',
             minimum: MIN_WINDOW_DAYS,
@@ -222,13 +223,18 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     // Runs before the schema: Fastify's ajv strips unknown keys rather than
     // refusing them, so `additionalProperties: false` above documents the
     // contract but does not enforce it. This does.
-    preValidation: strictQueryString(['days']),
-    handler: async (req) => {
+    preValidation: strictQueryString(['days', 'global']),
+    handler: async (req, reply) => {
+      if (req.query.global === 'true' && brain.getNamespaceMode() === 'isolated') {
+        return reply.code(400).send({ error: 'global access is not allowed in isolated mode' });
+      }
       const db = getDb();
       const win = buildWindow(clampDays(req.query.days));
 
       const ns = brain.getNamespace();
-      const nsCond = ns ? eq(schema.memories.namespace, ns) : undefined;
+      const nsCond = req.query.global === 'true'
+        ? isNull(schema.memories.namespace)
+        : ns ? eq(schema.memories.namespace, ns) : undefined;
       const active = isNull(schema.memories.archivedAt);
       const allTimeWhere = nsCond ? and(active, nsCond) : active;
 
@@ -281,6 +287,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       body: {
         type: 'object',
         additionalProperties: false,
+        minProperties: 1,
         properties: {
           content: { type: 'string', minLength: 1 },
           importance: { type: 'number', minimum: 0, maximum: 1 },
@@ -290,10 +297,19 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     handler: async (req, reply) => {
+      const [memory] = await getDb()
+        .select({ namespace: schema.memories.namespace })
+        .from(schema.memories)
+        .where(and(eq(schema.memories.id, req.params.id), isNull(schema.memories.archivedAt)))
+        .limit(1);
+      if (!memory || !brain.canAccessNamespace(memory.namespace)) {
+        return reply.code(404).send({ error: 'Memory not found' });
+      }
       try {
         const updated = await brain.updateMemory(req.params.id, req.body);
         notifySyncWrite();
-        return updated;
+        const { embedding: _embedding, ...result } = updated;
+        return result;
       } catch (error) {
         if (error instanceof Error && error.message === `Memory not found: ${req.params.id}`) {
           reply.code(404);

@@ -51,11 +51,12 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         content, type, source, sessionId, tags, metadata, importance, concept, namespace,
       });
       notifySyncWrite();
-      // Broadcast the full record: the dashboard appends this straight into its
-      // store, and a {id,type} stub left content undefined and crashed rendering.
-      realtime?.emit('memory:stored', result.memory);
+      const { embedding: _embedding, ...memory } = result.memory;
+      // Broadcast the record without its embedding: the dashboard appends this
+      // straight into its store and needs the content to render it.
+      realtime?.emit('memory:stored', memory);
       reply.code(201);
-      return { ...result, deduplicated: result.deduplicated ?? false };
+      return { ...result, memory, deduplicated: result.deduplicated ?? false };
     },
   });
 
@@ -165,9 +166,12 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       // stripped in silence and the caller is answered 200 for a request that was
       // plainly a typo. This is what enforces it; see lib/strictBody.ts.
       preValidation: strictQueryString(['type', 'source', 'namespace', 'global', 'before', 'tag', 'limit', 'offset']),
-      handler: async (req) => {
+      handler: async (req, reply) => {
         const db = getDb();
         const { type, source, namespace, global, before, tag, limit = 50, offset = 0 } = req.query;
+        if (global === 'true' && brain.getNamespaceMode() === 'isolated') {
+          return reply.code(400).send({ error: 'global access is not allowed in isolated mode' });
+        }
 
         const conditions = [isNull(schema.memories.archivedAt)];
         if (before !== undefined) conditions.push(lt(schema.memories.createdAt, new Date(before).toISOString()));
@@ -176,9 +180,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
         if (source) conditions.push(eq(schema.memories.source, source));
         if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
         if (global === 'true') conditions.push(isNull(schema.memories.namespace));
-        // Scope to brain's namespace if configured
+        // Global-only reads in filter mode bypass the active namespace.
         const ns = brain.getNamespace();
-        if (ns) conditions.push(eq(schema.memories.namespace, ns));
+        if (ns && global !== 'true') conditions.push(eq(schema.memories.namespace, ns));
 
         const { embedding: _embedding, ...columns } = getTableColumns(schema.memories);
         const memories = await db
@@ -231,8 +235,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
     schema: { tags: ['memory'], summary: 'Get memory by ID' },
     handler: async (req, reply) => {
       const db = getDb();
+      const { embedding: _embedding, ...columns } = getTableColumns(schema.memories);
       const [memory] = await db
-        .select()
+        .select(columns)
         .from(schema.memories)
         .where(eq(schema.memories.id, req.params.id))
         .limit(1);

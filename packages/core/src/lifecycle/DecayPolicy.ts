@@ -91,7 +91,7 @@ export interface DecayPolicyConfig {
   halfLifeDays: number;
   /** Retention score below which a memory is archived (default: 0.05) */
   archiveThreshold: number;
-  /** How often to run decay sweep in ms (default: 1 hour, 0 = disabled) */
+  /** Whole milliseconds between sweeps (default: 1 hour, 0 = disabled, otherwise at least 1000) */
   decayIntervalMs: number;
   /** How many memories to evaluate per batch (default: 200) */
   batchSize: number;
@@ -178,12 +178,13 @@ export const DEFAULT_DECAY_POLICY: DecayPolicyConfig = {
  *     on, from a value the caller set successfully minutes earlier.
  *   - `decayIntervalMs` is handed to setInterval, which silently collapses
  *     anything above the signed 32-bit max to a 1ms delay: a "run yearly"
- *     typo becomes a hot loop.
+ *     typo becomes a hot loop. Enabled intervals must be whole milliseconds
+ *     of at least one second to avoid tiny-delay loops too.
  */
 const POLICY_RANGES = {
   halfLifeDays: { min: 0, max: 36_500, exclusiveMin: true },
   archiveThreshold: { min: 0, max: 1 },
-  decayIntervalMs: { min: 0, max: 2_147_483_647 },
+  decayIntervalMs: { min: 1000, max: 2_147_483_647, integer: true },
   batchSize: { min: 1, max: 100_000, integer: true },
   importanceDecayRate: { min: 0, max: 1 },
   importanceFloor: { min: 0, max: 1 },
@@ -235,6 +236,8 @@ function assertProtectionRule(rule: unknown, index: number): void {
 
 function assertValidPolicy(policy: DecayPolicyConfig): void {
   for (const [field, range] of Object.entries(POLICY_RANGES)) {
+    // Zero explicitly disables the timer; enabled intervals use the range above.
+    if (field === 'decayIntervalMs' && policy.decayIntervalMs === 0) continue;
     assertNumberInRange(LABEL, field, policy[field as keyof typeof POLICY_RANGES], range as NumericRange);
   }
   for (const [field, range] of Object.entries(CONSOLIDATION_RANGES)) {
