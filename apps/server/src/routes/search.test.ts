@@ -26,7 +26,9 @@ beforeAll(async () => {
   vi.stubEnv('ENGRAM_DB_PATH', join(directory, 'test.db'));
   vi.stubEnv('ENGRAM_SYNC_URL', '');
   vi.stubEnv('ENGRAM_DECAY_INTERVAL', '0');
-  vi.stubEnv('ENGRAM_NAMESPACE_MODE', 'filter');
+  // `none`, as the REST server runs by default: explicit namespace/global are
+  // exact scopes. (filter with no namespace is global-only and would hide /code/api.)
+  vi.stubEnv('ENGRAM_NAMESPACE_MODE', 'none');
   vi.stubEnv('ENGRAM_NAMESPACE', '');
   const mod = await import('../index.ts');
   brain = mod.brain;
@@ -156,9 +158,9 @@ describe('POST /api/recall/explain', () => {
     expect(global.json().items.map((item: { id: string }) => item.id).sort()).toEqual([...globalIds].sort());
     const empty = await app.inject({ method: 'POST', url, payload: { query: 'query', types: ['semantic'] } });
     expect(empty.json()).toMatchObject({ context: '', items: [], candidates: 0, budget: { maxTokens: 2000, usedTokens: 0 } });
-    // Source-null records retain recall's existing pass-through semantics.
+    // A sources filter excludes records with no source.
     const source = await app.inject({ method: 'POST', url, payload: { query: 'query', sources: ['missing'], ...filters } });
-    expect(source.json().items.map((item: { id: string }) => item.id)).toEqual([matchingId]);
+    expect(source.json().items.map((item: { id: string }) => item.id)).toEqual([]);
   });
 
   it('reports budget omissions and rejects isolated cross-namespace requests', async () => {

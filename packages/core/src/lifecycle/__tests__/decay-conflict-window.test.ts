@@ -101,7 +101,9 @@ describe('decay sweep — conflict window', () => {
     await brain.runDecaySweep(false);
     const rows = selectMemoriesBatch(getDb(), { ts: cursor, id: null }, 500, getDeviceId());
     expect(rows.map((row) => row.id)).toContain(memory.id);
-    expect(countPendingPush(getDb(), cursor, 500, getDeviceId())).toBeGreaterThan(0);
+    // The pending count reads exactly after the cursor (no overlap), so a
+    // backdated decay write is re-sent by the overlap but not counted as pending.
+    expect(countPendingPush(getDb(), cursor, 500, getDeviceId())).toBe(0);
   });
 
   it('defaults the conflict window when a policy omits it', () => {
