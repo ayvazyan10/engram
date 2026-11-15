@@ -59,7 +59,7 @@ describe('GET /api/graph/edges', () => {
     const res = await app.inject({ method: 'GET', url: '/api/graph/edges?minStrenght=0.9' });
     expect(res.statusCode).toBe(400);
     expect(res.json().message).toContain('minStrenght');
-    expect(res.json().message).toContain('Allowed: minStrength, limit.');
+    expect(res.json().message).toContain('Allowed: minStrength, limit, global.');
   });
 
   it('names every unknown parameter, not just the first', async () => {
@@ -82,7 +82,7 @@ describe.each([
   ['/api/contradictions', '/api/contradictions?limit=5', 'limit, offset, namespace, global'],
   ['/api/reflections', '/api/reflections?limit=5', 'limit, type'],
   ['/api/webhooks', '/api/webhooks?activeOnly=true', 'activeOnly'],
-  ['/api/analytics', '/api/analytics?days=7', 'days'],
+  ['/api/analytics', '/api/analytics?days=7', 'days, global'],
 ])('%s', (_route, validUrl, allowed) => {
   it('accepts its documented parameters', async () => {
     const res = await app.inject({ method: 'GET', url: validUrl });
