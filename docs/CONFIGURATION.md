@@ -30,12 +30,12 @@ One database file is shared by default: `~/.engram/engram.db`. Core, the MCP ser
 
 `ENGRAM_NAMESPACE_MODE` values:
 
-- `project` (default when unset): inside a git repository, scopes to the absolute git top-level path. It behaves like `filter`: reads return the project's own memories plus global (NULL namespace) memories. Outside a git repository it uses the shared pool (`none`). An explicit `ENGRAM_NAMESPACE` wins. `engram setup` writes `project`.
+- `project` (default when unset): inside a git repository, scopes to the absolute git top-level path. It behaves like `filter`: reads return the project's own memories plus global (NULL namespace) memories. Outside a git repository it uses `filter` scoped to the resolved current working directory. An explicit `ENGRAM_NAMESPACE` wins. `engram setup` writes `project`.
 - `none`: reads are not scoped. A memory stored with an explicit namespace keeps it; one stored without a namespace goes to the shared pool (NULL).
 - `filter`: the configured namespace scopes normal reads and writes, while per-memory overrides and `crossNamespace` remain available.
 - `isolated`: `ENGRAM_NAMESPACE` is required; overrides and cross-namespace search are rejected.
 
-The REST server and dashboard always run as `none`, so they see every project.
+In `project` mode, the REST server and dashboard run as `none`, so they see every project; configured `filter` and `isolated` modes also apply to the server.
 
 Existing memories have a NULL namespace and stay global: every project can read them. A `filter` or `project` client can read other projects only with `crossNamespace: true`. It can never forget, update, tag or resolve another project's memories; its own and global memories it can. `store_memory` with `global: true` stores a memory for all projects — use it for preferences, identity and working style — and is rejected in `isolated` mode.
 

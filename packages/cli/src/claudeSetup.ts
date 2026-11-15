@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { isDeepStrictEqual } from 'node:util';
 
 export const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 export const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
@@ -157,6 +158,7 @@ export function writeConfigFile(file: string, contents: string, now: Date = new 
 }
 
 export function writeJsonConfig(file: string, data: Record<string, unknown>, now: Date = new Date()): string | null {
+  if (fs.existsSync(file) && isDeepStrictEqual(readJson(file), data)) return null;
   return writeConfigFile(file, JSON.stringify(data, null, 2) + '\n', now);
 }
 
@@ -177,8 +179,10 @@ export function renderHook(
   templateBody: string, apiBase: string, repoPath = '', dbPath = '',
   mcpEnv: Readonly<Record<string, string>> = { ENGRAM_DB_PATH: dbPath, ENGRAM_SOURCE: 'claude-code' },
 ): string {
-  return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__|__MCP_ENV__/g, (placeholder) => {
+  return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__|__MCP_ENV__|__NAMESPACE_MODE__|__NAMESPACE__/g, (placeholder) => {
     if (placeholder === '__API_BASE__') return apiBase;
+    if (placeholder === '__NAMESPACE_MODE__') return quoteHookCommand(mcpEnv['ENGRAM_NAMESPACE_MODE'] || 'project');
+    if (placeholder === '__NAMESPACE__') return quoteHookCommand(mcpEnv['ENGRAM_NAMESPACE'] || '');
     if (placeholder === '__MCP_ENV__') {
       return Object.entries(mcpEnv).map(([key, value]) => quoteHookCommand(`${key}=${value}`)).join(' ');
     }

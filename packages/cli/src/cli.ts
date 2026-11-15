@@ -14,7 +14,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
-import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid } from './serverControl.js';
+import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, connectHost } from './serverControl.js';
 import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, configObject, readJson, claudeHookCommands } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
@@ -102,7 +102,8 @@ function saveConfig(config: EngramConfig): void {
 
 function getApiBase(): string {
   const config = loadConfig();
-  return `http://${config.host}:${config.port}`;
+  const host = connectHost(config.host);
+  return `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
 }
 
 /** Delete the pidfile only when it still contains the given pid. */
@@ -292,7 +293,7 @@ program
     // without manual approval, plus recall/session-start/session-end hooks for a local install.
     if (opts.claudeHooks !== false) {
       step('Setting up Claude Code auto-memory...');
-      setupClaudeCode(config, engramServer, !opts.npx, HOOKS_DIR, CLAUDE_PATHS, skipped);
+      setupClaudeCode(config, engramServer, !opts.npx, HOOKS_DIR, CLAUDE_PATHS, skipped, opts.mcp !== false);
     }
 
     if (skipped.length > 0) {

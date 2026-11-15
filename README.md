@@ -308,7 +308,7 @@ Restart your AI client. **15 tools** are visible by default; **11 admin tools** 
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.35 by default (calibrated for the multilingual model). SessionEnd uses importance 0.3 and skips `clear`/`resume`. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
+Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.35 by default (calibrated for the multilingual model). SessionEnd uses importance 0.3 and skips `clear`/`resume`. Hooks honour the configured namespace mode. In `project` mode, SessionEnd stores under the absolute git project root and recall combines that project's memories with shared memories; outside git, they use the resolved current working directory as the namespace. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
 
 Add a Claude Code hook to automatically save conversation summaries to engram when a session ends:
 
@@ -407,7 +407,7 @@ Download `engram-mcp.mcpb` from [GitHub Releases](https://github.com/ayvazyan10/
 | `ENGRAM_MAX_BODY_BYTES` | `10485760` | Ceiling on a proxied request body; over it the proxy answers `413`. |
 | `ENGRAM_TOOL_RETRY` | `true` | Auto-retry failed tool calls once with an instruction (proxy) |
 
-`project` is the default: inside a git repository the MCP server and hooks scope to the absolute git top-level path and read that project's memories plus global ones; outside a repository they use the shared pool. `filter` scopes to `ENGRAM_NAMESPACE`, and `isolated` together with `ENGRAM_NAMESPACE` is a fixed boundary that rejects overrides and cross-namespace queries. The REST server and dashboard always run as `none` and see every project. Existing memories have a NULL namespace and stay global.
+`project` is the default: inside a git repository the MCP server and hooks scope to the absolute git top-level path and read that project's memories plus global ones; outside a repository they use `filter` scoped to the resolved current working directory. `filter` scopes to `ENGRAM_NAMESPACE`, and `isolated` together with `ENGRAM_NAMESPACE` is a fixed boundary that rejects overrides and cross-namespace queries. In `project` mode, the REST server and dashboard run as `none` and see every project; configured `filter` and `isolated` modes also apply to the server. Existing memories have a NULL namespace and stay global.
 
 This is a summary. [docs/CONFIGURATION.md](docs/CONFIGURATION.md) has the full list, including everything under [Security](docs/CONFIGURATION.md#security). Note that `engram start` derives the server's environment from `~/.engram/config.json`, so shell variables it manages are overridden — see the [CLI section](docs/CONFIGURATION.md#cli-packagescli).
 

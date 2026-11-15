@@ -100,6 +100,7 @@ function takeString(
 ): string {
   const value = stored[key];
   if (value === undefined) return fallback;
+  if (key === 'embeddingModel' && value === '') return '';
   if (typeof value === 'string' && value.length > 0) return value;
   problems.push(`config: ${key} is not a non-empty string — using ${fallback}`);
   return fallback;

@@ -14,6 +14,7 @@
 # other namespace, which is the opposite of what isolation is for.
 
 set -e
+command -v jq >/dev/null 2>&1 || exit 0
 
 INPUT=$(cat)
 TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // empty')
@@ -25,11 +26,9 @@ SUMMARY=$(jq -r '
   select(.type == "assistant")
   | .message.content
   | if type == "array" then map(select(.type == "text") | .text) | join(" ") else . end
-' "$TRANSCRIPT_PATH" 2>/dev/null | tail -c 2000 | tr '\n' ' ' | sed 's/"/\\"/g')
+' "$TRANSCRIPT_PATH" 2>/dev/null | jq -Rrs '.[-1500:] | gsub("\n"; " ")')
 
 [ ${#SUMMARY} -lt 20 ] && exit 0
-
-SUMMARY="${SUMMARY:0:1500}"
 
 CONFIG_PATH="${ENGRAM_HOME:-$HOME/.engram}/config.json"
 

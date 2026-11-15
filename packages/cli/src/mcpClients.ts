@@ -135,26 +135,150 @@ export function mcpServerConfig(config: EngramConfig, source: string, useNpx = f
     : { command: 'node', args: [path.resolve(config.repoPath, 'packages', 'mcp', 'dist', 'server.js')], env };
 }
 
-export const CODEX_ENGRAM_TABLE = /^[ \t]*\[\s*(?:mcp_servers|"mcp_servers"|'mcp_servers')\s*\.\s*(?:engram|"engram"|'engram')\s*(?:\.|\])/m;
+/** Read statement boundaries without mistaking multiline values for tables. */
+function codexTomlStatements(lines: string[]) {
+  const statements: {
+    start: number; end: number; header: boolean; path: string[]; table: string[]; comments: string[];
+  }[] = [];
+  let table: string[] = [];
+  let quote = '';
+  let depth = 0;
+  let start = -1;
+  let firstLine = '';
+  let keyEnd = -1;
+  let comments: string[] = [];
+  for (let row = 0; row < lines.length; row++) {
+    const line = lines[row]!;
+    if (start < 0) {
+      if (/^\s*(?:#.*)?$/.test(line)) continue;
+      start = row;
+      firstLine = line;
+      keyEnd = -1;
+      comments = [];
+    }
+    for (let col = 0; col < line.length; col++) {
+      const char = line[col]!;
+      if (quote) {
+        if (quote[0] === '"' && char === '\\') { col++; continue; }
+        if (line.startsWith(quote, col)) {
+          if (quote.length === 3) {
+            // A multiline string can end with one or two extra literal quotes.
+            while (line[col + 1] === quote[0]) col++;
+          }
+          quote = '';
+        }
+        continue;
+      }
+      if (char === '#') {
+        comments.push(line.slice(col));
+        if (row === start) firstLine = line.slice(0, col);
+        break;
+      }
+      if (char === '"' || char === "'") {
+        quote = line.startsWith(char.repeat(3), col) ? char.repeat(3) : char;
+        col += quote.length - 1;
+      } else if (char === '[' || char === '{') depth++;
+      else if (char === ']' || char === '}') depth--;
+      else if (char === '=' && row === start && keyEnd < 0) keyEnd = col;
+    }
+    if (quote || depth !== 0) continue;
+    const text = firstLine.trim();
+    const header = text.startsWith('[');
+    const rawPath = header ? text.slice(text.startsWith('[[') ? 2 : 1, text.endsWith(']]') ? -2 : -1)
+      : lines[start]!.slice(0, keyEnd);
+    if (!header && keyEnd < 0) throw new Error('Cannot update Codex config: unrecognised TOML statement');
+    const parts = rawPath.match(/[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'/g) ?? [];
+    const keyPath = parts.map((part) => part.startsWith('"') ? JSON.parse(part) as string
+      : part.startsWith("'") ? part.slice(1, -1) : part);
+    if (header) table = keyPath;
+    statements.push({ start, end: row, header, path: keyPath, table, comments });
+    start = -1;
+  }
+  if (start >= 0) throw new Error('Cannot update Codex config: unterminated TOML string or array');
+  return statements;
+}
 
-/** Replace only Engram tables, including separated child tables. */
+/** Include inline/dotted registrations when doctor checks for Engram. */
+export function hasCodexMcp(contents: string): boolean {
+  return codexTomlStatements(contents.split(/\r?\n/)).some((statement) => {
+    const keyPath = statement.header ? statement.path : [...statement.table, ...statement.path];
+    return keyPath[0] === 'mcp_servers' && keyPath[1] === 'engram';
+  });
+}
+
+/** Update managed values in place, preserving other keys and comments. */
 export function upsertCodexMcp(contents: string, server: McpServerConfig): string {
   const newline = contents.includes('\r\n') ? '\r\n' : '\n';
+  const lines = contents.split(/\r?\n/);
+  const statements = codexTomlStatements(lines);
+  for (const statement of statements) {
+    if (statement.header) continue;
+    const keyPath = [...statement.table, ...statement.path];
+    if (keyPath[0] === 'mcp_servers' && (keyPath[1] === 'engram' && statement.table.length < 2
+      || statement.table.length === 0 && statement.path.length === 1)) {
+      throw new Error('Cannot update Codex config: Engram or mcp_servers is defined inline or with dotted keys. Move Engram to [mcp_servers.engram] before running setup.');
+    }
+  }
   const env = Object.entries(server.env).map(([key, value]) => `${JSON.stringify(key)} = ${JSON.stringify(value)}`);
-  const table = [
-    '[mcp_servers.engram]',
-    `command = ${JSON.stringify(server.command)}`,
-    `args = [${server.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
-    `env = { ${env.join(', ')} }`, '',
-  ].join(newline);
-  let replaced = false;
-  const next = contents.split(/(?=^[ \t]*\[)/m).map((section) => {
-    if (!CODEX_ENGRAM_TABLE.test(section)) return section;
-    const replacement = replaced ? '' : table + newline;
-    replaced = true;
-    return replacement;
-  }).join('');
-  return replaced ? next : next + (next.endsWith(newline + newline) || !next ? ''
+  const managed = new Map([
+    ['command', JSON.stringify(server.command)],
+    ['args', `[${server.args.map((arg) => JSON.stringify(arg)).join(', ')}]`],
+    ['env', `{ ${env.join(', ')} }`],
+  ]);
+  const engram = statements.filter((s) => s.table[0] === 'mcp_servers' && s.table[1] === 'engram');
+  const root = engram.find((s) => s.header && s.table.length === 2);
+  const envTable = engram.find((s) => s.header && s.table.length === 3 && s.table[2] === 'env');
+  const dottedEnv = engram.some((s) => !s.header && s.table.length === 2 && s.path.length === 2 && s.path[0] === 'env');
+  const envValues = new Map(Object.entries(server.env).map(([key, value]) => [key, JSON.stringify(value)]));
+  if (envTable || dottedEnv) managed.delete('env');
+  const replacements = new Map<number, { end: number; lines: string[] }>();
+  const insertions = new Map<number, string[]>();
+  const replace = (statement: (typeof statements)[number], key: string, value: string) => {
+    replacements.set(statement.start, {
+      end: statement.end,
+      lines: [`${key} = ${value}${statement.comments[0] ? ` ${statement.comments[0]}` : ''}`, ...statement.comments.slice(1)],
+    });
+  };
+  for (const statement of engram) {
+    if (statement.header) continue;
+    const key = statement.path[0]!;
+    if (statement.table.length === 2 && statement.path.length === 1 && managed.has(key)) {
+      replace(statement, key, managed.get(key)!);
+      managed.delete(key);
+    } else {
+      const envKey = statement.table.length === 3 && statement.table[2] === 'env' && statement.path.length === 1 ? key
+        : statement.table.length === 2 && statement.path.length === 2 && key === 'env' ? statement.path[1] : undefined;
+      if (envKey !== undefined && envValues.has(envKey)) {
+        replace(statement, `${statement.table.length === 2 ? 'env.' : ''}${JSON.stringify(envKey)}`, envValues.get(envKey)!);
+        envValues.delete(envKey);
+      }
+    }
+  }
+  const insert = (header: (typeof statements)[number], additions: string[]) => {
+    if (!additions.length) return;
+    let at = statements.find((s) => s.header && s.start > header.start)?.start ?? lines.length;
+    // Leave a comment/blank block attached to the following table.
+    while (at > header.end + 1 && /^\s*(?:#.*)?$/.test(lines[at - 1]!)) at--;
+    insertions.set(at, [...(insertions.get(at) ?? []), ...additions]);
+  };
+  const additions = [...managed].map(([key, value]) => `${key} = ${value}`);
+  if (envTable) insert(envTable, [...envValues].map(([key, value]) => `${JSON.stringify(key)} = ${value}`));
+  else if (dottedEnv) additions.push(...[...envValues].map(([key, value]) => `env.${JSON.stringify(key)} = ${value}`));
+  if (root) insert(root, additions);
+  const output: string[] = [];
+  for (let row = 0; row < lines.length; row++) {
+    output.push(...(insertions.get(row) ?? []));
+    const replacement = replacements.get(row);
+    if (replacement) {
+      output.push(...replacement.lines);
+      row = replacement.end;
+    } else output.push(lines[row]!);
+  }
+  output.push(...(insertions.get(lines.length) ?? []));
+  const next = output.join(newline);
+  if (root) return next;
+  const table = ['[mcp_servers.engram]', ...additions, ''].join(newline);
+  return next + (next.endsWith(newline + newline) || !next ? ''
     : next.endsWith(newline) ? newline : newline + newline) + table + newline;
 }
 

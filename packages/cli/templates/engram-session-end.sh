@@ -9,6 +9,11 @@
 # Tunables: ENGRAM_API.
 
 ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
+NAMESPACE_MODE=__NAMESPACE_MODE__
+PROJECT=__NAMESPACE__
+# An older `engram update` leaves these two unrendered: behave as project mode.
+[ "$NAMESPACE_MODE" = "__NAMESPACE""_MODE__" ] && NAMESPACE_MODE=project
+[ "$PROJECT" = "__NAME""SPACE__" ] && PROJECT=""
 
 command -v jq >/dev/null 2>&1 || { printf '%s\n' 'Engram session-end hook requires jq' >&2; exit 0; }
 
@@ -17,8 +22,22 @@ INPUT=$(cat) || exit 0
 REASON=$(printf '%s' "$INPUT" | jq -r '.reason | if . == null then "" elif type == "string" then . else error("invalid reason") end') || exit 0
 case "$REASON" in clear|resume) exit 0 ;; esac
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd | if . == null then "" elif type == "string" then . else error("invalid cwd") end') || exit 0
-PROJECT=""
-[ -n "$CWD" ] && { PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""; }
+case "$NAMESPACE_MODE" in
+  project)
+    if [ -z "$PROJECT" ]; then
+      CWD=$(cd -- "${CWD:-.}" 2>/dev/null && pwd -L) || exit 0
+      if command -v timeout >/dev/null 2>&1; then
+        PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+      else
+        PROJECT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+      fi
+      [ -n "$PROJECT" ] || PROJECT="$CWD"
+    fi
+    ;;
+  filter|isolated) ;;
+  none) PROJECT="" ;;
+  *) exit 0 ;;
+esac
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id | if . == null then "" elif type == "string" then . else error("invalid session_id") end') || exit 0
 TRANSCRIPT=$(printf '%s' "$INPUT" | jq -er '.transcript_path | if type == "string" then . else error("invalid transcript_path") end') || exit 0
 
@@ -31,11 +50,11 @@ SUMMARY=$(jq -r '
   | if type == "array" then map(select(.type == "text") | .text
       | if type == "string" then . else error("invalid assistant text") end) | join(" ")
     elif type == "string" then . else error("invalid assistant content") end
-' "$TRANSCRIPT" | jq -Rrs '.[-2000:] | gsub("\n"; " ") | .[:1500]') || exit 0
+' "$TRANSCRIPT" | jq -Rrs '.[-1500:] | gsub("\n"; " ")') || exit 0
 
 [ "${#SUMMARY}" -lt 20 ] && exit 0
 
-# jq builds the body, omitting namespace outside git.
+# jq builds the body, including the namespace selected by the configured mode.
 BODY=$(jq -n --arg c "Claude Code session ${SESSION_ID:-unknown}: ${SUMMARY}" --arg ns "$PROJECT" '
   {content:$c, type:"episodic", source:"claude-code", importance:0.3,
    tags:["session","session-summary","auto-stored","pending-distill"]}

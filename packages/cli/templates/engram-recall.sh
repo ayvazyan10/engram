@@ -12,14 +12,33 @@
 
 ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
 MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.35}"
+NAMESPACE_MODE=__NAMESPACE_MODE__
+PROJECT=__NAMESPACE__
+# An older `engram update` leaves these two unrendered: behave as project mode.
+[ "$NAMESPACE_MODE" = "__NAMESPACE""_MODE__" ] && NAMESPACE_MODE=project
+[ "$PROJECT" = "__NAME""SPACE__" ] && PROJECT=""
 
 command -v jq >/dev/null 2>&1 || { printf '%s\n' 'Engram recall hook requires jq' >&2; exit 0; }
 
 set -o pipefail
 INPUT=$(cat) || exit 0
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd | if . == null then "" elif type == "string" then . else error("invalid cwd") end') || exit 0
-PROJECT=""
-[ -n "$CWD" ] && { PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""; }
+case "$NAMESPACE_MODE" in
+  project)
+    if [ -z "$PROJECT" ]; then
+      CWD=$(cd -- "${CWD:-.}" 2>/dev/null && pwd -L) || exit 0
+      if command -v timeout >/dev/null 2>&1; then
+        PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+      else
+        PROJECT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+      fi
+      [ -n "$PROJECT" ] || PROJECT="$CWD"
+    fi
+    ;;
+  filter|isolated) ;;
+  none) PROJECT="" ;;
+  *) exit 0 ;;
+esac
 PROMPT=$(printf '%s' "$INPUT" | jq -er '.prompt | if type == "string" then . else error("invalid prompt") end') || exit 0
 
 # Skip trivial prompts, slash-commands and bash passthrough (!).
@@ -31,7 +50,7 @@ BODY=$(jq -n --arg q "$PROMPT" --arg ns "$PROJECT" '
 RES=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/recall" \
   -H "Content-Type: application/json" -d "$BODY") || exit 0
 [ -z "$RES" ] && exit 0
-if [ -n "$PROJECT" ]; then
+if [ -n "$PROJECT" ] && [ "$NAMESPACE_MODE" != isolated ]; then
   BODY=$(jq -n --arg q "$PROMPT" '{query:$q, maxTokens:600, global:true, touch:false}') || exit 0
   GLOBAL=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/recall" \
     -H "Content-Type: application/json" -d "$BODY") || exit 0
