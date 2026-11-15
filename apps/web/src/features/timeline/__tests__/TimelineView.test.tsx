@@ -113,6 +113,10 @@ describe('TimelineView', () => {
     expect(await screen.findByText(/^3 memories in All projects, newest first/)).toBeInTheDocument();
   });
 
+  /** Rows by their text, read straight off the DOM: role queries over a full
+   *  page of rows compute every accessible name and take seconds in jsdom. */
+  const rowsMatching = (re: RegExp) => [...document.querySelectorAll<HTMLElement>('.mm-row')].filter((el) => re.test(el.textContent ?? ''));
+
   it('pages older memories beneath the first page, pinned to its newest instant', async () => {
     const first = page(PAGE_SIZE);
     vi.mocked(api.listMemories)
@@ -120,17 +124,17 @@ describe('TimelineView', () => {
       .mockResolvedValueOnce({ count: 2, memories: [...first.slice(-1), ...page(1, Date.parse('2026-10-01T00:00:00.000Z'), 'old')] });
     render(<TimelineView />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
+    fireEvent.click(await screen.findByText('Load older', { selector: 'button' }));
     await waitFor(() => expect(api.listMemories).toHaveBeenNthCalledWith(2, {
       limit: PAGE_SIZE,
       offset: PAGE_SIZE,
       before: '2026-10-19T12:00:00.001Z',
       namespace: undefined,
     }));
-    expect(screen.getByRole('button', { name: /memory old0/ })).toBeInTheDocument();
+    await waitFor(() => expect(rowsMatching(/memory old0\b/)).toHaveLength(1));
     // The repeated row from the page boundary is listed once.
-    expect(screen.getAllByRole('button', { name: new RegExp(`memory ${first.at(-1)!.id}\\b`) })).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: 'Load older' })).not.toBeInTheDocument();
+    expect(rowsMatching(new RegExp(`memory ${first.at(-1)!.id}\\b`))).toHaveLength(1);
+    expect(screen.queryByText('Load older', { selector: 'button' })).not.toBeInTheDocument();
   });
 
   it('leaves archived rows out of the next page\'s offset, since the server no longer lists them', async () => {
@@ -142,7 +146,7 @@ describe('TimelineView', () => {
       .mockResolvedValueOnce({ count: 1, memories: page(1, Date.parse('2026-10-01T00:00:00.000Z'), 'old') });
     render(<TimelineView />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Load older' }));
+    fireEvent.click(await screen.findByText('Load older', { selector: 'button' }));
     await waitFor(() => expect(api.listMemories).toHaveBeenNthCalledWith(2, {
       limit: PAGE_SIZE,
       offset: PAGE_SIZE - 1,

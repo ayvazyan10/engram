@@ -117,7 +117,7 @@ describe('Review API', () => {
       for (const query of ['global=true', 'namespace=alpha&global=true']) {
         const response = await get(`/api/review/summary?${query}`);
         expect(response.statusCode).toBe(400);
-        expect(response.json().error).toBe('global access is not allowed in isolated mode');
+        expect(response.json()).toMatchObject({ error: 'Bad Request', message: 'global access is not allowed in isolated mode' });
       }
       expect((await post('/api/review/dismiss', { queue: 'secrets', ids: ['b1'] })).statusCode).toBe(404);
       expect((await post('/api/memory/b1/redact', {})).statusCode).toBe(404);
