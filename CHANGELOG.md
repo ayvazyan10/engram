@@ -9,6 +9,24 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-11-21
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.13.0, and the Claude Desktop extension bundle 0.13.0. Private workspace versions unchanged.
+
+### Added
+
+- **Agents offer `engram update`.** When a newer release is on master (checked at most once a day), the SessionStart hook and the MCP server instructions tell the agent to offer the user an update.
+- **Stale MCP server warning.** MCP clients keep the Engram server alive for days, and `/clear` does not restart it. SessionStart now says when this session's MCP server predates the installed build, and when the HTTP server does. `engram update` lists the servers still running the old build.
+
+### Changed
+
+- **Auto-recall prefers nothing to noise.** The UserPromptSubmit hook no longer injects raw `User: … Assistant: …` transcripts of any type, or other clients' episodes. The default gate is now 0.5 (override with `ENGRAM_RECALL_MIN_SIM`). Each line shows similarity and source, and the header says the recall already ran, so the agent calls `recall_context` only for targeted lookups.
+- **SessionStart injects pinned, handover or high-importance memories** of the exact project namespace, instead of a fuzzy search on the folder name and branch, and nothing when none qualify.
+
+### Fixed
+
+- **Vectors are only compared within their own embedding model.** Procedural trigger search scored rows of any model against the query. Rows without a model stamp stay out of vector scoring until `re_embed`, and `engram stats` / `engram status` list per-model counts when a store holds more than one model.
+
 ## [0.12.3] — 2026-11-15
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.12.3 (core and mcp republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.12.3. Private workspace versions unchanged.
