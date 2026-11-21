@@ -60,6 +60,11 @@ PROMPT=$(printf '%s' "$INPUT" | jq -er '.prompt | if type == "string" then . els
 # Skip trivial prompts, slash-commands and bash passthrough (!).
 [ "${#PROMPT}" -lt 12 ] && exit 0
 case "$PROMPT" in /*|!*) exit 0 ;; esac
+# Messages from other sessions, subagents and background tasks are not the
+# user's prompt; their wrapper (sender names, paths) skews similarity too.
+# The host may put a line of its own before the tag, so look at the head.
+WRAPPER='<(cross-session-message|agent-message|task-notification)[[:space:]>]'
+[[ "${PROMPT:0:300}" =~ $WRAPPER ]] && exit 0
 
 # Search returns the stored tags and raw cosine score. Recall drops the tags.
 BODY=$(jq -cn --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE" --argjson min "$MIN_SIM" '
