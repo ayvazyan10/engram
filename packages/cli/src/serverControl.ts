@@ -6,8 +6,36 @@
  */
 
 import net from 'net';
+import path from 'path';
+import { statSync } from 'fs';
 import { execFileSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
+
+/** Direct node invocations of the checkout's entrypoints that predate their build. */
+export function staleServerPids(repoPath: string, restartedPid?: number): number[] {
+  if (process.platform !== 'linux' && process.platform !== 'darwin') return [];
+  const scripts = ['packages/mcp/dist/server.js', 'apps/server/dist/index.js'].map(
+    script => path.resolve(repoPath, script),
+  );
+  const output = execFileSync('ps', ['-eo', 'pid=,etime=,args=', '-ww'], {
+    encoding: 'utf8', timeout: 1500, maxBuffer: 16 * 1024 * 1024,
+  });
+  const now = Date.now();
+  const stale: number[] = [];
+  for (const line of output.split('\n')) {
+    // ps etime is [[DD-]HH:]MM:SS on both Linux and macOS.
+    const row = /^\s*(\d+)\s+(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s+(?:\S*\/)?node(?:js)?\s+(?:--[\w-]+(?:=\S+)?\s+)*(?:--\s+)?(.+)$/.exec(line);
+    if (!row) continue;
+    const [, pid, days, hours, minutes, seconds, args] = row;
+    if (Number(pid) === restartedPid) continue;
+    const script = scripts.find(file => args === file || args?.startsWith(file + ' '));
+    if (!script) continue;
+    const totalHours = Number(days ?? 0) * 24 + Number(hours ?? 0);
+    const elapsed = (totalHours * 60 + Number(minutes)) * 60 + Number(seconds);
+    if (now - elapsed * 1000 < statSync(script).mtimeMs) stale.push(Number(pid));
+  }
+  return stale;
+}
 
 /** 0.0.0.0 / :: are bind addresses, not connectable — map them to loopback. */
 export function connectHost(host: string): string {

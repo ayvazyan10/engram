@@ -18,6 +18,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { NeuralBrain, SyncEngine, redactSyncUrl, resolveDbPath } from '@engram-ai-memory/core';
 import fs from 'fs';
 import path from 'path';
+import { cachedUpdateNotice } from './versionNotice.js';
 import { registerTools } from './tools.js';
 import { resolveNamespaceSettings } from './namespaceEnv.js';
 import { readSyncSettings, syncEngineConfig } from './syncSettings.js';
@@ -75,25 +76,31 @@ const syncUrl = syncSettings.syncUrl;
 
 let syncEngine: SyncEngine | null = null;
 
-const server = new McpServer(
-  {
-    name: 'engram',
-    version: VERSION,
-  },
-  {
-    instructions: [
-      'Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user\'s explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.',
-      '- Recall when prior decisions or project history would help: recall_context for broad context, search_memory for a specific fact. Recalled memories can be stale — verify before relying on them.',
-      '- Store durable facts worth keeping beyond this session: decisions and their reasons, conventions, fixes, user preferences. Not routine chatter. Follow the user\'s wishes about what to store.',
-      '- Memories are scoped to the current project by default. Use global: true only for facts about the user that hold in every project.',
-      '- Correct a stale fact with update_memory (by id); retire one with forget.',
-    ].join('\n'),
-  }
-);
+let server: McpServer;
 
-registerTools(server, brain, ensureInitialized, {
-  notifyWrite: () => syncEngine?.notifyWrite(),
-});
+function createServer(notice: string): McpServer {
+  const server = new McpServer(
+    {
+      name: 'engram',
+      version: VERSION,
+    },
+    {
+      instructions: [
+        'Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user\'s explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.',
+        '- Recall when prior decisions or project history would help: recall_context for broad context, search_memory for a specific fact. Recalled memories can be stale — verify before relying on them.',
+        '- Store durable facts worth keeping beyond this session: decisions and their reasons, conventions, fixes, user preferences. Not routine chatter. Follow the user\'s wishes about what to store.',
+        '- Memories are scoped to the current project by default. Use global: true only for facts about the user that hold in every project.',
+        '- Correct a stale fact with update_memory (by id); retire one with forget.',
+        notice,
+      ].filter(Boolean).join('\n'),
+    }
+  );
+
+  registerTools(server, brain, ensureInitialized, {
+    notifyWrite: () => syncEngine?.notifyWrite(),
+  });
+  return server;
+}
 
 // ─── Initialization ───────────────────────────────────────────────────────────
 
@@ -155,6 +162,10 @@ async function shutdown(signal: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const notice = await cachedUpdateNotice();
+  server = createServer(notice);
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Engram MCP server running on stdio');
@@ -183,12 +194,11 @@ if (require.main === module) {
     console.error('[engram-mcp] uncaught exception:', err);
   });
 
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
-
   main().catch((err: unknown) => {
     console.error('Fatal error:', err);
     process.exit(1);
   });
+} else {
+  server = createServer('');
 }
 /* v8 ignore stop */

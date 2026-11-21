@@ -14,7 +14,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
-import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, connectHost } from './serverControl.js';
+import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, connectHost, staleServerPids } from './serverControl.js';
 import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, configObject, readJson, claudeHookCommands } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
@@ -604,8 +604,9 @@ program
     try {
       const health = await api<{ uptime: number }>('GET', '/api/health');
       console.log(`  Uptime:  ${Math.round(health.uptime)}s`);
-      const stats = await api<{ total: number; byType: Record<string, number> }>('GET', '/api/stats');
+      const stats = await api<BrainStats>('GET', '/api/stats');
       console.log(`  Memories: ${stats.total} (E:${stats.byType.episodic ?? 0} S:${stats.byType.semantic ?? 0} P:${stats.byType.procedural ?? 0})`);
+      printMixedEmbeddingModels(stats);
     } catch { warn('Could not reach API'); }
 
     if (fs.existsSync(config.dbPath)) {
@@ -996,6 +997,7 @@ program
       degraded.push('the global engram command was not updated — it still runs the previous version');
     }
 
+    let restartedPid: number | undefined;
     if (opts.restart !== false) {
       const { running, pid } = isServerRunning();
       if (running) {
@@ -1050,6 +1052,7 @@ program
           const result = await awaitServerHealthy(child, config.host, config.port, { attempts: 20 });
 
           if (result.healthy) {
+            restartedPid = child.pid;
             ok(`Server restarted (PID ${child.pid})`);
           } else {
             releasePidFileIfOwnedBy(child.pid);
@@ -1084,6 +1087,14 @@ program
       // Nothing was pulled — this run existed to finish a build that had not
       // completed, and saying "updated" would misdescribe it.
       : `\n${B}${G}  Engram rebuilt${newRev ? ` at ${newRev}` : ''}${X}\n`);
+    try {
+      const pids = staleServerPids(repoPath, restartedPid);
+      if (pids.length) {
+        warn(`Still running the previous build: PID ${pids.join(', ')} — restart the client(s) that started them (for HTTP, run ${C}engram stop${X} then ${C}engram start${X}).`);
+      }
+    } catch (err) {
+      warn(`Could not check for servers running the previous build: ${err instanceof Error ? err.message : String(err)}`);
+    }
   });
 
 // ─── store ───────────────────────────────────────────────────────────────────
@@ -1158,12 +1169,34 @@ program
 
 // ─── stats ───────────────────────────────────────────────────────────────────
 
+interface BrainStats {
+  total: number;
+  byType: Record<string, number>;
+  bySource: Record<string, number>;
+  graphNodes: number;
+  graphEdges: number;
+  namespace: string | null;
+  mixedEmbeddingModels?: {
+    counts: { model: string | null; count: number }[];
+    remediation: string;
+  };
+}
+
+function printMixedEmbeddingModels(stats: BrainStats): void {
+  if (!stats.mixedEmbeddingModels) return;
+  console.log('  Mixed embedding models');
+  for (const { model, count } of stats.mixedEmbeddingModels.counts) {
+    console.log(`    ${model ?? 'Unstamped (NULL)'}: ${count}`);
+  }
+  console.log(`  ${stats.mixedEmbeddingModels.remediation}`);
+}
+
 program
   .command('stats')
   .description('Show memory store statistics')
   .option('--json', 'Output as JSON')
   .action(async (opts) => {
-    const stats = await api<{ total: number; byType: Record<string, number>; bySource: Record<string, number>; graphNodes: number; graphEdges: number; indexSize: number; namespace: string | null }>('GET', '/api/stats');
+    const stats = await api<BrainStats>('GET', '/api/stats');
     if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
     console.log('Engram Brain Statistics');
     console.log('='.repeat(40));
@@ -1173,6 +1206,7 @@ program
     console.log(`  Procedural:${stats.byType.procedural ?? 0}`);
     console.log(`  Nodes:     ${stats.graphNodes}  Edges: ${stats.graphEdges}`);
     if (stats.namespace) console.log(`  Namespace: ${stats.namespace}`);
+    printMixedEmbeddingModels(stats);
     console.log('\nSources:');
     for (const [s, c] of Object.entries(stats.bySource)) console.log(`  ${s}: ${c}`);
   });
