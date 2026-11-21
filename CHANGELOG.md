@@ -9,6 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-11-21
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.13.1 (core and mcp republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.13.1. Private workspace versions unchanged.
+
+### Fixed
+
+- **Auto-recall skips messages that are not the user's prompt.** Messages from other sessions, subagent reports and background-task notifications reach the UserPromptSubmit hook too. Their wrapper (sender names, socket paths) pushed unrelated memories over the 0.5 gate, so the hook now injects nothing for them.
+
 ## [0.13.0] — 2026-11-21
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.13.0, and the Claude Desktop extension bundle 0.13.0. Private workspace versions unchanged.
