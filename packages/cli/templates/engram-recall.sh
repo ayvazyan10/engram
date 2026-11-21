@@ -8,17 +8,19 @@
 # Fail-open: any error (server down, slow, bad JSON) injects nothing and never
 # blocks the prompt. Relevance-gated so unrelated prompts stay clean.
 #
-# Tunables: ENGRAM_API, ENGRAM_RECALL_MIN_SIM.
+# Tunables: ENGRAM_API, ENGRAM_RECALL_MIN_SIM, ENGRAM_SOURCE.
 
 ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
-MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.35}"
+MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.5}"
+SOURCE="${ENGRAM_SOURCE:-claude-code}"
 NAMESPACE_MODE=__NAMESPACE_MODE__
 PROJECT=__NAMESPACE__
 # An older `engram update` leaves these two unrendered: behave as project mode.
 [ "$NAMESPACE_MODE" = "__NAMESPACE""_MODE__" ] && NAMESPACE_MODE=project
 [ "$PROJECT" = "__NAME""SPACE__" ] && PROJECT=""
 
-command -v jq >/dev/null 2>&1 || { printf '%s\n' 'Engram recall hook requires jq' >&2; exit 0; }
+exec 2>/dev/null
+command -v jq >/dev/null || exit 0
 
 set -o pipefail
 INPUT=$(cat) || exit 0
@@ -59,53 +61,50 @@ PROMPT=$(printf '%s' "$INPUT" | jq -er '.prompt | if type == "string" then . els
 [ "${#PROMPT}" -lt 12 ] && exit 0
 case "$PROMPT" in /*|!*) exit 0 ;; esac
 
-BODY=$(jq -n --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE" '
-  {query:$q, maxTokens:600, touch:false}
-  + if $ns != "" then {namespace:$ns} elif $mode == "project" then {global:true} else {} end') || exit 0
-RES=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/recall" \
+# Search returns the stored tags and raw cosine score. Recall drops the tags.
+BODY=$(jq -cn --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE" --argjson min "$MIN_SIM" '
+  if ($min | type) != "number" or $min < 0 or $min > 1 then error("invalid MIN_SIM") else . end
+  | {query:$q, threshold:$min, topK:20}
+  + if $ns != "" then {namespace:$ns} elif $mode == "none" then {}
+    elif $mode == "isolated" then error("missing namespace") else {global:true} end') || exit 0
+RES=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/search" \
   -H "Content-Type: application/json" -d "$BODY") || exit 0
 [ -z "$RES" ] && exit 0
 if [ -n "$PROJECT" ] && [ "$NAMESPACE_MODE" != isolated ]; then
-  BODY=$(jq -n --arg q "$PROMPT" '{query:$q, maxTokens:600, global:true, touch:false}') || exit 0
-  GLOBAL=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/recall" \
+  # Shared knowledge can apply across projects. Episodes belong to their project.
+  BODY=$(jq -c 'del(.namespace) + {global:true, types:["semantic","procedural"]}' <<<"$BODY") || exit 0
+  GLOBAL=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/search" \
     -H "Content-Type: application/json" -d "$BODY") || exit 0
-  RES=$(jq -en --argjson project "$RES" --argjson shared "$GLOBAL" '
-    [$project, $shared] | map(.memories | if type == "array" then . else error("invalid memories") end)
-    | {memories: add}
+  RES=$(printf '%s\n%s\n' "$RES" "$GLOBAL" | jq -esc '
+    if length != 2 then error("missing search response") else . end
+    | map(.results | if type == "array" then . else error("invalid results") end) | {results:add}
   ') || exit 0
 fi
 
 # Apply the same per-memory gate and formatting inside and outside git.
-OUT=$(printf '%s' "$RES" | jq -c --argjson min "$MIN_SIM" '
-  if ($min | type) != "number" then error("invalid MIN_SIM") else . end
-  | .memories | if type == "array" then . else error("invalid memories") end
-  | map(
-      (.similarity // .score // 0) as $score
-      | if ($score | type) != "number" then error("invalid similarity") else . end
-      | select($score >= $min)
-      | (.memory // .) as $memory
-      | ($memory.summary // $memory.content) as $text
-      | if ($text | type) != "string" then error("invalid memory text") else . end
-      | select(($text | length) > 0)
-      | {id:$memory.id, createdAt:$memory.createdAt, content:($memory.content // $text), text:$text, score:$score})
+OUT=$(printf '%s' "$RES" | jq -c --argjson min "$MIN_SIM" --arg source "$SOURCE" '
+  def transcript: test("^\\s*(user\\s*:|assistant\\s*:|claude code session [^:\\n]+:|session summary\\s*:)"; "i");
+  def sim2: (. * 100 | round) as $n | "\(($n / 100) | floor).\(("0" + ($n % 100 | tostring))[-2:])";
+  .results | if type == "array" then . else error("invalid results") end
+  | map(select((.score | type) == "number" and .score >= $min)
+      # Raw transcripts are noise whatever their type (consolidation stores them as semantic).
+      | select((.content | transcript | not) and ((.summary // "") | transcript | not))
+      | select(.type == "semantic" or .type == "procedural" or
+          (.type == "episodic" and .source == $source
+           and (((.tags // "[]") | fromjson | any(. == "pending-distill" or . == "session-summary")) | not)))
+      | .text = ((.summary // .content) | gsub("[\r\n]+"; " "))
+      | select((.text | test("\\S")) and (.id | length) >= 8
+          and (.createdAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}"))))
   | sort_by(.score) | reverse
   | reduce .[] as $m ([]; if any(.[]; .content == $m.content or (.id != null and .id == $m.id))
       then . else . + [$m] end)
-  | .[:3]
-  | map(
-      (if (.id | type) == "string" and (.id | length) > 0 and (.createdAt | type) == "string"
-        then if (.createdAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}"))
-          then "[" + .id[:8] + " · " + .createdAt[:10] + "] " else "" end
-        else "" end) + (.text | gsub("[\r\n]+"; " ")))
-  | join("\n") as $ctx
-  | if ($ctx | length) > 0
-    then { hookSpecificOutput: {
-             hookEventName: "UserPromptSubmit",
-             additionalContext: (
-               "Relevant long-term memories, auto-recalled from engram for this prompt "
-               + "(background context — verify before relying on it):\n\n"
-               + ($ctx[0:2500]) ) } }
-    else empty end
+  | .[:3] | select(length > 0) | length as $count
+  | map("[\(.id[:8]) · \(.createdAt[:10]) · sim \(.score | sim2) · \((.source // "unknown") | gsub("[\r\n]+"; " "))] \(.text)"
+        | .[:(2498 / $count | floor)])
+  | {hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: ("Engram already recalled \($count) memories for this prompt; call recall_context/search_memory only for a targeted lookup with a specific query.\n\n" + join("\n"))
+    }}
 ') || exit 0
 
 [ -n "$OUT" ] && printf '%s' "$OUT"
