@@ -127,6 +127,13 @@ export class VectorSearch {
     return this.modelId;
   }
 
+  /** Reject a query embedded while the index was switching models. */
+  assertModel(modelId: string | null): void {
+    if (this.modelId !== null && this.modelId !== modelId) {
+      throw new Error(`Cannot search the ${this.modelId} index with a ${modelId ?? 'legacy (unknown model)'} vector.`);
+    }
+  }
+
   /**
    * Point the index at a different embedding model, dropping every vector — the
    * existing ones are not comparable to anything the new model produces.

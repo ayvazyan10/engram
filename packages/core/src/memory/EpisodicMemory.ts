@@ -60,6 +60,7 @@ export class EpisodicMemory {
     const db = getDb();
     const now = new Date().toISOString();
 
+    const embeddingModel = getEmbeddingModelId();
     const embedding = await embed(input.content);
     const embeddingBuf = packFP16(embedding);
 
@@ -69,7 +70,7 @@ export class EpisodicMemory {
       content: input.content,
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
-      embeddingModel: getEmbeddingModelId(),
+      embeddingModel,
       importance: input.importance ?? 0.5,
       source: input.source ?? null,
       sessionId: input.sessionId ?? null,
@@ -92,6 +93,7 @@ export class EpisodicMemory {
       type: 'episodic',
       namespace: record.namespace ?? null,
       vector: embedding,
+      embeddingModel,
     });
 
     const [inserted] = await db

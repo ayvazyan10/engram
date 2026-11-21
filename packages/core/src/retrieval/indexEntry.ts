@@ -71,3 +71,17 @@ export function indexEntryIsCurrent(entry: VectorEntry | undefined, row: StoredI
   if ((entry.namespace ?? null) !== row.namespace) return false;
   return packFP16(entry.vector).equals(Buffer.from(row.embedding as ArrayBuffer));
 }
+
+/** Report the model stamps of live, embedded rows in the caller's status scope. */
+export function mixedEmbeddingModels(rows: readonly { embedding: unknown; embeddingModel: string | null }[]) {
+  const counts = new Map<string | null, number>();
+  for (const row of rows) {
+    if (row.embedding) counts.set(row.embeddingModel, (counts.get(row.embeddingModel) ?? 0) + 1);
+  }
+  const trackedModels = counts.size - (counts.has(null) ? 1 : 0);
+  if (trackedModels < 2) return undefined;
+  return {
+    counts: [...counts].map(([model, count]) => ({ model, count })).sort((a, b) => b.count - a.count),
+    remediation: 'Run re_embed or POST /api/embeddings/re-embed to regenerate stale and unstamped vectors with the active model.',
+  };
+}

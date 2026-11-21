@@ -87,6 +87,7 @@ export class ProceduralMemory {
 
     // Embed both trigger and action for better retrieval
     const embeddableText = memoryEmbeddingText({ ...input, type: 'procedural' });
+    const embeddingModel = getEmbeddingModelId();
     const embedding = await embed(embeddableText);
     const embeddingBuf = packFP16(embedding);
 
@@ -98,7 +99,7 @@ export class ProceduralMemory {
       actionPattern: input.actionPattern,
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
-      embeddingModel: getEmbeddingModelId(),
+      embeddingModel,
       importance: 0.6,
       confidence: input.confidence ?? 1.0,
       namespace: this.storeNamespace(input.namespace),
@@ -119,6 +120,7 @@ export class ProceduralMemory {
       type: 'procedural',
       namespace: record.namespace ?? null,
       vector: embedding,
+      embeddingModel,
     });
 
     const [inserted] = await db
@@ -143,8 +145,10 @@ export class ProceduralMemory {
     if (!query) return [];
 
     const db = getDb();
+    const embeddingModel = getEmbeddingModelId();
     const conditions = [
       eq(schema.memories.type, 'procedural'),
+      eq(schema.memories.embeddingModel, embeddingModel),
       isNull(schema.memories.archivedAt),
     ];
     if (this.namespaceMode !== 'none' && this.namespace) conditions.push(eq(schema.memories.namespace, this.namespace));
@@ -157,7 +161,7 @@ export class ProceduralMemory {
 
     if (candidates.length === 0) return [];
 
-    const queryVec = await embed(query);
+    const queryVec = await embed(query, embeddingModel);
 
     const ranked: Array<{ memory: Memory; similarity: number }> = [];
     for (const memory of candidates) {

@@ -91,11 +91,20 @@ export async function getEmbedder(): Promise<typeof embedder> {
   }
 }
 
+/** Bind an operation to its chosen model even if another caller switches during loading. */
+async function getEmbedderFor(modelId: string): Promise<typeof embedder> {
+  const pipe = await getEmbedder();
+  if (activeModelId !== modelId || pipe !== embedder) {
+    throw new Error(`Embedding model changed while loading ${modelId}. Retry the operation.`);
+  }
+  return pipe;
+}
+
 /**
  * Embed a single text string into a Float32Array of the active model's dimension.
  */
-export async function embed(text: string): Promise<Float32Array> {
-  const pipe = await getEmbedder();
+export async function embed(text: string, modelId = activeModelId): Promise<Float32Array> {
+  const pipe = await getEmbedderFor(modelId);
   const output = await pipe(text, { pooling: 'mean', normalize: true });
   return output.data as Float32Array;
 }
@@ -103,8 +112,8 @@ export async function embed(text: string): Promise<Float32Array> {
 /**
  * Embed multiple texts in batch. More efficient than calling embed() in a loop.
  */
-export async function embedBatch(texts: string[]): Promise<Float32Array[]> {
-  const pipe = await getEmbedder();
+export async function embedBatch(texts: string[], modelId = activeModelId): Promise<Float32Array[]> {
+  const pipe = await getEmbedderFor(modelId);
   const results: Float32Array[] = [];
 
   // Process in batches of 32 for memory efficiency

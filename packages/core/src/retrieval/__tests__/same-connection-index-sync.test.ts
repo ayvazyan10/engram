@@ -25,7 +25,7 @@ import { eq } from 'drizzle-orm';
 import { applyPulledMemory } from '../../sync/syncApply.ts';
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb, getDb, schema } from '../../db/index.js';
-import { embed, packFP16 } from '../../embedding/Embedder.js';
+import { embed, getEmbeddingModelId, packFP16 } from '../../embedding/Embedder.ts';
 import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -84,6 +84,7 @@ async function writeOnSharedConnection(id: string, content: string): Promise<voi
     content,
     embedding: packFP16(vector),
     embeddingDim: vector.length,
+    embeddingModel: getEmbeddingModelId(),
     importance: 0.8,
     createdAt: now,
     updatedAt: now,

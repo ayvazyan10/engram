@@ -32,6 +32,7 @@ export interface MemoryIndexWrite {
   concept?: string | null;
   /** The vector that was written to the row, in full float32 precision. */
   vector: Float32Array;
+  embeddingModel: string;
   edges?: readonly MemoryIndexEdge[];
 }
 

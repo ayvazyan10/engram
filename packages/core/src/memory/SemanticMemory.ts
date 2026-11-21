@@ -64,6 +64,7 @@ export class SemanticMemory {
     const deviceId = getDeviceId();
 
     const fullText = memoryEmbeddingText({ ...input, type: 'semantic' });
+    const embeddingModel = getEmbeddingModelId();
     const embedding = await embed(fullText);
     const embeddingBuf = packFP16(embedding);
 
@@ -74,7 +75,7 @@ export class SemanticMemory {
       concept: input.concept,
       embedding: embeddingBuf,
       embeddingDim: embedding.length,
-      embeddingModel: getEmbeddingModelId(),
+      embeddingModel,
       importance: input.importance ?? 0.7, // semantic memories are generally more important
       confidence: input.confidence ?? 1.0,
       namespace: this.storeNamespace(input.namespace),
@@ -137,6 +138,7 @@ export class SemanticMemory {
       namespace: record.namespace ?? null,
       concept: record.concept ?? null,
       vector: embedding,
+      embeddingModel,
       edges: connections.map((connection) => ({
         sourceId: connection.sourceId,
         targetId: connection.targetId,
@@ -186,7 +188,7 @@ export class SemanticMemory {
     // Held for the sink below: re-embedding writes a new vector to the row, and
     // an index still holding the old one outranks every fresher memory for the
     // old content — a staleness that shutdown() then persists.
-    let reindex: { vector: Float32Array; namespace: string | null; concept: string | null } | null = null;
+    let reindex: { vector: Float32Array; embeddingModel: string; namespace: string | null; concept: string | null } | null = null;
 
     if (updates.content !== undefined) {
       updateData.content = updates.content;
@@ -207,11 +209,13 @@ export class SemanticMemory {
 
       const embeddable = memoryEmbeddingText({ type: 'semantic', concept: existing.concept, content: updates.content });
 
+      const embeddingModel = getEmbeddingModelId();
       const embedding = await embed(embeddable);
       updateData.embedding = packFP16(embedding);
       updateData.embeddingDim = embedding.length;
-      updateData.embeddingModel = getEmbeddingModelId();
+      updateData.embeddingModel = embeddingModel;
       reindex = {
+        embeddingModel,
         vector: embedding,
         namespace: existing.namespace ?? null,
         concept: existing.concept ?? null,
@@ -233,9 +237,7 @@ export class SemanticMemory {
       await this.indexSink?.onMemoryWritten({
         id,
         type: 'semantic',
-        namespace: reindex.namespace,
-        concept: reindex.concept,
-        vector: reindex.vector,
+        ...reindex,
       });
     }
   }

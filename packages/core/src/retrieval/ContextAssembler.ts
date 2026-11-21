@@ -15,7 +15,7 @@ import { inArray, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, MemoryType } from '../db/schema.js';
-import { embed, packFP16, unpackFP16 } from '../embedding/Embedder.js';
+import { embed, getEmbeddingModelId, packFP16, unpackFP16 } from '../embedding/Embedder.js';
 import { KnowledgeGraph } from '../graph/KnowledgeGraph.js';
 import { scoreMemory } from './ImportanceScorer.js';
 import { cosineSimilarity, VectorSearch, type SearchResult } from './VectorSearch.js';
@@ -191,7 +191,9 @@ export class ContextAssembler {
     const db = getDb();
 
     // Step 1: Embed the query
+    const model = getEmbeddingModelId();
     const queryVec = await embed(query);
+    this.vectorSearch.assertModel(model);
 
     // Step 2: Retrieval (namespace-scoped when configured)
     const filtered = hasRecallFilters(options);
@@ -205,6 +207,7 @@ export class ContextAssembler {
       : this.vectorSearch.search(queryVec, candidateLimit, threshold, types,
         namespace === undefined && includeGlobal ? null : namespace,
         !exactNamespace && crossNamespace, includeGlobal);
+    const entries = this.vectorSearch.entriesById();
     const candidateIds = new Set(vectorResults.map((r) => r.id));
 
     // Step 3: Graph expansion
@@ -229,7 +232,7 @@ export class ContextAssembler {
         .where(inArray(schema.memories.id, batch));
 
       for (const record of rows) {
-        if (record.archivedAt) continue;
+        if (record.archivedAt || record.embeddingModel !== model) continue;
         if (!matchesMemoryFilters(record, options)) continue;
         // Apply source filter
         if (sources && !sources.includes(record.source ?? '')) continue;
@@ -247,12 +250,11 @@ export class ContextAssembler {
     }
 
     // Step 4 cont: Score each memory
-    const entries = this.vectorSearch.entriesById();
     const scored = records.flatMap((record) => {
       const vectorResult = vectorResults.find((r) => r.id === record.id);
       const entry = entries.get(record.id);
       const similarity = vectorResult?.similarity ?? (entry
-        ? cosineSimilarity(queryVec, entry.vector, this.vectorSearch.dimension) : 0);
+        ? cosineSimilarity(queryVec, entry.vector, queryVec.length) : 0);
       if (!vectorResult && (!entry || similarity < threshold)) return [];
 
       const score = scoreMemory({

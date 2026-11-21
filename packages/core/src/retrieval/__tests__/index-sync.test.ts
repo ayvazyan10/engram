@@ -20,7 +20,7 @@ import Database from 'better-sqlite3';
 
 import { NeuralBrain } from '../../NeuralBrain.js';
 import { closeDb } from '../../db/index.js';
-import { embed, packFP16 } from '../../embedding/Embedder.js';
+import { embed, getEmbeddingModelId, packFP16 } from '../../embedding/Embedder.ts';
 import { cleanupTestDb } from '../../test-helpers/cleanupTestDb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -73,9 +73,9 @@ async function writeExternally(dbPath: string, id: string, content: string): Pro
   const raw = new Database(dbPath);
   try {
     raw.prepare(
-      `INSERT INTO memories (id, type, content, embedding, embedding_dim, importance)
-       VALUES (?, 'semantic', ?, ?, ?, 0.8)`
-    ).run(id, content, packFP16(vector), vector.length);
+      `INSERT INTO memories (id, type, content, embedding, embedding_dim, embedding_model, importance)
+       VALUES (?, 'semantic', ?, ?, ?, ?, 0.8)`
+    ).run(id, content, packFP16(vector), vector.length, getEmbeddingModelId());
   } finally {
     raw.close();
   }
