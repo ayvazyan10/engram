@@ -5,41 +5,44 @@ import { buildRecallQuery, runSessionStart } from '../session-start.ts';
 
 const mocks = vi.hoisted(() => ({
   initialize: vi.fn(),
-  recall: vi.fn(),
+  search: vi.fn(),
+  versionNotice: vi.fn(),
   shutdown: vi.fn(),
   construct: vi.fn(),
   mkdir: vi.fn(),
   git: vi.fn(),
   getByTag: vi.fn(),
   getContradictionTasks: vi.fn(),
-  canAccessNamespace: vi.fn(),
 }));
 
+const hit = {
+  id: '12345678-abcd', type: 'semantic', source: 'mcp-client', tags: '[]',
+  score: 0.62, importance: 0.8, summary: null, content: 'Past project decisions.',
+  createdAt: '2026-11-21T12:00:00Z',
+} as const;
+const decisionLine = '[12345678 · 2026-11-21 · sim 0.62 · mcp-client] Past project decisions.';
+
+vi.mock('../versionNotice.ts', () => ({ versionNotice: mocks.versionNotice }));
 vi.mock('node:fs', () => ({ mkdirSync: mocks.mkdir }));
 vi.mock('node:child_process', () => ({ execFileSync: mocks.git }));
 vi.mock('@engram-ai-memory/core', async (importOriginal) => ({
-  resolveDbPath: (await importOriginal<typeof import('@engram-ai-memory/core')>()).resolveDbPath,
+  ...await importOriginal<typeof import('@engram-ai-memory/core')>(),
   NeuralBrain: class {
     constructor(config: unknown) { mocks.construct(config); }
     initialize = mocks.initialize;
-    recall = mocks.recall;
+    search = mocks.search;
     shutdown = mocks.shutdown;
     getByTag = mocks.getByTag;
     getContradictionTasks = mocks.getContradictionTasks;
-    canAccessNamespace = mocks.canAccessNamespace;
   },
 }));
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.git.mockImplementation((_command: string, args: readonly string[]) =>
-    args.includes('--git-common-dir') ? '/work/neuralCore/.git\n'
-      : args.includes('--show-toplevel') ? '/work/neuralCore\n' : 'feature/memory\n');
+  mocks.git.mockReturnValue('/work/neuralCore/.git\n');
   mocks.initialize.mockResolvedValue(undefined);
-  mocks.recall.mockResolvedValue({ context: 'Past project decisions.', memories: [{}] });
-  mocks.getByTag.mockResolvedValue([]);
-  mocks.getContradictionTasks.mockResolvedValue([]);
-  mocks.canAccessNamespace.mockReturnValue(true);
+  mocks.search.mockResolvedValue([hit]);
+  mocks.versionNotice.mockResolvedValue('');
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -66,6 +69,7 @@ describe('runSessionStart', () => {
     expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({
       namespaceMode: 'filter', namespace: '/work/neuralCore',
     }));
+    expect(mocks.search).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ namespace: '/work/neuralCore' }));
   });
 
   it('falls back to the git top level when old git echoes an unsupported --path-format', async () => {
@@ -78,15 +82,25 @@ describe('runSessionStart', () => {
     expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({ namespace: '/work/neuralCore' }));
   });
 
-  it('emits the SessionStart context envelope without character truncation', async () => {
+  it('emits up to three ranked memory lines and appends the version notice', async () => {
     const write = vi.fn();
-    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000), memories: [{}] });
+    mocks.search.mockResolvedValue([
+      { ...hit, id: '44444444-abcd', content: 'Fourth decision.', score: 0.5 },
+      hit,
+      { ...hit, id: '22222222-abcd', importance: 0.3, tags: '["handover"]', summary: 'Next steps.' },
+      { ...hit, id: '33333333-abcd', importance: 0.1, tags: '["pinned"]', score: 0.5, content: 'x'.repeat(801) },
+    ]);
+    mocks.versionNotice.mockResolvedValue('Update available.');
     expect(await runSessionStart('{"cwd":"/work/neuralCore"}', env, write)).toBe(0);
     expect(JSON.parse(write.mock.calls[0]![0] as string)).toEqual({
-      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'x'.repeat(7000) },
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [
+        '[33333333 · 2026-11-21 · sim 0.50 · mcp-client] ' + 'x'.repeat(800),
+        '[22222222 · 2026-11-21 · sim 0.62 · mcp-client] Next steps.',
+        decisionLine, '', 'Update available.',
+      ].join('\n') },
     });
-    expect(mocks.recall).toHaveBeenCalledWith('neuralCore feature/memory', {
-      threshold: 0.35, graphDepth: 0, maxTokens: 600, touch: false,
+    expect(mocks.search).toHaveBeenCalledWith('neuralCore project handover, current decisions and next steps', {
+      namespace: '/work/neuralCore', threshold: 0.5, topK: 50,
     });
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
@@ -100,27 +114,36 @@ describe('runSessionStart', () => {
       dbPath: path.join(os.homedir(), 'hook-test/memory.db'),
       defaultSource: 'claude-code', namespaceMode: 'isolated', namespace: 'work',
     });
-    expect(mocks.git).toHaveBeenCalledWith('git', [
-      '-C', process.cwd(), 'rev-parse', '--abbrev-ref', 'HEAD',
-    ], expect.objectContaining({ timeout: 500 }));
+    expect(mocks.search).toHaveBeenCalledWith('work project handover, current decisions and next steps',
+      expect.objectContaining({ namespace: 'work' }));
+    expect(mocks.git).not.toHaveBeenCalled();
   });
 
   it('still recalls project memory when git fails', async () => {
     mocks.git.mockImplementation(() => { throw new Error('not a repository'); });
     await runSessionStart('{"cwd":"/work/neuralCore"}', env, vi.fn());
-    expect(mocks.recall).toHaveBeenCalledWith('neuralCore', expect.any(Object));
+    expect(mocks.search).toHaveBeenCalledWith('neuralCore project handover, current decisions and next steps',
+      expect.objectContaining({ namespace: '/work/neuralCore' }));
   });
 
-  it('uses only global memories outside git at a filesystem root or the home directory', async () => {
+  it('skips search outside git at a filesystem root or the home directory', async () => {
     mocks.git.mockImplementation(() => { throw new Error('not a repository'); });
+    const write = vi.fn();
     for (const cwd of [path.parse(process.cwd()).root, os.homedir()]) {
-      await runSessionStart(JSON.stringify({ cwd }), env, vi.fn());
-      expect(mocks.construct).toHaveBeenLastCalledWith(expect.objectContaining({ namespaceMode: 'filter' }));
-      expect(mocks.construct.mock.lastCall?.[0]).not.toHaveProperty('namespace');
+      expect(await runSessionStart(JSON.stringify({ cwd }), env, write)).toBe(0);
     }
+    expect(mocks.construct).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
   });
 
-  it.each(['initialize', 'recall', 'shutdown'] as const)('is silent and exits zero when %s throws', async (method) => {
+  it('skips search when namespace mode is none even with an explicit namespace', async () => {
+    const write = vi.fn();
+    await runSessionStart('{}', { ...env, ENGRAM_NAMESPACE_MODE: 'none', ENGRAM_NAMESPACE: 'work' }, write);
+    expect(mocks.construct).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it.each(['initialize', 'search', 'shutdown'] as const)('is silent and exits zero when %s throws', async (method) => {
     mocks[method].mockImplementation(() => { throw new Error('brain failed'); });
     const stdout = vi.spyOn(process.stdout, 'write');
     expect(await runSessionStart('{"cwd":"/work/neuralCore"}', env)).toBe(0);
@@ -143,18 +166,17 @@ describe('runSessionStart', () => {
     const write = vi.fn();
     await runSessionStart('{}', env, write);
     expect(JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext)
-      .toBe('Past project decisions.');
+      .toBe(decisionLine);
     expect(mocks.getContradictionTasks).not.toHaveBeenCalled();
   });
 
   it.each([0, 2, 100])('omits reminders for %s pending contradictions and pending distillation', async (count) => {
-    mocks.recall.mockResolvedValue({ context: 'x'.repeat(7000), memories: [{}] });
     mocks.getByTag.mockResolvedValue([{ namespace: 'work' }]);
     mocks.getContradictionTasks.mockResolvedValue(Array.from({ length: count }, () => ({})));
     const write = vi.fn();
     await runSessionStart('{}', env, write);
     const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
-    expect(output).toBe('x'.repeat(7000));
+    expect(output).toBe(decisionLine);
     expect(output).not.toContain('get_distill_tasks');
     expect(mocks.getContradictionTasks).not.toHaveBeenCalled();
     expect(output).not.toContain('get_contradiction_tasks');
@@ -175,21 +197,21 @@ describe('runSessionStart', () => {
     expect(mocks.construct).not.toHaveBeenCalled();
   });
 
-  it('does not inject an empty recall result', async () => {
-    mocks.recall.mockResolvedValue({ context: '', memories: [] });
+  it('does not inject an empty search result', async () => {
+    mocks.search.mockResolvedValue([]);
     const write = vi.fn();
     expect(await runSessionStart('{}', env, write)).toBe(0);
     expect(write).not.toHaveBeenCalled();
   });
 
-  it.each(['', 'x'.repeat(7000)])('omits distillation reminders with empty or full recall', async (context) => {
-    mocks.recall.mockResolvedValue({ context, memories: context ? [{}] : [] });
+  it.each([false, true])('omits distillation reminders with or without a search hit: hit=%s', async (hasHit) => {
+    mocks.search.mockResolvedValue(hasHit ? [hit] : []);
     mocks.getByTag.mockResolvedValue([{ namespace: 'work' }, { namespace: null }]);
     const write = vi.fn();
     await runSessionStart('{}', env, write);
-    if (context) {
+    if (hasHit) {
       const output = JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext as string;
-      expect(output).toBe(context);
+      expect(output).toBe(decisionLine);
     } else {
       expect(write).not.toHaveBeenCalled();
     }
@@ -198,10 +220,27 @@ describe('runSessionStart', () => {
 
   it('adds no reminder when pending sessions are outside the caller scope', async () => {
     mocks.getByTag.mockResolvedValue([{ namespace: 'other' }]);
-    mocks.canAccessNamespace.mockReturnValue(false);
     const write = vi.fn();
     await runSessionStart('{}', env, write);
     expect(JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext)
-      .toBe('Past project decisions.');
+      .toBe(decisionLine);
+    expect(mocks.search).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ namespace: '/work/neuralCore' }));
+    expect(mocks.getByTag).not.toHaveBeenCalled();
+  });
+
+  it('filters project search hits by threshold, importance, transcript text and episode source', async () => {
+    mocks.search.mockResolvedValue([
+      { ...hit, id: '11111111-abcd', content: 'User: old prompt', summary: 'Decision.' },
+      { ...hit, id: '22222222-abcd', type: 'procedural', summary: 'Assistant: old reply' },
+      { ...hit, id: '33333333-abcd', type: 'episodic', content: 'Other client episode.' },
+      { ...hit, id: '44444444-abcd', importance: 0.79, content: 'Routine note.' },
+      { ...hit, id: '55555555-abcd', tags: '["pinned"]', score: 0.61, content: 'Below the gate.' },
+      { ...hit, type: 'episodic', source: 'claude-code' },
+    ]);
+    const write = vi.fn();
+    await runSessionStart('{}', { ...env, ENGRAM_RECALL_MIN_SIM: '0.62', ENGRAM_SOURCE: 'claude-code' }, write);
+    expect(mocks.search).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ threshold: 0.62 }));
+    expect(JSON.parse(write.mock.calls[0]![0] as string).hookSpecificOutput.additionalContext)
+      .toBe('[12345678 · 2026-11-21 · sim 0.62 · claude-code] Past project decisions.');
   });
 });

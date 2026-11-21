@@ -38,15 +38,15 @@ describe('registerHook', () => {
   it('adds a hook for an event', () => {
     let s: Record<string, unknown> = {};
     s = registerHook(s, 'UserPromptSubmit', '/a/engram-recall.sh', 8);
-    const entries = (s as any).hooks.UserPromptSubmit;
-    expect(entries).toHaveLength(1);
-    expect(entries[0].hooks[0]).toMatchObject({ type: 'command', command: "'/a/engram-recall.sh'", timeout: 8 });
+    expect(s).toMatchObject({ hooks: { UserPromptSubmit: [
+      { hooks: [{ type: 'command', command: "'/a/engram-recall.sh'", timeout: 8 }] },
+    ] } });
   });
 
   it('is idempotent across repeated runs', () => {
     let s: Record<string, unknown> = {};
     for (let i = 0; i < 3; i++) s = registerHook(s, 'SessionEnd', '/a/engram-session-end.sh', 15);
-    expect((s as any).hooks.SessionEnd).toHaveLength(1);
+    expect((s.hooks as Record<string, unknown>).SessionEnd).toHaveLength(1);
   });
 
   it('dedupes by script basename, not exact path (never fires twice)', () => {
@@ -329,13 +329,16 @@ describe('CLAUDE_HOOKS manifest', () => {
 describe('rendered hook scripts', () => {
   let dir: string;
   let calls: string;
+  const query = 'Please recall our previous work';
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engram-shell-'));
     calls = path.join(dir, 'calls');
     fs.writeFileSync(path.join(dir, 'curl'), `#!/bin/bash
+response="$CALLS.project"
+[ -s "$CALLS" ] && response="$CALLS.shared"
 jq -cn --args '$ARGS.positional' -- "$@" >> "$CALLS"
 [ "$FAIL_CURL" = 1 ] && exit 1
-printf '%s' '{"memories":[{"id":"a","content":"remember this","similarity":0.8}],"context":"remember this"}'
+if [ -f "$response" ]; then cat "$response"; else printf '{}'; fi
 `, { mode: 0o755 });
   });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -347,7 +350,7 @@ printf '%s' '{"memories":[{"id":"a","content":"remember this","similarity":0.8}]
     } }));
     const script = installHookScript(path.join(__dirname, '../../templates'), dir, file, 'http://example', dir, path.join(dir, 'db'));
     return execute(script, JSON.stringify({
-      cwd, prompt: 'Please recall our previous work', session_id: 'test', transcript_path: transcript,
+      cwd, prompt: query, session_id: 'test', transcript_path: transcript,
     }), fail);
 
   }
@@ -360,7 +363,8 @@ printf '%s' '{"memories":[{"id":"a","content":"remember this","similarity":0.8}]
     const stdout = fs.openSync(outputPath, 'w');
     try {
       const result = spawnSync('bash', [script], { stdio: [stdin, stdout, 'ignore'], timeout: 5000,
-        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CALLS: calls, FAIL_CURL: fail ? '1' : '0' } });
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CALLS: calls, FAIL_CURL: fail ? '1' : '0',
+          ENGRAM_API: '', ENGRAM_SOURCE: '', ENGRAM_RECALL_MIN_SIM: '' } });
       expect(result.error).toBeUndefined();
       return { status: result.status, stdout: fs.readFileSync(outputPath, 'utf8') };
     } finally {
@@ -380,15 +384,50 @@ printf '%s' '{"memories":[{"id":"a","content":"remember this","similarity":0.8}]
 
   it.each([true, false])('recalls project and shared separately inside or outside git: git=%s', (git) => {
     if (git) expect(spawnSync('git', ['init', '-q', dir], { stdio: 'ignore', timeout: 3000 }).status).toBe(0);
+    const project = {
+      id: '12345678-abcd', type: 'episodic', source: 'claude-code', tags: '[]',
+      score: 0.5, summary: null, content: 'Project decision.', createdAt: '2026-11-21T12:00:00Z',
+    };
+    const shared = {
+      ...project, id: 'abcdef01-2345', type: 'procedural', source: 'manual',
+      score: 0.62, summary: 'Shared procedure.', content: 'Full procedure.',
+    };
+    fs.writeFileSync(calls + '.project', JSON.stringify({ results: [
+      project, { ...shared, score: 0.55 },
+      { ...project, id: 'weak0001-abcd', score: 0.49, content: 'Weak match.' },
+      { ...project, id: 'foreign1-abcd', score: 0.9, source: 'other', content: 'Foreign episode.' },
+      { ...project, id: 'pending1-abcd', score: 0.9, tags: '["pending-distill"]', content: 'Pending.' },
+      { ...project, id: 'session1-abcd', score: 0.9, tags: '["session-summary"]', content: 'Session recap.' },
+      { ...shared, id: 'raw00001-abcd', type: 'semantic', score: 0.9, content: 'User: previous prompt' },
+      { ...shared, id: 'raw00002-abcd', score: 0.9, summary: 'Assistant: previous reply', content: 'Old reply.' },
+    ] }));
+    fs.writeFileSync(calls + '.shared', JSON.stringify({ results: [shared] }));
     const result = run('engram-recall.sh', dir);
     expect(result.status).toBe(0);
     const args: string[][] = fs.readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     expect(args).toHaveLength(2);
-    const bodies = args.map((call) => JSON.parse(call[call.indexOf('-d') + 1]));
-    expect(bodies[0].namespace).toBe(fs.realpathSync(dir));
-    expect(bodies[1]).toMatchObject({ global: true });
-    expect(bodies.every((body) => !(body.global && body.namespace))).toBe(true);
-    expect(String(result.stdout).match(/remember this/g)).toHaveLength(1);
+    for (const call of args) {
+      expect(call[call.indexOf('-X') + 1]).toBe('POST');
+      expect(call).toContain('http://example/api/search');
+    }
+    expect(args.map((call) => JSON.parse(call[call.indexOf('-d') + 1]!))).toEqual([
+      { query, threshold: 0.5, topK: 20, namespace: fs.realpathSync(dir) },
+      { query, threshold: 0.5, topK: 20, global: true, types: ['semantic', 'procedural'] },
+    ]);
+    expect(JSON.parse(result.stdout)).toEqual({ hookSpecificOutput: {
+      hookEventName: 'UserPromptSubmit', additionalContext: [
+        'Engram already recalled 2 memories for this prompt; call recall_context/search_memory only for a targeted lookup with a specific query.',
+        '', '[abcdef01 · 2026-11-21 · sim 0.62 · manual] Shared procedure.',
+        '[12345678 · 2026-11-21 · sim 0.50 · claude-code] Project decision.',
+      ].join('\n'),
+    } });
+  });
+
+  it.each(['cross-session-message', 'agent-message', 'task-notification'])('skips prompts wrapped in <%s>', (tag) => {
+    const script = installHookScript(path.join(__dirname, '../../templates'), dir, 'engram-recall.sh', 'http://example');
+    const result = execute(script, JSON.stringify({ cwd: dir, prompt: `Host message\n<${tag}>\n${query}` }));
+    expect(result).toEqual({ status: 0, stdout: '' });
+    expect(fs.existsSync(calls)).toBe(false);
   });
 
   it('fails open on a recall transport failure', () => {
