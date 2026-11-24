@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import {
-  NeuralBrain, SyncEngine, redactSyncUrl,
+  NeuralBrain, SyncEngine, redactSyncUrl, resolveDbPath,
   readEnvString, readEnvNumber, readEnvNumberOr, readEnvEnum, requireConfiguredEnv,
 } from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
@@ -173,8 +173,9 @@ const SYNC_ENCRYPTION_KEY = requireConfiguredEnv(
 );
 
 // Shared brain instance (initialized once)
+const dbPath = readEnvString(process.env, 'ENGRAM_DB_PATH');
 export const brain = new NeuralBrain({
-  dbPath: readEnvString(process.env, 'ENGRAM_DB_PATH'),
+  dbPath: dbPath && resolveDbPath(dbPath),
   defaultSource: 'rest-api',
   namespaceMode,
   namespace: NAMESPACE,

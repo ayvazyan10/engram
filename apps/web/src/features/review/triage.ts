@@ -112,17 +112,27 @@ export async function settleMany(
   tag = ''
 ): Promise<Settlement & { removed: string[] }> {
   const unit = items[0]?.kind === 'pair' ? ['pair', 'pairs'] : ['memory', 'memories'];
-  if (action === 'tag') {
-    const ids = memoryIds(items);
-    await api.bulkTag(ids, tag);
-    tagLoaded(ids, tag);
-    return { removed: [], message: `Tagged ${plural(ids.length, 'memory', 'memories')} “${tag}”.` };
-  }
-  if (action === 'pin') {
-    const ids = memoryIds(items);
-    await api.bulkTag(ids, PIN_TAG);
-    tagLoaded(ids, PIN_TAG);
-    return { removed: items.map(keyOf), message: `Pinned ${plural(items.length, 'memory', 'memories')}.` };
+  if (action === 'tag' || action === 'pin') {
+    const ids = [...new Set(memoryIds(items))];
+    const appliedTag = action === 'pin' ? PIN_TAG : tag;
+    const tagged = new Set<string>();
+    let failure = '';
+    for (let i = 0; i < ids.length; i += 1000) {
+      const chunk = ids.slice(i, i + 1000);
+      try {
+        await api.bulkTag(chunk, appliedTag);
+      } catch (err) {
+        if (!tagged.size) throw err;
+        failure = ` ${ids.length - tagged.size} could not be changed: ${err instanceof Error ? err.message : 'Could not reach Engram'}`;
+        break;
+      }
+      tagLoaded(chunk, appliedTag);
+      for (const id of chunk) tagged.add(id);
+    }
+    const count = plural(tagged.size, 'memory', 'memories');
+    if (action === 'tag') return { removed: [], message: `Tagged ${count} “${tag}”.${failure}` };
+    const removed = items.filter((item) => memoryIds([item]).every((id) => tagged.has(id))).map(keyOf);
+    return { removed, message: `Pinned ${count}.${failure}` };
   }
   if (action === 'archive') {
     const pairs = items.filter((i): i is ReviewPair => i.kind === 'pair');

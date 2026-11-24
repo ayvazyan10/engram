@@ -64,7 +64,7 @@ export default function MapView({ onCommands, ...sheet }: Props) {
   };
   const { status, error, model, payload, lens, cutDays, regionId, focusId, hoverId, names, arrivals, faults, faultError, faultsTruncated } = useMapStore();
   const { setLens, setCut, setRegion, setFocus, setHover } = useMapStore.getState();
-  const { searchQuery, searchResults, weakerResults, projectFilter, hiddenIds } = useMemoryStore();
+  const { searchQuery, searchScope, searchResults, weakerResults, projectFilter, hiddenIds } = useMemoryStore();
   const selectedId = useNeuralStore((s) => s.selectedNeuronId);
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
   const reduced = useMediaQuery('(prefers-reduced-motion: reduce)');
@@ -122,12 +122,13 @@ export default function MapView({ onCommands, ...sheet }: Props) {
     return () => observer.disconnect();
   }, [phone, timeLens, isMap]);
 
+  const scopedSearch = searchQuery && searchScope === projectFilter;
   const hits = useMemo(
-    () => (searchQuery ? new Set([...searchResults, ...weakerResults].map((r) => r.id)) : null),
-    [searchQuery, searchResults, weakerResults]
+    () => (scopedSearch ? new Set([...searchResults, ...weakerResults].map((r) => r.id)) : null),
+    [scopedSearch, searchResults, weakerResults]
   );
   const pins = useMemo(() => (hits && model ? [...hits].filter((id) => model.at.has(id)) : []), [hits, model]);
-  const weak = useMemo(() => new Set(weakerResults.map((r) => r.id)), [weakerResults]);
+  const weak = useMemo(() => new Set(scopedSearch ? weakerResults.map((r) => r.id) : []), [scopedSearch, weakerResults]);
   const lensState = useMemo<LensState>(
     () => ({ lens, cutDays, now, hits, regionId, hidden: hiddenIds }),
     [lens, cutDays, now, hits, regionId, hiddenIds]

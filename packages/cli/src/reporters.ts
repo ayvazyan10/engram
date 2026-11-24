@@ -31,8 +31,8 @@ export function reportFetchFailure(failure: FetchFailure, repoPath: string): voi
       return;
     case 'not-found':
       fail('The remote repository does not exist — the URL is wrong or the repository moved.');
-      console.log(`  Check the remote: ${D}cd ${repoPath} && git remote -v${X}`);
-      console.log(`  Or start over: ${D}rm -rf ${repoPath}${X} and run ${C}engram setup${X}`);
+      console.log(`  Run ${D}git remote -v${X} in ${repoPath} and verify the remote URL.`);
+      console.log(`  If you need a fresh checkout, move the existing directory aside and run ${C}engram setup${X}.`);
       return;
     case 'network':
       fail('Could not reach the remote repository. Check your connection.');

@@ -143,7 +143,7 @@ export default function MemorySheet() {
   }, [openId]);
 
   if (!shown) return null;
-  return <Sheet id={shown.id} closing={shown.closing} />;
+  return <Sheet key={shown.id} id={shown.id} closing={shown.closing} />;
 }
 
 function Sheet({ id, closing }: { id: string; closing: boolean }) {

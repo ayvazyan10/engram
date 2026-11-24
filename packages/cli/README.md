@@ -165,7 +165,7 @@ Config file: `~/.engram/config.json` (mode `0600` — it can hold a Postgres pas
 
 | Key | Default | Description |
 |---|---|---|
-| `dbPath` | `~/.engram/engram.db` | SQLite database path |
+| `dbPath` | `~/.engram/engram.db` | SQLite database path. Relative paths start in the user's home directory. |
 | `port` | `4901` | API server port |
 | `host` | `127.0.0.1` | Bind address |
 | `namespace` | `null` | Memory namespace |

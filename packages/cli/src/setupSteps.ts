@@ -19,7 +19,7 @@ import { buildStatus, serializeBuildStamp } from './buildState.js';
 import { connectHost } from './serverControl.js';
 import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
-  readJson, configObject, updateJsonConfig, writeConfigFile, installHookScript, registerHook, hasClaudeHooks,
+  readJson, readConfigText, configObject, updateJsonConfig, writeConfigFile, installHookScript, registerHook, hasClaudeHooks,
 } from './claudeSetup.js';
 import { resolveMcpClient, manualSnippet, supportedClientList, mcpServerConfig, upsertCodexMcp, hasCodexMcp } from './mcpClients.js';
 import { setupRequirements, unmet } from './preflight.js';
@@ -154,11 +154,8 @@ function writeMcpClientConfig(target: Extract<McpClientTarget, { kind: 'file' }>
       } },
     }));
   }
-  let contents = '';
-  try { contents = fs.readFileSync(target.path, 'utf8'); } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
-  return writeConfigFile(target.path, upsertCodexMcp(contents, entry));
+  const original = readConfigText(target.path);
+  return writeConfigFile(target.path, upsertCodexMcp(original ?? '', entry), undefined, original);
 }
 
 /** Doctor inspects TOML as TOML, and each JSON client's actual server key. */

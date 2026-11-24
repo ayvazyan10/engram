@@ -631,11 +631,16 @@ program
 // ─── configure ───────────────────────────────────────────────────────────────
 
 const configCmd = program.command('configure').description('View or update Engram configuration');
-configCmd.command('show').description('Show current config').action(() => {
+async function showConfig(): Promise<void> {
   const config = loadConfig();
+  if (config.syncUrl) {
+    const { redactSyncUrl } = await import('@engram-ai-memory/core');
+    config.syncUrl = redactSyncUrl(config.syncUrl);
+  }
   console.log(JSON.stringify(config, null, 2));
-});
-configCmd.command('set <key> <value>').description('Set a config value').action((key: string, value: string) => {
+}
+configCmd.command('show').description('Show current config').action(showConfig);
+configCmd.command('set <key> <value>').description('Set a config value').action(async (key: string, value: string) => {
   const config = loadConfig(true);
   // An explicit key list, not `key in config`: `in` walks the prototype chain,
   // so `engram configure set constructor x` used to pass and get written to the
@@ -650,13 +655,13 @@ configCmd.command('set <key> <value>').description('Set a config value').action(
   if (!parsed.ok) { fail(parsed.error); process.exit(1); }
 
   saveConfig({ ...config, [key]: parsed.value });
-  ok(`${key} = ${parsed.value}`);
+  const display = key === 'syncUrl' && typeof parsed.value === 'string'
+    ? (await import('@engram-ai-memory/core')).redactSyncUrl(parsed.value)
+    : parsed.value;
+  ok(`${key} = ${display}`);
 });
 configCmd.command('path').description('Print config file path').action(() => console.log(CONFIG_PATH));
-configCmd.action(() => {
-  const config = loadConfig();
-  console.log(JSON.stringify(config, null, 2));
-});
+configCmd.action(showConfig);
 
 // ─── cloud ───────────────────────────────────────────────────────────────────
 

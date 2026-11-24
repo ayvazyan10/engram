@@ -37,6 +37,7 @@ export function redactSyncUrl(url: string): string {
     if (parsed.password) {
       parsed.password = '***';
     }
+    if (parsed.searchParams.has('password')) parsed.searchParams.set('password', '***');
     return parsed.toString();
   } catch {
     return '<unparseable-connection-string>';

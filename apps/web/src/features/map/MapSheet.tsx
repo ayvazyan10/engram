@@ -130,7 +130,7 @@ const SNAPS = [0.3, 0.46, 1] as const;
  * rings its memory on the map, and pointing at a mark marks its row.
  */
 export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingMore, hasMore = true, onStore, onRegion }: Props) {
-  const { records, searchQuery, searchResults, weakerResults, isSearching, projectFilter, hiddenIds } = useMemoryStore();
+  const { records, searchQuery, searchScope, searchResults, weakerResults, isSearching, projectFilter, hiddenIds } = useMemoryStore();
   const openId = useNeuralStore((s) => s.selectedNeuronId);
   const selectNeuron = useNeuralStore((s) => s.selectNeuron);
   const panel = useMapStore((s) => s.panel);
@@ -159,8 +159,8 @@ export default function MapSheet({ loading, error, onRetry, onLoadMore, loadingM
       ? (stats?.total ?? records.length)
       : (stats?.byNamespace.find((b) => b.namespace === projectFilter)?.count ?? records.length);
   const more = !searchQuery && hasMore && total > records.length;
-  const strong = visible(searchResults);
-  const weaker = visible(weakerResults);
+  const strong = searchScope === projectFilter ? visible(searchResults) : [];
+  const weaker = searchScope === projectFilter ? visible(weakerResults) : [];
 
   // Older memories load as the end of the list scrolls into view.
   useEffect(() => {

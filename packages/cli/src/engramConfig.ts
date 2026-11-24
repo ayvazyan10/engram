@@ -12,6 +12,7 @@
  */
 
 import path from 'path';
+import os from 'os';
 
 export const NAMESPACE_MODES = ['none', 'filter', 'isolated', 'project'] as const;
 export type NamespaceModeName = (typeof NAMESPACE_MODES)[number];
@@ -64,7 +65,7 @@ export function isConfigKey(key: string): key is ConfigKey {
 /** The config a fresh install gets, rooted in the given state directory. */
 export function defaultConfig(engramHome: string): EngramConfig {
   return {
-    dbPath: path.join(engramHome, 'engram.db'),
+    dbPath: path.resolve(engramHome, 'engram.db'),
     port: 4901,
     host: '127.0.0.1',
     namespace: null,
@@ -132,8 +133,14 @@ export function normalizeConfig(stored: unknown, defaults: EngramConfig): Normal
     : storedMode === undefined ? defaults.namespaceMode
       : namespace ? 'filter' : 'none';
 
+  // Match core's resolveDbPath for clients that already have a relative MCP entry.
+  let dbPath = takeString(stored, 'dbPath', defaults.dbPath, problems);
+  if (!dbPath.trim()) dbPath = defaults.dbPath;
+  else if (dbPath === '~' || dbPath.startsWith('~/')) dbPath = path.join(os.homedir(), dbPath.slice(2));
+  else if (dbPath !== ':memory:' && !path.isAbsolute(dbPath)) dbPath = path.resolve(os.homedir(), dbPath);
+
   const config: EngramConfig = {
-    dbPath: takeString(stored, 'dbPath', defaults.dbPath, problems),
+    dbPath,
     port,
     host: takeString(stored, 'host', defaults.host, problems),
     namespace,
