@@ -46,6 +46,8 @@ afterEach(() => {
 });
 
 async function capture(inputs: StoreInput[], batch: boolean) {
+  // Each database file mints its own device id; give both runs the same one.
+  ids.next = 1000;
   getDeviceId();
   ids.next = 0;
   const webhook = vi.spyOn(brain.getWebhookManager(), 'fire');
