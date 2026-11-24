@@ -29,7 +29,7 @@ function fakeProcess(options: {
 
   const deps: StopDeps = {
     alive: () => !(signalled && elapsed >= diesAfter),
-    portOwner: () => (options.owner === undefined ? null : options.owner),
+    portOwner: () => (options.owner === undefined ? 4242 : options.owner),
     portOpen: async () => options.portOpen !== false,
     kill: (_pid, signal) => {
       if (options.killThrows) throw new Error(options.killThrows);
@@ -72,12 +72,12 @@ describe('stopProcess', () => {
     expect(signals).toEqual([]);
   });
 
-  it('proceeds when the port owner cannot be determined — lsof is not always there', async () => {
+  it('refuses to signal when the port owner cannot be determined', async () => {
     const { deps, signals } = fakeProcess({ diesAfterMs: 0, owner: null });
     const outcome = await stopProcess(4242, 4901, deps, { graceMs: 1000, pollMs: 100 });
 
-    expect(outcome.status).toBe('stopped');
-    expect(signals).toEqual(['SIGTERM']);
+    expect(outcome.status).toBe('owner-unknown');
+    expect(signals).toEqual([]);
   });
 
   /**

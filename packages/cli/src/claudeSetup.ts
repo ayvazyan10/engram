@@ -135,9 +135,14 @@ export function writeConfigFile(file: string, contents: string, now: Date = new 
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
 
+  atomicWriteConfig(file, contents, mode);
+  return backup;
+}
+
+export function atomicWriteConfig(file: string, contents: string, mode: number): void {
   const temp = `${file}.engram-${process.pid}-${Date.now()}.tmp`;
+  const fd = fs.openSync(temp, 'wx', mode);
   try {
-    const fd = fs.openSync(temp, 'wx', mode);
     try {
       fs.writeFileSync(fd, contents);
       // Rename is only as durable as the bytes behind it.
@@ -153,8 +158,6 @@ export function writeConfigFile(file: string, contents: string, now: Date = new 
     }
     throw err;
   }
-
-  return backup;
 }
 
 export function writeJsonConfig(file: string, data: Record<string, unknown>, now: Date = new Date()): string | null {

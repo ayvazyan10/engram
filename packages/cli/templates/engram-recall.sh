@@ -8,7 +8,7 @@
 # Fail-open: any error (server down, slow, bad JSON) injects nothing and never
 # blocks the prompt. Relevance-gated so unrelated prompts stay clean.
 #
-# Tunables: ENGRAM_API, ENGRAM_RECALL_MIN_SIM, ENGRAM_SOURCE.
+# Tunables: ENGRAM_API, ENGRAM_API_KEY, ENGRAM_RECALL_MIN_SIM, ENGRAM_SOURCE.
 
 ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
 MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.5}"
@@ -73,13 +73,13 @@ BODY=$(jq -cn --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE"
   + if $ns != "" then {namespace:$ns} elif $mode == "none" then {}
     elif $mode == "isolated" then error("missing namespace") else {global:true} end') || exit 0
 RES=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/search" \
-  -H "Content-Type: application/json" -d "$BODY") || exit 0
+  -H "Content-Type: application/json" -H @- -d "$BODY" <<<"${ENGRAM_API_KEY:+Authorization: Bearer $ENGRAM_API_KEY}") || exit 0
 [ -z "$RES" ] && exit 0
 if [ -n "$PROJECT" ] && [ "$NAMESPACE_MODE" != isolated ]; then
   # Shared knowledge can apply across projects. Episodes belong to their project.
   BODY=$(jq -c 'del(.namespace) + {global:true, types:["semantic","procedural"]}' <<<"$BODY") || exit 0
   GLOBAL=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/search" \
-    -H "Content-Type: application/json" -d "$BODY") || exit 0
+    -H "Content-Type: application/json" -H @- -d "$BODY" <<<"${ENGRAM_API_KEY:+Authorization: Bearer $ENGRAM_API_KEY}") || exit 0
   RES=$(printf '%s\n%s\n' "$RES" "$GLOBAL" | jq -esc '
     if length != 2 then error("missing search response") else . end
     | map(.results | if type == "array" then . else error("invalid results") end) | {results:add}

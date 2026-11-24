@@ -21,6 +21,7 @@ export type StopOutcome =
   | { status: 'not-running' }
   | { status: 'stopped'; pid: number; waitedMs: number }
   | { status: 'port-mismatch'; pid: number; ownerPid: number }
+  | { status: 'owner-unknown'; pid: number; port: number }
   | { status: 'not-serving'; pid: number; port: number }
   | { status: 'timeout'; pid: number; waitedMs: number }
   | { status: 'signal-failed'; pid: number; error: string };
@@ -69,7 +70,8 @@ export async function stopProcess(
 
   // Port open, but owned by somebody else: same conclusion, more evidence.
   const owner = deps.portOwner(port);
-  if (owner !== null && owner !== pid) {
+  if (owner === null) return { status: 'owner-unknown', pid, port };
+  if (owner !== pid) {
     return { status: 'port-mismatch', pid, ownerPid: owner };
   }
 
@@ -116,6 +118,12 @@ export function describeStopOutcome(outcome: StopOutcome): StopMessage {
           `If you changed the port since starting the server, stop it yourself: kill ${outcome.pid}`,
           'Otherwise the server is already gone and the pidfile can be removed.',
         ],
+      };
+    case 'owner-unknown':
+      return {
+        ok: false,
+        message: `Cannot determine who owns port :${outcome.port}. PID ${outcome.pid} was not signalled.`,
+        detail: [],
       };
     case 'port-mismatch':
       return {

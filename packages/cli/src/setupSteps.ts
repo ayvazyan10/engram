@@ -121,19 +121,24 @@ export function currentBuildStatus(repoPath: string, stampPath: string): ReturnT
 
 // ─── MCP client registration ─────────────────────────────────────────────────
 
+function writeJsonMcpConfig(file: string, key: string, server: Record<string, unknown>): string | null {
+  return updateJsonConfig(file, (current) => {
+    const servers = configObject(current[key], key);
+    const existing = configObject(servers.engram, `${key}.engram`);
+    const env = { ...configObject(existing.env, `${key}.engram.env`) };
+    delete env.ENGRAM_NAMESPACE;
+    return {
+      ...current, [key]: { ...servers, engram: {
+        ...existing, ...server, env: { ...env, ...configObject(server.env, 'MCP env') },
+      } },
+    };
+  });
+}
+
 /** Write each client's native entry, sharing the backup and no-op writer. */
 function writeMcpClientConfig(target: Extract<McpClientTarget, { kind: 'file' }>, server: Record<string, unknown>): string | null {
   if (target.format === 'json') {
-    return updateJsonConfig(target.path, (current) => {
-      const servers = configObject(current[target.key], target.key);
-      const existing = configObject(servers.engram, `${target.key}.engram`);
-      return {
-        ...current, [target.key]: { ...servers, engram: {
-          ...existing, ...server,
-          env: { ...configObject(existing.env, `${target.key}.engram.env`), ...configObject(server.env, 'MCP env') },
-        } },
-      };
-    });
+    return writeJsonMcpConfig(target.path, target.key, server);
   }
   const { command, args } = server;
   const env = configObject(server.env, 'MCP env');
@@ -162,10 +167,14 @@ export function hasMcpClientConfig(target: Extract<McpClientTarget, { kind: 'fil
   return Boolean(configObject(readJson(target.path)[target.key], target.key).engram);
 }
 
+export function claudePluginEnabled(settings: Record<string, unknown>): boolean {
+  return configObject(settings.enabledPlugins, 'enabledPlugins')['engram@engram'] === true;
+}
+
 /** Both Claude setup paths must leave MCP and hooks to an enabled plugin. */
 function shouldConfigureClaudeCode(settings: string, skipped: string[]): boolean {
   try {
-    if (configObject(readJson(settings).enabledPlugins, 'enabledPlugins')['engram@engram'] === true) {
+    if (claudePluginEnabled(readJson(settings))) {
       ok('Engram plugin is active — setup leaves Claude Code MCP and hooks to it.');
       return false;
     }
@@ -256,16 +265,7 @@ export function setupClaudeCode(
   const mcpEnv = mcpServerConfig(config, 'claude-code').env;
   if (withMcp) {
     try {
-      reportBackup(updateJsonConfig(paths.userJson, (current) => {
-        const servers = configObject(current.mcpServers, 'mcpServers');
-        const existing = configObject(servers.engram, 'mcpServers.engram');
-        return {
-          ...current,
-          mcpServers: { ...servers, engram: {
-            ...existing, ...engramServer, env: { ...configObject(existing.env, 'mcpServers.engram.env'), ...mcpEnv },
-          } },
-        };
-      }));
+      reportBackup(writeJsonMcpConfig(paths.userJson, 'mcpServers', { ...engramServer, env: mcpEnv }));
       ok('MCP registered at user scope (~/.claude.json) — loads in every session');
     } catch (err) {
       reportConfigRefusal(err, 'Claude Code user-scope MCP', skipped);
@@ -281,6 +281,12 @@ export function setupClaudeCode(
 
   installClaudeHooks(config, hooksDir, paths, skipped, mcpEnv);
   warn('Restart Claude Code (or run /mcp) to activate.');
+}
+
+export function restHookDependencyIssue(): string | undefined {
+  const missing = ['jq', 'curl'].filter((cmd) =>
+    spawnSync(cmd, ['--version'], { stdio: 'ignore', timeout: 2000 }).status !== 0);
+  return missing.length ? `Install ${missing.join(' and ')} to enable prompt recall and session-end capture.` : undefined;
 }
 
 /** Shared by local setup and updates of an existing hook installation. */
@@ -300,6 +306,8 @@ export function installClaudeHooks(
     reportBackup(updateJsonConfig(paths.settings, (current) => installed.reduce(
       (next, h) => registerHook(next, h.event, h.command, h.timeout), current)));
     ok('Recall + session-start + session-end hooks installed (~/.engram/hooks/)');
+    const issue = restHookDependencyIssue();
+    if (issue) { warn(issue); skipped.push(issue); }
   } catch (err) {
     reportConfigRefusal(err, 'Claude Code hooks', skipped);
   }
@@ -315,15 +323,7 @@ export function refreshClaudeHooks(
     if (!withHooks && !servers.engram) return;
     if (!shouldConfigureClaudeCode(paths.settings, skipped)) return;
     const server = mcpServerConfig(config, 'claude-code');
-    reportBackup(updateJsonConfig(paths.userJson, (current) => {
-      const servers = configObject(current.mcpServers, 'mcpServers');
-      const existing = configObject(servers.engram, 'mcpServers.engram');
-      return {
-        ...current, mcpServers: { ...servers, engram: {
-          ...existing, ...server, env: { ...configObject(existing.env, 'mcpServers.engram.env'), ...server.env },
-        } },
-      };
-    }));
+    reportBackup(writeJsonMcpConfig(paths.userJson, 'mcpServers', server));
     ok('Claude Code MCP refreshed (~/.claude.json)');
     if (withHooks) installClaudeHooks(config, hooksDir, paths, skipped, server.env);
   } catch (err) {

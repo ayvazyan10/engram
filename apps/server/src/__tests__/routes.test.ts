@@ -436,13 +436,13 @@ describe('CORS', () => {
 describe('memory payload regressions', () => {
   it('only forwards declared store fields', async () => {
     const id = await storeMemory('Whitelisted store fields', {
-      eventAt: '2024-01-01T00:00:00Z', triggerPattern: { a: 1 }, actionPattern: { b: 2 },
+      eventAt: '2024-01-01T00:00:00Z', triggerPattern: 'on start', actionPattern: 'load context',
       sessionId: 'store-session', metadata: { kept: true }, tags: ['kept'], concept: 'kept',
     });
     const record = (await app.inject({ method: 'GET', url: `/api/memory/${id}` })).json();
     expect(record.eventAt).not.toBe('2024-01-01T00:00:00.000Z');
-    expect(record.triggerPattern).toBeNull();
-    expect(record.actionPattern).toBeNull();
+    expect(record.triggerPattern).toBe('on start');
+    expect(record.actionPattern).toBe('load context');
     expect(record.sessionId).toBe('store-session');
     expect(JSON.parse(record.metadata)).toEqual({ kept: true });
     expect(JSON.parse(record.tags)).toEqual(['kept']);
