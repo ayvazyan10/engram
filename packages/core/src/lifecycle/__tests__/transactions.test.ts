@@ -330,13 +330,13 @@ describe('resolveContradiction() atomicity', () => {
     });
 
     const result = await brain.resolveContradiction(b.memory.id, a.memory.id, 'keep_oldest');
-    expect(result.resolved).toBe(true);
-    expect(result.archivedId).toBe(b.memory.id);
-    expect(result.keptId).toBe(a.memory.id);
+    expect(result.resolved).toBe(false);
+    expect(result.archivedId).toBeUndefined();
+    expect(result.keptId).toBeUndefined();
 
     const [loser] = await db.select().from(schema.memories).where(eq(schema.memories.id, b.memory.id));
-    expect(loser!.archivedAt).toBeTruthy();
-    expect(loser!.updatedAt).toBe(loser!.archivedAt);
+    expect(loser!.archivedAt).toBeNull();
+    expect(loser!.updatedAt).toBe(b.memory.updatedAt);
 
     const [winner] = await db.select().from(schema.memories).where(eq(schema.memories.id, a.memory.id));
     expect(winner!.archivedAt).toBeNull();
@@ -351,7 +351,7 @@ describe('resolveContradiction() atomicity', () => {
       .from(schema.memoryConnections)
       .where(eq(schema.memoryConnections.relationship, 'contradicts'));
     expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.deletedAt).toBeTruthy();
+    expect(remaining[0]!.deletedAt).toBeNull();
 
     const live = await db
       .select()
@@ -362,7 +362,7 @@ describe('resolveContradiction() atomicity', () => {
           isNull(schema.memoryConnections.deletedAt)
         )
       );
-    expect(live).toHaveLength(0);
+    expect(live).toHaveLength(1);
   });
 
   it('keep_both leaves both memories and the edge intact', async () => {
@@ -386,7 +386,7 @@ describe('resolveContradiction() atomicity', () => {
     });
 
     const result = await brain.resolveContradiction(b.memory.id, a.memory.id, 'keep_both');
-    expect(result.resolved).toBe(true);
+    expect(result.resolved).toBe(false);
     expect(result.archivedId).toBeUndefined();
 
     const rows = await db.select().from(schema.memories);

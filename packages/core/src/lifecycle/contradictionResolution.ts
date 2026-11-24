@@ -22,7 +22,7 @@
  */
 
 import { and, eq, isNull, or } from 'drizzle-orm';
-import { getDb, schema } from '../db/index.js';
+import { type getDb, schema } from '../db/index.js';
 import type { Memory } from '../db/schema.js';
 import { getDeviceId } from '../sync/deviceId.js';
 import type { Contradiction, ResolutionStrategy } from './ContradictionDetector.js';
@@ -135,46 +135,45 @@ export function planAutoResolution(
  * Synchronous by necessity — better-sqlite3 transactions do not await. The
  * caller updates in-memory state and fires events only after this returns.
  */
-export function writeResolution(sourceId: string, targetId: string, archivedId?: string): void {
-  const db = getDb();
+export function writeResolution(
+  tx: Pick<ReturnType<typeof getDb>, 'update'>, sourceId: string, targetId: string, archivedId?: string,
+): void {
   const resolvedAt = new Date().toISOString();
   const deviceId = getDeviceId();
 
-  db.transaction((tx) => {
-    if (archivedId) {
-      tx.update(schema.memories)
-        // updatedAt must move with archivedAt — see NeuralBrain.archiveAtomic
-        // for why (a soft-delete invisible to a sync cursor never propagates).
-        .set({ archivedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
-        .where(eq(schema.memories.id, archivedId))
-        .run();
+  if (archivedId) {
+    tx.update(schema.memories)
+      // updatedAt must move with archivedAt — see NeuralBrain.archiveAtomic
+      // for why (a soft-delete invisible to a sync cursor never propagates).
+      .set({ archivedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
+      .where(eq(schema.memories.id, archivedId))
+      .run();
 
-      tx.update(schema.memoryConnections)
-        .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
-        .where(
-          and(
-            or(
-              eq(schema.memoryConnections.sourceId, archivedId),
-              eq(schema.memoryConnections.targetId, archivedId)
-            ),
-            isNull(schema.memoryConnections.deletedAt)
-          )
+    tx.update(schema.memoryConnections)
+      .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
+      .where(
+        and(
+          or(
+            eq(schema.memoryConnections.sourceId, archivedId),
+            eq(schema.memoryConnections.targetId, archivedId)
+          ),
+          isNull(schema.memoryConnections.deletedAt)
         )
-        .run();
-    }
+      )
+      .run();
+  }
 
-    for (const [a, b] of [[sourceId, targetId], [targetId, sourceId]] as const) {
-      tx.update(schema.memoryConnections)
-        .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
-        .where(
-          and(
-            eq(schema.memoryConnections.sourceId, a),
-            eq(schema.memoryConnections.targetId, b),
-            eq(schema.memoryConnections.relationship, 'contradicts'),
-            isNull(schema.memoryConnections.deletedAt)
-          )
+  for (const [a, b] of [[sourceId, targetId], [targetId, sourceId]] as const) {
+    tx.update(schema.memoryConnections)
+      .set({ deletedAt: resolvedAt, updatedAt: resolvedAt, deviceId })
+      .where(
+        and(
+          eq(schema.memoryConnections.sourceId, a),
+          eq(schema.memoryConnections.targetId, b),
+          eq(schema.memoryConnections.relationship, 'contradicts'),
+          isNull(schema.memoryConnections.deletedAt)
         )
-        .run();
-    }
-  });
+      )
+      .run();
+  }
 }

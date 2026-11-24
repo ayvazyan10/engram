@@ -5,7 +5,7 @@
  * are responsible for scheduling. The engine just runs a single pass when asked.
  */
 
-import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { Memory } from '../db/schema.js';
 import { computeRetentionScore, decayImportance } from '../retrieval/ImportanceScorer.js';
@@ -55,7 +55,13 @@ export class DecayEngine {
    * Check whether a memory is protected from decay.
    */
   isProtected(memory: Memory): boolean {
-    return this.policy.protectionRules.some((rule) => rule.predicate(memory));
+    if (this.policy.protectionRules.some((rule) => rule.predicate(memory))) return true;
+    // A pending session is still the input to a distillation task.
+    try {
+      return JSON.parse(memory.tags).includes('pending-distill');
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -81,9 +87,9 @@ export class DecayEngine {
    * @param dryRun    If true, compute results without modifying anything
    */
   async sweep(
-    forgetFn: (id: string) => Promise<void>,
+    forgetFn: (id: string, unchanged: SQL) => Promise<void | boolean>,
     dryRun = false,
-    namespace?: string
+    namespace?: string | null
   ): Promise<DecaySweepResult> {
     const start = Date.now();
     const now = new Date();
@@ -104,7 +110,8 @@ export class DecayEngine {
     if (!dryRun) {
       const expired = [lt(schema.contextAssemblies.createdAt,
         new Date(now.getTime() - CONTEXT_ASSEMBLY_RETENTION_MS).toISOString())];
-      if (namespace) expired.push(eq(schema.contextAssemblies.namespace, namespace));
+      if (namespace !== undefined) expired.push(namespace === null
+        ? isNull(schema.contextAssemblies.namespace) : eq(schema.contextAssemblies.namespace, namespace));
       await db.delete(schema.contextAssemblies).where(and(...expired));
     }
 
@@ -125,9 +132,8 @@ export class DecayEngine {
 
     while (hasMore) {
       const sweepConditions = [isNull(schema.memories.archivedAt)];
-      if (namespace) {
-        sweepConditions.push(eq(schema.memories.namespace, namespace));
-      }
+      if (namespace !== undefined) sweepConditions.push(namespace === null
+        ? isNull(schema.memories.namespace) : eq(schema.memories.namespace, namespace));
 
       const batch = await db
         .select()
@@ -156,11 +162,19 @@ export class DecayEngine {
         }
 
         const retention = this.computeRetention(memory, now);
+        // Recalls change access fields without advancing the sync revision.
+        const unchanged = and(
+          eq(schema.memories.id, memory.id), isNull(schema.memories.archivedAt),
+          eq(schema.memories.updatedAt, memory.updatedAt), eq(schema.memories.accessCount, memory.accessCount),
+          sql`${schema.memories.lastAccessedAt} IS ${memory.lastAccessedAt}`,
+          sql`${schema.memories.namespace} IS ${memory.namespace}`,
+          eq(schema.memories.importance, memory.importance), eq(schema.memories.tags, memory.tags),
+        )!;
 
         if (retention < this.policy.archiveThreshold) {
           // Archive this memory
           if (!dryRun) {
-            await forgetFn(memory.id);
+            if (await forgetFn(memory.id, unchanged) === false) continue;
             archivedInBatch++;
           }
           result.archivedCount++;
@@ -197,7 +211,7 @@ export class DecayEngine {
 
             if (newImportance < (memory.importance ?? 0.5)) {
               if (!dryRun) {
-                await db
+                const write = db
                   .update(schema.memories)
                   // `device_id` too: the push query only selects rows this
                   // device owns, so a decayed peer-written row would otherwise
@@ -208,7 +222,8 @@ export class DecayEngine {
                     updatedAt: decayStamp.toISOString(),
                     deviceId: getDeviceId(),
                   })
-                  .where(eq(schema.memories.id, memory.id));
+                  .where(unchanged).run();
+                if (!write.changes) continue;
               }
               result.decayedCount++;
             }
@@ -243,7 +258,7 @@ export class DecayEngine {
       threshold: number,
       olderThanIso: string
     ) => Promise<{ id: string }[]>,
-    namespace?: string
+    namespace?: string | null
   ): Promise<string[]> {
     const config = this.policy.consolidation;
     if (!config.enabled) return [];
@@ -260,7 +275,8 @@ export class DecayEngine {
       isNull(schema.memories.archivedAt),
       lt(schema.memories.createdAt, cutoff),
     ];
-    if (namespace) conditions.push(eq(schema.memories.namespace, namespace));
+    if (namespace !== undefined) conditions.push(namespace === null
+      ? isNull(schema.memories.namespace) : eq(schema.memories.namespace, namespace));
 
     const [row] = await db
       .select({ n: sql<number>`count(*)` })

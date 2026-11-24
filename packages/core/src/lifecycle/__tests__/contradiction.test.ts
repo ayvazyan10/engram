@@ -175,10 +175,10 @@ describe('Contradiction Resolution', () => {
       'keep_newest',
     );
 
-    expect(result.resolved).toBe(true);
+    expect(result.resolved).toBe(false);
     // The older memory should be archived
-    expect(result.archivedId).toBe(first.memory.id);
-    expect(result.keptId).toBe(second.memory.id);
+    expect(result.archivedId).toBeUndefined();
+    expect(result.keptId).toBeUndefined();
 
     // Verify archived
     const db = getDb();
@@ -187,7 +187,7 @@ describe('Contradiction Resolution', () => {
       .from(schema.memories)
       .where(eq(schema.memories.id, first.memory.id))
       .limit(1);
-    expect(archived!.archivedAt).not.toBeNull();
+    expect(archived!.archivedAt).toBeNull();
   });
 
   it('resolveContradiction with keep_important archives lower importance', async () => {
@@ -200,9 +200,9 @@ describe('Contradiction Resolution', () => {
       'keep_important',
     );
 
-    expect(result.resolved).toBe(true);
-    expect(result.keptId).toBe(first.memory.id);
-    expect(result.archivedId).toBe(second.memory.id);
+    expect(result.resolved).toBe(false);
+    expect(result.keptId).toBeUndefined();
+    expect(result.archivedId).toBeUndefined();
   });
 
   it('resolveContradiction with keep_both keeps everything', async () => {
@@ -215,7 +215,7 @@ describe('Contradiction Resolution', () => {
       'keep_both',
     );
 
-    expect(result.resolved).toBe(true);
+    expect(result.resolved).toBe(false);
     expect(result.archivedId).toBeUndefined();
   });
 

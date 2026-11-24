@@ -51,7 +51,7 @@ import { VectorSearch } from './retrieval/VectorSearch.js';
 import { hybridSearch } from './retrieval/HybridSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
 import { indexEntryIsCurrent, mixedEmbeddingModels, storedDimension, storedVector, upsertIfCompatible } from './retrieval/indexEntry.js';
-import { appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
+import { appliedConnectionsSince, appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
 import type { ChangeCounters, StoreBaseline } from './retrieval/indexBaseline.js';
 import { ReflectionEngine } from './reflection/ReflectionEngine.js';
 import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflection/ReflectionEngine.js';
@@ -403,6 +403,14 @@ export class NeuralBrain {
       || (this.namespaceMode === 'filter' && namespace == null);
   }
 
+  private memoryScope(includeGlobal = false): SQL | undefined {
+    if (this.namespaceMode === 'none') return undefined;
+    if (!this.activeNamespace) return isNull(schema.memories.namespace);
+    const project = eq(schema.memories.namespace, this.activeNamespace);
+    return includeGlobal && this.namespaceMode === 'filter'
+      ? or(project, isNull(schema.memories.namespace)) : project;
+  }
+
   /**
    * The rows this brain's index is expected to mirror.
    *
@@ -497,12 +505,13 @@ export class NeuralBrain {
     if (!this.claimHolds(readChangeCounters(getDb()))) this.indexClaim = null;
   }
 
-  private async refreshIndexBaseline(rebuilt = false): Promise<void> {
+  private async refreshIndexBaseline(scanStart?: ChangeCounters): Promise<void> {
     const db = getDb();
-    const before = readChangeCounters(db);
+    const before = scanStart ?? readChangeCounters(db);
     const claim = this.indexClaim;
-    if (!rebuilt && (!claim?.counters || claim.connection !== getDatabaseConnection()
+    if (!scanStart && (!claim?.counters || claim.connection !== getDatabaseConnection()
       || claim.counters.dataVersion !== before.dataVersion
+      || appliedConnectionsSince(db, claim.counters.localChanges)
       || appliedMemoryIdsSince(db, claim.counters.localChanges).length > 0)) {
       this.indexClaim = null;
       return;
@@ -564,14 +573,6 @@ export class NeuralBrain {
     this.decayEngine.updatePolicy(this.getDecayPolicy());
     const indexPath = this.resolveIndexPath();
 
-    // Every node and edge below is replayed from the database, so start from an
-    // empty graph. Nothing used to clear it, and shutdown() only closes the DB:
-    // a shutdown()/initialize() cycle in one process therefore replayed the
-    // whole graph on top of the one already in memory. Traversal results
-    // survived that (expand() keeps a visited set), but stats().graphEdges and
-    // the cost of every traversal grew with each cycle, and nodes archived
-    // while the brain was down stayed behind forever.
-    this.graph.clear();
     this.vectorSearch.clear();
 
     // Try loading persisted vector index from disk
@@ -596,6 +597,7 @@ export class NeuralBrain {
       }
     }
 
+    const scanStart = readChangeCounters(db);
     const allMemories = await db
       .select()
       .from(schema.memories)
@@ -636,13 +638,6 @@ export class NeuralBrain {
           else dimensionMismatched++;
         }
       }
-
-      // Graph always rebuilds (it's fast — just node/edge refs)
-      this.graph.addNode({
-        id: memory.id,
-        type: memory.type as MemoryType,
-        concept: memory.concept ?? undefined,
-      });
     }
 
     // Remove cached vectors that are no longer live or belong to another model.
@@ -657,27 +652,7 @@ export class NeuralBrain {
       }
     }
 
-    // Load all edges into graph. Tombstoned edges (deleted_at set) must be
-    // excluded here — otherwise a connection "deleted" on this or another
-    // device reappears in the graph on the next restart.
-    const activeIds = new Set(allMemories.map((memory) => memory.id));
-    const loadedConnections = await db
-      .select()
-      .from(schema.memoryConnections)
-      .where(and(isNull(schema.memoryConnections.deletedAt), visibleConnection()));
-    const allConnections = this.namespaceMode === 'isolated'
-      ? loadedConnections.filter((connection) =>
-          activeIds.has(connection.sourceId) && activeIds.has(connection.targetId))
-      : loadedConnections;
-    for (const conn of allConnections) {
-      this.graph.addEdge({
-        sourceId: conn.sourceId,
-        targetId: conn.targetId,
-        relationship: conn.relationship as RelationshipType,
-        strength: conn.strength,
-        bidirectional: Boolean(conn.bidirectional),
-      });
-    }
+    this.reloadGraph(allMemories);
 
     // Update status
     if (!cachedIds) {
@@ -694,7 +669,7 @@ export class NeuralBrain {
     // database held at this moment, so only commits after it need catching up.
     // The claim covers both connections — the pragma sees the others, and
     // total_changes() sees this one, which is the one a sync pull writes through.
-    await this.refreshIndexBaseline(true);
+    await this.refreshIndexBaseline(scanStart);
 
     this.initialized = true;
 
@@ -704,6 +679,23 @@ export class NeuralBrain {
       loadedFrom: this.indexStatus.loadedFrom,
       initDurationMs: this.indexStatus.initDurationMs,
     });
+  }
+
+  private reloadGraph(memories: Pick<Memory, 'id' | 'type' | 'concept'>[]): void {
+    const connections = schema.memoryConnections;
+    const edges = getDb().select({
+      sourceId: connections.sourceId, targetId: connections.targetId, relationship: connections.relationship,
+      strength: connections.strength, bidirectional: connections.bidirectional,
+    }).from(connections).where(and(isNull(connections.deletedAt), visibleConnection())).all();
+    this.graph.clear();
+    for (const { id, type, concept } of memories) {
+      this.graph.addNode({ id, type, concept: concept ?? undefined });
+    }
+    for (const edge of edges) {
+      if (this.graph.getNode(edge.sourceId) && this.graph.getNode(edge.targetId)) {
+        this.graph.addEdge(edge);
+      }
+    }
   }
 
   /**
@@ -782,27 +774,27 @@ export class NeuralBrain {
     // report one — "unknown", so the fingerprint decides alone.
     const claimed = this.indexClaim;
     const externalCommit = counters.dataVersion !== null && counters.dataVersion !== claimed?.counters?.dataVersion;
-    const appliedIds = appliedMemoryIdsSince(getDb(), claimed?.counters?.localChanges ?? null);
-    if (appliedIds.length === 0 && !externalCommit && baselineMatches(claimed?.baseline ?? null, baseline)) {
+    const localChanges = claimed?.counters?.localChanges ?? null;
+    const appliedIds = appliedMemoryIdsSince(getDb(), localChanges);
+    if (appliedIds.length === 0 && !externalCommit && !appliedConnectionsSince(getDb(), localChanges)
+      && baselineMatches(claimed?.baseline ?? null, baseline)) {
       // Only other tables moved, or rows the index already agrees with. Re-claim
       // so the next read is back on the O(1) path.
       this.claimIndexState(counters, baseline);
       return 0;
     }
 
-    return this.reconcileIndex(counters, baseline, appliedIds);
+    return this.reconcileIndex(counters, baseline, appliedIds, externalCommit);
   }
 
   /** The reconcile itself — see syncIndexFromStore for why and when. */
-  private async reconcileIndex(counters: ChangeCounters, baseline: StoreBaseline, appliedIds: string[]): Promise<number> {
+  private async reconcileIndex(
+    counters: ChangeCounters, baseline: StoreBaseline, appliedIds: string[], externalCommit: boolean,
+  ): Promise<number> {
     const db = getDb();
 
-    // Claim before reading. Both markers were read before the queries below, so
-    // anything that lands mid-reconcile is either picked up by those queries or
-    // left unclaimed and retried by the next read — whereas claiming afterwards
-    // would mark a commit this pass never saw as already handled.
-    const previous = this.indexClaim?.baseline ?? null;
-    this.indexClaim = { counters, baseline, connection: getDatabaseConnection() };
+    // An external writer can change any row without advancing the store-wide maximum.
+    const previous = externalCommit ? null : this.indexClaim?.baseline ?? null;
 
     if (this.vectorSearch.embeddingModel === getEmbeddingModelId()
       && !readEnvString(process.env, 'ENGRAM_EMBEDDING_MODEL')) {
@@ -819,30 +811,30 @@ export class NeuralBrain {
     const liveRows = await db
       .select({
         id: schema.memories.id,
+        type: schema.memories.type,
+        concept: schema.memories.concept,
         model: schema.memories.embeddingModel,
         hasEmbedding: sql<number>`${schema.memories.embedding} IS NOT NULL`,
       })
       .from(schema.memories)
       .where(and(...this.liveConditions()));
 
-    const live = new Map(liveRows.map((r) => [r.id, r.model]));
+    const live = new Map(liveRows.map((r) => [r.id, r]));
     // Keyed rather than a bare id set: the refresh pass below has to compare the
     // indexed vector against the stored one, and this costs the same to build.
     const indexed = this.vectorSearch.entriesById();
 
     let removed = 0;
     for (const id of indexed.keys()) {
-      const model = live.get(id);
-      if (model !== currentModel) {
+      const row = live.get(id);
+      if (!row?.hasEmbedding || row.model !== currentModel) {
         this.vectorSearch.remove(id);
-        if (!live.has(id)) this.graph.removeNode(id);
         removed++;
       }
     }
 
     const missing = liveRows
-      .filter(({ id, model, hasEmbedding }) => !this.graph.getNode(id)
-        || (hasEmbedding && !indexed.has(id) && model === currentModel))
+      .filter(({ id, model, hasEmbedding }) => hasEmbedding && !indexed.has(id) && model === currentModel)
       .map(({ id }) => id);
     let added = 0;
     let skipped = liveRows.filter(({ model, hasEmbedding }) => hasEmbedding && model !== currentModel).length;
@@ -867,52 +859,13 @@ export class NeuralBrain {
           if (ok) added++;
           else skipped++;
         }
-        this.graph.addNode({
-          id: memory.id,
-          type: memory.type as MemoryType,
-          concept: memory.concept ?? undefined,
-        });
       }
     }
 
     const refreshed = await this.refreshChangedVectors(previous, baseline, indexed, appliedIds);
 
-    // Edges touching the newly arrived nodes, so graph expansion during recall
-    // sees them rather than treating them as isolated. Only edges with a new
-    // endpoint are fetched, to keep the reconcile proportional to what changed
-    // rather than to the whole connection table. addEdge is idempotent, so an
-    // edge whose two endpoints fall in different id chunks is simply replaced
-    // the second time round rather than double-added. Edges created externally
-    // between two nodes this process already had are still missed until restart
-    // — a narrower gap than the one being closed here, and one that costs a
-    // full adjacency rebuild to close.
-    if (missing.length > 0) {
-      for (let i = 0; i < missing.length; i += CHUNK) {
-        const slice = missing.slice(i, i + CHUNK);
-        const edges = await db
-          .select()
-          .from(schema.memoryConnections)
-          .where(
-            and(
-              or(
-                inArray(schema.memoryConnections.sourceId, slice),
-                inArray(schema.memoryConnections.targetId, slice)
-              ),
-              isNull(schema.memoryConnections.deletedAt), visibleConnection()
-            )
-          );
-
-        for (const conn of edges) {
-          this.graph.addEdge({
-            sourceId: conn.sourceId,
-            targetId: conn.targetId,
-            relationship: conn.relationship as RelationshipType,
-            strength: conn.strength,
-            bidirectional: Boolean(conn.bidirectional),
-          });
-        }
-      }
-    }
+    this.reloadGraph(liveRows);
+    this.claimIndexState(counters, baseline);
 
     const changed = added + removed + refreshed;
     if (changed > 0 || skipped !== this.indexStatus.externalSkipped) {
@@ -1316,42 +1269,40 @@ export class NeuralBrain {
     this.vectorSearch.assertModel(model);
     const crossNamespace = this.resolveCrossNamespace(options.crossNamespace);
     const topK = options.topK ?? 10;
-    const filtered = hasRecallFilters(options) || options.namespace !== undefined || options.global === true;
-    const candidateLimit = filtered ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
-    const includeGlobal = this.namespaceMode === 'filter';
-    const namespace = this.activeNamespace === undefined && includeGlobal ? null : this.activeNamespace;
+    if (!(topK >= 1)) return [];
+    const exactNamespace = options.global ? null : options.namespace;
+    if (exactNamespace !== undefined && !crossNamespace && !this.canAccessNamespace(exactNamespace)) return [];
+    const includeGlobal = exactNamespace === undefined && this.namespaceMode === 'filter';
+    const namespace = exactNamespace !== undefined ? exactNamespace : this.activeNamespace ?? (includeGlobal ? null : undefined);
+    const acrossProjects = exactNamespace === undefined && crossNamespace;
+    // Source, date and tag filters need stored rows. Keep the complete ranking
+    // for those requests and stop fetching batches once enough rows qualify.
+    const rowFilters = options.sources !== undefined || options.since !== undefined
+      || options.until !== undefined || Boolean(options.tags?.length);
+    const candidateLimit = rowFilters ? Number.MAX_SAFE_INTEGER
+      : hasRecallFilters(options) ? topK * FILTER_CANDIDATE_MULTIPLIER : topK;
     const results = this.config.hybridSearch
       ? hybridSearch(this.vectorSearch, query, queryVec, candidateLimit, options.threshold ?? 0.3,
-        options.types, namespace, crossNamespace, includeGlobal)
+        options.types, namespace, acrossProjects, includeGlobal)
       : this.vectorSearch.search(queryVec, candidateLimit, options.threshold ?? 0.3,
-        options.types, namespace, crossNamespace, includeGlobal);
+        options.types, namespace, acrossProjects, includeGlobal);
 
     const db = getDb();
-
-    // One query for all hits instead of one per result.
-    const ids = results.map((r) => r.id);
-    const rows = ids.length
-      ? await db
-          .select()
-          .from(schema.memories)
-          .where(and(inArray(schema.memories.id, ids), isNull(schema.memories.archivedAt)))
-      : [];
-    const byId = new Map(rows.map((r) => [r.id, r]));
-
-    // Iterate results to preserve retrieval ranking.
     const hits: SearchHit[] = [];
-    for (const result of results) {
-      const m = byId.get(result.id);
-      if (!m || m.embeddingModel !== model || !matchesMemoryFilters(m, options)) continue;
-      if (options.sources && !options.sources.includes(m.source ?? '')) continue;
-      if (options.namespace !== undefined && m.namespace !== options.namespace) continue;
-      if (options.global === true && m.namespace !== null) continue;
-      // Namespace filtering (defense in depth — vector search already filters)
-      if (!crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
-      // Preserve cosine similarity as the public score even when RRF orders candidates.
-      hits.push({ ...m, score: result.similarity });
+    for (let i = 0; i < results.length && hits.length < topK; i += 400) {
+      const batch = results.slice(i, i + 400);
+      const rows = await db.select().from(schema.memories)
+        .where(and(inArray(schema.memories.id, batch.map((r) => r.id)), isNull(schema.memories.archivedAt)));
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      for (const result of batch) {
+        const m = byId.get(result.id);
+        if (!m || m.embeddingModel !== model || !matchesMemoryFilters(m, options)) continue;
+        if (options.sources && !options.sources.includes(m.source ?? '')) continue;
+        if (!crossNamespace && !this.canAccessNamespace(m.namespace)) continue;
+        hits.push({ ...m, score: result.similarity });
+        if (hits.length >= topK) break;
+      }
     }
-
     return hits.slice(0, topK);
   }
 
@@ -1370,7 +1321,7 @@ export class NeuralBrain {
    * In-memory state and events are the caller's responsibility, so they only
    * run after this returns.
    */
-  private archiveAtomic(ids: string[], requireLive = false): boolean {
+  private archiveAtomic(ids: string[], condition?: SQL, eligible?: (memory: Memory) => boolean): boolean {
     if (ids.length === 0) return true;
     const db = getDb();
     const archivedAt = new Date().toISOString();
@@ -1378,16 +1329,16 @@ export class NeuralBrain {
 
     this.checkIndexClaimBeforeWrite();
     return db.transaction((tx) => {
-      if (requireLive) {
-        const live = tx.select({ id: schema.memories.id }).from(schema.memories)
-          .where(and(inArray(schema.memories.id, ids), isNull(schema.memories.archivedAt))).all();
-        if (live.length !== ids.length) return false;
+      const matches = and(inArray(schema.memories.id, ids), condition);
+      if (eligible) {
+        const live = tx.select().from(schema.memories).where(matches).all();
+        if (live.length !== ids.length || !live.every(eligible)) return false;
       }
-      tx.update(schema.memories)
+      const archived = tx.update(schema.memories)
         // Archival must advance the sync timestamp as well as the tombstone.
         .set({ archivedAt, updatedAt: archivedAt, deviceId })
-        .where(inArray(schema.memories.id, ids))
-        .run();
+        .where(matches).run();
+      if (!archived.changes) return false;
 
       tx.delete(schema.contextAssemblies).where(sql`exists (
         select 1 from json_each(${schema.contextAssemblies.assembledContext}) as entry
@@ -1412,7 +1363,7 @@ export class NeuralBrain {
         )
         .run();
       return true;
-    });
+    }, { behavior: 'immediate' });
   }
 
   /** Resolve a full id or a unique prefix of at least eight characters. */
@@ -1421,14 +1372,9 @@ export class NeuralBrain {
     const match = id.length >= 8
       ? sql`substr(${schema.memories.id}, 1, ${id.length}) = ${id}`
       : eq(schema.memories.id, id);
-    const scope = this.namespaceMode === 'filter'
-      ? this.activeNamespace
-        ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))
-        : isNull(schema.memories.namespace)
-      : undefined;
     const matches = getDb().select({ id: schema.memories.id })
       .from(schema.memories)
-      .where(and(...this.liveConditions(), scope, match))
+      .where(and(isNull(schema.memories.archivedAt), this.memoryScope(true), match))
       .limit(2).all();
     return matches.length === 1 ? matches[0]!.id : undefined;
   }
@@ -1484,9 +1430,11 @@ export class NeuralBrain {
     this.assertInitialized();
     const resolvedId = this.resolveMemoryId(id);
     if (!resolvedId) throw new Error(`Memory not found: ${id}`);
-    id = resolvedId;
+    await this.forgetResolved(resolvedId);
+  }
 
-    this.archiveAtomic([id]);
+  private async forgetResolved(id: string, condition?: SQL): Promise<boolean> {
+    if (!this.archiveAtomic([id], condition)) return false;
 
     this.vectorSearch.remove(id);
     this.graph.removeNode(id);
@@ -1496,6 +1444,7 @@ export class NeuralBrain {
 
     this.webhookManager.fire('forgotten', { id });
     void this.pluginRegistry.runHook('onForget', { memoryId: id });
+    return true;
   }
 
   /**
@@ -1546,17 +1495,10 @@ export class NeuralBrain {
     await this.syncIndexFromStore();
     const db = getDb();
 
-    const statsConditions = [isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) {
-      statsConditions.push(this.namespaceMode === 'filter'
-        ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))!
-        : eq(schema.memories.namespace, this.activeNamespace));
-    }
-
     const all = await db
       .select()
       .from(schema.memories)
-      .where(and(...statsConditions));
+      .where(and(isNull(schema.memories.archivedAt), this.memoryScope(true)));
 
     const byType: Record<MemoryType, number> = { episodic: 0, semantic: 0, procedural: 0 };
     const bySource: Record<string, number> = {};
@@ -1600,46 +1542,43 @@ export class NeuralBrain {
    * @returns Array of newly created semantic memories
    */
   async consolidate(minClusterSize = 3, threshold = 0.6, olderThanIso?: string): Promise<Memory[]> {
+    return this.consolidateEpisodes(minClusterSize, threshold, olderThanIso, false);
+  }
+
+  private async consolidateEpisodes(
+    minClusterSize: number, threshold: number, olderThanIso: string | undefined, automatic: boolean,
+  ): Promise<Memory[]> {
     this.assertInitialized();
     const db = getDb();
 
     // Get all episodic memories (scoped by namespace if configured)
-    const consolidateConditions = [eq(schema.memories.type, 'episodic'), isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) {
-      consolidateConditions.push(eq(schema.memories.namespace, this.activeNamespace));
-    }
+    const consolidateConditions = [eq(schema.memories.type, 'episodic'), isNull(schema.memories.archivedAt), this.memoryScope()];
     if (olderThanIso) {
       consolidateConditions.push(lt(schema.memories.createdAt, olderThanIso));
     }
-    const episodes = await db
-      .select()
-      .from(schema.memories)
-      .where(and(...consolidateConditions));
-
+    const rows = await db.select().from(schema.memories).where(and(...consolidateConditions));
+    const episodes = automatic ? rows.filter((m) => !this.decayEngine.isProtected(m)) : rows;
     if (episodes.length < minClusterSize) return [];
+    await this.syncIndexFromStore();
 
-    // Cluster by vector similarity using greedy approach
-    const used = new Set<string>();
+    const available = new Map(episodes.map((m) => [m.id, m]));
     const clusters: Memory[][] = [];
-
-    for (const ep of episodes) {
-      if (used.has(ep.id)) continue;
+    for (const ep of available.values()) {
       if (!ep.embedding || ep.embeddingModel !== this.vectorSearch.embeddingModel) continue;
 
       const vec = unpackFP16(Buffer.from(ep.embedding as ArrayBuffer));
-      // Scope to the namespace, otherwise foreign-namespace episodes consume
-      // the top-10 slots and are then discarded, silently shrinking clusters.
-      const similar = this.vectorSearch.search(vec, 10, threshold, ['episodic'], this.activeNamespace);
-      const cluster = similar
-        .filter((s) => !used.has(s.id) && s.id !== ep.id)
-        .map((s) => episodes.find((e) => e.id === s.id)!)
-        .filter(Boolean);
-
-      cluster.unshift(ep);
-
-      if (cluster.length >= minClusterSize) {
-        for (const m of cluster) used.add(m.id);
-        clusters.push(cluster);
+      const similar = this.vectorSearch.search(vec, this.vectorSearch.size, threshold, ['episodic'], ep.namespace);
+      // Apply the limit to eligible, unused episodes in the seed's stored namespace.
+      const cluster: Memory[] = [];
+      for (const hit of similar) {
+        const candidate = available.get(hit.id);
+        if (candidate && candidate.namespace === ep.namespace) cluster.push(candidate);
+        if (cluster.length >= Math.max(10, minClusterSize)) break;
+      }
+      const members = [ep, ...cluster.filter((m) => m.id !== ep.id)];
+      if (members.length >= minClusterSize) {
+        for (const m of members) available.delete(m.id);
+        clusters.push(members);
       }
     }
 
@@ -1665,6 +1604,7 @@ export class NeuralBrain {
         concept,
         importance,
         source: 'consolidation',
+        namespace: cluster[0]!.namespace,
         tags: ['consolidated'],
         metadata: { episodeCount: cluster.length, episodeIds: cluster.map((m) => m.id) },
       });
@@ -1691,7 +1631,8 @@ export class NeuralBrain {
       // nothing lost. Full atomicity would mean bypassing store() and losing
       // its auto-link and contradiction handling.
       const clusterIds = cluster.map((m) => m.id);
-      if (!this.archiveAtomic(clusterIds, true)) {
+      if (!this.archiveAtomic(clusterIds, isNull(schema.memories.archivedAt), (m) =>
+        m.namespace === semantic.namespace && (!automatic || !this.decayEngine.isProtected(m)))) {
         await this.forget(semantic.id);
         continue;
       }
@@ -1744,7 +1685,7 @@ export class NeuralBrain {
   /**
    * Get the in-memory knowledge graph. Callers that insert a connection row
    * directly must add the edge here too — recall traverses this graph, which is
-   * only loaded from the DB at startup.
+   * refreshed from storage during index reconciliation.
    */
   getGraph(): KnowledgeGraph {
     return this.graph;
@@ -1762,10 +1703,7 @@ export class NeuralBrain {
 
     const { maxMemoriesToAnalyze, minImportance } = this.reflectionEngine.getConfig();
 
-    const conditions = [isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) {
-      conditions.push(eq(schema.memories.namespace, this.activeNamespace));
-    }
+    const conditions = [isNull(schema.memories.archivedAt), this.memoryScope()];
     // Filtered in SQL so LIMIT applies AFTER the filter — the same ordering
     // getReflections() was fixed for. Taking the newest N rows and letting the
     // engine drop the ones below minImportance afterwards returned zero tasks
@@ -1856,10 +1794,8 @@ export class NeuralBrain {
     const conditions = [
       eq(schema.memories.source, 'reflection'),
       isNull(schema.memories.archivedAt),
+      this.memoryScope(),
     ];
-    if (this.activeNamespace) {
-      conditions.push(eq(schema.memories.namespace, this.activeNamespace));
-    }
     if (type) {
       conditions.push(like(schema.memories.tags, `%"reflection:${type}"%`));
     }
@@ -1882,20 +1818,21 @@ export class NeuralBrain {
     this.assertInitialized();
     this.decayEngine.updatePolicy(this.getDecayPolicy());
 
+    const namespace = this.namespaceMode === 'none' ? undefined : this.activeNamespace ?? null;
     const result = await this.decayEngine.sweep(
-      (id) => this.forget(id),
+      (id, unchanged) => this.forgetResolved(id, unchanged),
       dryRun,
-      this.activeNamespace
+      namespace
     );
 
     // Auto-consolidation
     if (!dryRun) {
       const newIds = await this.decayEngine.autoConsolidate(
         async (minClusterSize, threshold, olderThanIso) => {
-          const consolidated = await this.consolidate(minClusterSize, threshold, olderThanIso);
+          const consolidated = await this.consolidateEpisodes(minClusterSize, threshold, olderThanIso, true);
           return consolidated.map((m) => ({ id: m.id }));
         },
-        this.activeNamespace
+        namespace
       );
       result.consolidatedCount = newIds.length;
       result.newSemanticIds = newIds;
@@ -1980,17 +1917,10 @@ export class NeuralBrain {
     this.assertInitialized();
     const db = getDb();
 
-    const conditions = [isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) {
-      conditions.push(this.namespaceMode === 'filter'
-        ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))!
-        : eq(schema.memories.namespace, this.activeNamespace));
-    }
-
     const all = await db
       .select({ tags: schema.memories.tags })
       .from(schema.memories)
-      .where(and(...conditions));
+      .where(and(isNull(schema.memories.archivedAt), this.memoryScope(true)));
 
     const counts = new Map<string, number>();
     for (const row of all) {
@@ -2012,17 +1942,10 @@ export class NeuralBrain {
     this.assertInitialized();
     const db = getDb();
 
-    const conditions = [isNull(schema.memories.archivedAt)];
-    if (this.activeNamespace) {
-      conditions.push(this.namespaceMode === 'filter'
-        ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))!
-        : eq(schema.memories.namespace, this.activeNamespace));
-    }
-
     const all = await db
       .select()
       .from(schema.memories)
-      .where(and(...conditions));
+      .where(and(isNull(schema.memories.archivedAt), this.memoryScope(true)));
 
     // Filter by tag in the JSON array
     const filtered = all.filter((m) => {
@@ -2368,12 +2291,9 @@ export class NeuralBrain {
    * Get all unresolved contradictions (memories linked by 'contradicts' edges).
    */
   private contradictionConditions(namespace?: string, global?: boolean, status = 'confirmed'): SQL[] {
-    const conditions = this.liveConditions();
+    const conditions = [isNull(schema.memories.archivedAt), this.memoryScope(true)];
     // Existing core callers use soft filter-mode visibility (project + shared).
     // REST supplies the global selector, even when false, for exact list scope.
-    if (this.namespaceMode === 'filter') conditions.push(this.activeNamespace
-      ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))!
-      : isNull(schema.memories.namespace));
     if (global !== undefined) {
       if (this.activeNamespace) conditions.push(eq(schema.memories.namespace, this.activeNamespace));
       if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
@@ -2475,31 +2395,28 @@ export class NeuralBrain {
     this.assertInitialized();
     const db = getDb();
 
-    const [source] = await db.select().from(schema.memories).where(eq(schema.memories.id, sourceId)).limit(1);
-    const [target] = await db.select().from(schema.memories).where(eq(schema.memories.id, targetId)).limit(1);
+    if (sourceId === targetId) return { resolved: false };
+    const outcome = db.transaction((tx) => {
+      const source = tx.select().from(schema.memories).where(eq(schema.memories.id, sourceId)).get();
+      const target = tx.select().from(schema.memories).where(eq(schema.memories.id, targetId)).get();
+      if (!source || !target || !this.canAccessNamespace(source.namespace) || !this.canAccessNamespace(target.namespace)) {
+        throw new Error('Memory not found');
+      }
+      if (source.archivedAt || target.archivedAt) return null;
 
-    if (!source || !target ||
-        !this.canAccessNamespace(source.namespace) || !this.canAccessNamespace(target.namespace)) {
-      throw new Error('Memory not found');
-    }
-
-    // An archived memory is not a party to a resolution. Without this check the
-    // rows were loaded regardless of `archivedAt`, so a pair whose loser was
-    // already gone — archived by an earlier iteration of the same auto-resolve
-    // pass, or by any forget() — could still archive the LIVE side "in favour
-    // of" a memory that no longer exists, leaving the fact with no carrier.
-    if (source.archivedAt || target.archivedAt) return { resolved: false };
-
-    const outcome = decideResolution(source, target, strategy);
-    // 'manual' decides nothing on purpose — flag for human review.
+      const edge = schema.memoryConnections;
+      const confirmed = tx.select({ id: edge.id }).from(edge).where(and(
+        eq(edge.relationship, 'contradicts'), eq(contradictionStatus(), 'confirmed'), isNull(edge.deletedAt),
+        or(and(eq(edge.sourceId, sourceId), eq(edge.targetId, targetId)),
+          and(eq(edge.sourceId, targetId), eq(edge.targetId, sourceId))),
+      )).get();
+      if (!confirmed) return null;
+      const decision = decideResolution(source, target, strategy);
+      if (decision) writeResolution(tx, sourceId, targetId, decision.archivedId);
+      return decision;
+    }, { behavior: 'immediate' });
     if (!outcome) return { resolved: false };
     const { archivedId, keptId } = outcome;
-
-    // One transaction for the archive, its edge pruning and the contradicts
-    // tombstone — including for keep_both, which used to skip the tombstone and
-    // so reported `resolved: true` while getContradictions() handed the same
-    // pair back forever. See lifecycle/contradictionResolution.
-    writeResolution(sourceId, targetId, archivedId);
 
     // In-memory state and events only after the durable write succeeded.
     if (archivedId) {
@@ -2606,6 +2523,7 @@ export class NeuralBrain {
     const start = Date.now();
     const db = getDb();
 
+    const scanStart = readChangeCounters(db);
     const allMemories = await db
       .select()
       .from(schema.memories)
@@ -2639,6 +2557,7 @@ export class NeuralBrain {
     this.vectorSearch.setDimension(dimension);
     this.vectorSearch.setModelId(model);
     this.vectorSearch.load(rebuilt);
+    this.reloadGraph(allMemories);
 
     this.indexStatus.loadedFrom = 'database';
     this.indexStatus.entryCount = this.vectorSearch.size;
@@ -2650,7 +2569,7 @@ export class NeuralBrain {
 
     // The index now matches what the database holds, so a reconcile on the next
     // read would find nothing to do.
-    await this.refreshIndexBaseline(true);
+    await this.refreshIndexBaseline(scanStart);
 
     // Auto-save if path configured
     const indexPath = this.resolveIndexPath();

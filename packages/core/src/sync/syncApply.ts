@@ -6,7 +6,7 @@
  * existed), so `SyncEngine` can aggregate `SyncResult.pulled` / `.conflicts`.
  */
 
-import { recordAppliedMemory } from '../retrieval/indexBaseline.js';
+import { recordAppliedConnection, recordAppliedMemory } from '../retrieval/indexBaseline.js';
 import { eq } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type {
@@ -132,6 +132,7 @@ export function applyPulledConnection(db: SyncDb, remote: PgMemoryConnection): A
         .values(pgConnectionToNewConnection(remote))
         .onConflictDoNothing()
         .run();
+      recordAppliedConnection(db);
       return { applied: true, conflict: false };
     }
 
@@ -142,6 +143,7 @@ export function applyPulledConnection(db: SyncDb, remote: PgMemoryConnection): A
       .set(result.merged)
       .where(eq(schema.memoryConnections.id, remote.id))
       .run();
+    recordAppliedConnection(db);
     return { applied: true, conflict: true };
   } catch {
     // Most likely a FK violation: the source/target memory hasn't landed

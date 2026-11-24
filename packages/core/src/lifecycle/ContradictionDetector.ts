@@ -307,6 +307,7 @@ export class ContradictionDetector {
    * Analyze two pieces of content for contradiction signals.
    */
   analyzeContradiction(newContent: string, existingContent: string): ContradictionSignal[] {
+    if (newContent.trim() === existingContent.trim()) return [];
     const signals: ContradictionSignal[] = [];
 
     // Signal 1: Negation — one text negates what the other states

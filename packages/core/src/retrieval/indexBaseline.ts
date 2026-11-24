@@ -49,6 +49,19 @@ export function appliedMemoryIdsSince(db: Db, changes: number | null): string[] 
     .map(([id]) => id);
 }
 
+// An edge-only pull leaves the live-memory fingerprint unchanged.
+const lastAppliedConnection = new WeakMap<Db, number>();
+
+export function recordAppliedConnection(db: Db): void {
+  const changes = readChangeCounters(db).localChanges;
+  if (changes !== null) lastAppliedConnection.set(db, changes);
+}
+
+export function appliedConnectionsSince(db: Db, changes: number | null): boolean {
+  const last = lastAppliedConnection.get(db);
+  return last !== undefined && (changes === null || last > changes);
+}
+
 /** The two O(1) change counters, each blind to what the other sees. */
 export interface ChangeCounters {
   /**
