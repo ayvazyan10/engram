@@ -138,9 +138,9 @@ export function planAutoResolution(
 export function writeResolution(sourceId: string, targetId: string, archivedId?: string): void {
   const db = getDb();
   const resolvedAt = new Date().toISOString();
-  const deviceId = getDeviceId();
 
   db.transaction((tx) => {
+    const deviceId = getDeviceId();
     if (archivedId) {
       tx.update(schema.memories)
         // updatedAt must move with archivedAt — see NeuralBrain.archiveAtomic

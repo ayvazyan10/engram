@@ -21,7 +21,7 @@
  * which live entirely outside this class.
  */
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import { createPgSyncConnection, redactSyncUrl } from '../db/pg/connection.js';
@@ -103,13 +103,13 @@ export class SyncEngine {
   private readonly config: SyncConfig;
   private readonly syncUrl: string;
   private readonly syncId: string;
-  private readonly deviceId: string;
+  private deviceId: string;
   private readonly db: SyncDb;
 
   private pgConn: PgSyncConnection | null = null;
   private pgClient: PgSyncClient | null = null;
   private connectingPromise: Promise<void> | null = null;
-  private embeddingModelChecked = false;
+  private checkedEmbeddingModel: string | null = null;
   private encryptionManager: EncryptionManager | null = null;
 
   private intervalTimer: NodeJS.Timeout | null = null;
@@ -165,6 +165,7 @@ export class SyncEngine {
 
   /** Current sync status. */
   status(): SyncStatus {
+    const deviceId = this.currentPhase ? this.deviceId : getDeviceId();
     const cursor = readCursor(this.db, this.syncId);
     const state: SyncStatus['state'] = this.currentPhase
       ? this.currentPhase === 'push' ? 'pushing' : 'pulling'
@@ -175,10 +176,10 @@ export class SyncEngine {
     return {
       state,
       lastSyncAt: cursor?.lastSyncAt ?? null,
-      pendingPushCount: countPendingPush(this.db, cursor?.lastPushAt ?? null, LOCAL_BATCH_SIZE, this.deviceId),
+      pendingPushCount: countPendingPush(this.db, cursor?.lastPushAt ?? null, LOCAL_BATCH_SIZE, deviceId),
       lastError: cursor?.lastError ?? null,
       pullCursor: cursor?.pullCursor ?? null,
-      deviceId: this.deviceId,
+      deviceId,
       embeddingModel: cursor?.embeddingModel ?? null,
     };
   }
@@ -268,6 +269,7 @@ export class SyncEngine {
   private async executeGuarded(fn: () => Promise<Omit<SyncResult, 'durationMs'>>): Promise<SyncResult> {
     const start = Date.now();
     try {
+      this.deviceId = getDeviceId();
       const partial = await fn();
       const result: SyncResult = { ...partial, durationMs: Date.now() - start };
       this.backoffMs = BACKOFF_INITIAL_MS;
@@ -279,6 +281,7 @@ export class SyncEngine {
       this.config.onSyncStatus?.(this.status());
       return result;
     } catch (err) {
+      this.currentPhase = null;
       this.handleSyncError(err);
       this.config.onSyncStatus?.(this.status());
       throw err;
@@ -307,7 +310,10 @@ export class SyncEngine {
     if (this.disposed) {
       throw new Error('SyncEngine has been disposed; create a new instance to sync again.');
     }
-    if (this.pgClient) return this.pgClient;
+    if (this.pgClient) {
+      await this.checkEmbeddingModelCompatibility();
+      return this.pgClient;
+    }
     if (!this.connectingPromise) {
       this.connectingPromise = this.connect();
     }
@@ -336,6 +342,7 @@ export class SyncEngine {
       this.pgConn = null;
       this.pgClient = null;
       this.encryptionManager = null;
+      this.checkedEmbeddingModel = null;
       if (conn) await conn.close().catch(() => {});
       throw err;
     }
@@ -369,29 +376,29 @@ export class SyncEngine {
 
   /**
    * Guards against mixing incompatible embedding vector spaces across
-   * devices (plan section 4). Runs once per connection lifetime. `null` on
-   * the remote side means "unknown, assume compatible" — most rows never
-   * get `embedding_model` stamped outside `NeuralBrain.store()` (plan 2.4).
+   * devices on connection and whenever this process switches models.
    */
   private async checkEmbeddingModelCompatibility(): Promise<void> {
-    if (this.embeddingModelChecked || !this.pgClient) return;
-
     const localModel = getEmbeddingModelId();
-    const remoteModel = await this.pgClient.getRemoteEmbeddingModel();
-
-    if (remoteModel !== null && remoteModel !== localModel) {
-      throw new Error(
-        `Embedding model mismatch: local uses "${localModel}" but the sync database uses "${remoteModel}". ` +
-          'Local re-embedding only updates SQLite. Use the remote model, or stop sync across the fleet ' +
-          'and run "engram cloud migrate-model <source> <target>" to convert the shared database.'
-      );
-    }
+    if (localModel === this.checkedEmbeddingModel || !this.pgClient) return;
+    await this.pgClient.assertEmbeddingModel(localModel);
 
     writeCursor(this.db, this.syncId, { embeddingModel: localModel });
-    this.embeddingModelChecked = true;
+    this.checkedEmbeddingModel = localModel;
   }
 
   // ─── push ─────────────────────────────────────────────────────────────
+
+  private assertDeviceIdCurrent(): void {
+    if (this.deviceId !== getDeviceId()) throw new Error('Device ID changed during sync. Retry with the new identity.');
+  }
+
+  private checkpointScan(checkpoint: { lastPushAt: string } | { pullCursor: string }): void {
+    this.db.transaction((tx) => {
+      this.assertDeviceIdCurrent();
+      writeCursor(tx, this.syncId, checkpoint);
+    }, { behavior: 'immediate' });
+  }
 
   private async doPush(): Promise<SyncResult['pushed']> {
     this.currentPhase = 'push';
@@ -400,6 +407,7 @@ export class SyncEngine {
     // Attribute legacy rows on the device that owns them, without changing
     // their edit timestamps. The server cannot determine a NULL row's owner.
     this.db.transaction((tx) => {
+      this.assertDeviceIdCurrent();
       for (const table of [schema.memories, schema.memoryConnections, schema.sessions]) {
         tx.update(table).set({ deviceId: this.deviceId }).where(isNull(table.deviceId)).run();
       }
@@ -411,9 +419,14 @@ export class SyncEngine {
     const overlapMs = policy.decayConflictWindowMs ?? DEFAULT_DECAY_CONFLICT_WINDOW_MS;
     const cursor = readCursor(this.db, this.syncId);
     const startCursor = cursor?.lastPushAt ?? null;
+    const decayKey = eq(schema.localMeta.key, `sync_decay:${this.syncId}`);
+    const decay = this.db.select({ value: schema.localMeta.value,
+      stamp: sql<string>`json_extract(${schema.localMeta.value}, '$[0]')`,
+    }).from(schema.localMeta).where(decayKey).get();
+    const memoryOverlapMs = Math.max(overlapMs, decay && startCursor ? Date.parse(startCursor) - Date.parse(decay.stamp) : 0);
 
     const memories = await drainPushBatches(
-      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
+      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, memoryOverlapMs),
       // `pushMemoriesMerging` rather than `pushMemories`: the MAX merge on
       // access bookkeeping happens server-side, and a device that wins
       // last-write-wins never pulls its own row back, so this is the only
@@ -451,7 +464,8 @@ export class SyncEngine {
 
     // A scan covers edits through its start; later commits remain eligible
     // next cycle. Idle scans advance too, so old overlap rows age out.
-    writeCursor(this.db, this.syncId, { lastPushAt: scanStartedAt });
+    this.checkpointScan({ lastPushAt: scanStartedAt });
+    if (decay) this.db.delete(schema.localMeta).where(and(decayKey, eq(schema.localMeta.value, decay.value))).run();
 
     return { memories: memories.count + accesses, connections: connections.count, sessions: sessions.count };
   }
@@ -484,6 +498,7 @@ export class SyncEngine {
     const client = await this.ensureConnected();
     const cursor = readCursor(this.db, this.syncId);
     const baseCursor = pullCursorWithOverlap(cursor?.pullCursor ?? null);
+    const scanStartedAt = await client.getPullStartTime();
     const shouldApply = (deviceId: string | null): boolean => shouldApplyPulledRow(deviceId, this.deviceId);
     const manager = this.encryptionManager;
 
@@ -529,11 +544,15 @@ export class SyncEngine {
     // and everything near it ageing out of the 5-minute overlap unnoticed.
     const blocked = memories.blocked || connections.blocked || sessions.blocked;
     if (overallMax !== null && !blocked) {
-      writeCursor(this.db, this.syncId, { pullCursor: overallMax });
+      const pullCursor = overallMax > scanStartedAt ? scanStartedAt : overallMax;
+      this.checkpointScan({ pullCursor });
     }
 
     if ((memories.applied > 0 || connections.applied > 0) && this.config.onIndexRebuildNeeded) {
       await this.config.onIndexRebuildNeeded();
+    }
+    if (blocked) {
+      throw new Error('Pull blocked by decryption failure. Check ENGRAM_SYNC_ENCRYPTION_KEY and the row identified in the warning.');
     }
 
     return {

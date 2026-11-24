@@ -9,7 +9,7 @@ import { and, asc, eq, isNull, lt, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { Memory } from '../db/schema.js';
 import { computeRetentionScore, decayImportance } from '../retrieval/ImportanceScorer.js';
-import { getDeviceId } from '../sync/deviceId.js';
+import { deviceIdForWrite } from '../sync/deviceId.js';
 import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from './DecayPolicy.js';
 import type { DecayPolicyConfig } from './DecayPolicy.js';
 
@@ -197,18 +197,18 @@ export class DecayEngine {
 
             if (newImportance < (memory.importance ?? 0.5)) {
               if (!dryRun) {
-                await db
-                  .update(schema.memories)
-                  // `device_id` too: the push query only selects rows this
-                  // device owns, so a decayed peer-written row would otherwise
-                  // never propagate its new importance anywhere.
-                  .set({
-                    importance: newImportance,
-                    // Deliberately not `now` — see decayStamp above.
-                    updatedAt: decayStamp.toISOString(),
-                    deviceId: getDeviceId(),
-                  })
-                  .where(eq(schema.memories.id, memory.id));
+                const stamp = decayStamp.toISOString();
+                db.transaction((tx) => {
+                  tx.update(schema.memories).set({
+                    importance: newImportance, updatedAt: stamp, deviceId: deviceIdForWrite(),
+                  }).where(eq(schema.memories.id, memory.id)).run();
+                  // Each target needs to scan back to the earliest outstanding decay write.
+                  // Even writes sharing a stamp must invalidate an in-flight acknowledgement.
+                  tx.run(sql`INSERT INTO local_meta (key, value)
+                    SELECT 'sync_decay:' || id, json_array(${stamp}, random()) FROM sync_state WHERE id IS NOT NULL
+                    ON CONFLICT(key) DO UPDATE SET value = json_array(
+                      min(json_extract(local_meta.value, '$[0]'), ${stamp}), random())`);
+                }, { behavior: 'immediate' });
               }
               result.decayedCount++;
             }

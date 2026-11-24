@@ -21,7 +21,7 @@
  */
 
 import { and, eq, ne, or, sql } from 'drizzle-orm';
-import { getDb, schema } from '../db/index.js';
+import { assertSyncText, getDb, schema } from '../db/index.js';
 import type { NewMemoryConnection } from '../db/schema.js';
 
 /** Either the top-level drizzle db or a `db.transaction()` callback's `tx`. */
@@ -33,6 +33,7 @@ type ConnectionWriter = Pick<ReturnType<typeof getDb>, 'select' | 'insert' | 'up
  * throwing.
  */
 export function upsertConnection(db: ConnectionWriter, connection: NewMemoryConnection): void {
+  assertSyncText(connection);
   const existing = db
     .select({ id: schema.memoryConnections.id, deletedAt: schema.memoryConnections.deletedAt })
     .from(schema.memoryConnections)
@@ -88,6 +89,7 @@ export function visibleConnection() {
 
 /** A candidate never resurrects a dismissed/resolved pair, in either direction. */
 export function insertContradictionCandidate(db: ConnectionWriter, connection: NewMemoryConnection): boolean {
+  assertSyncText(connection);
   const existing = db.select({ id: schema.memoryConnections.id }).from(schema.memoryConnections).where(and(
     eq(schema.memoryConnections.relationship, 'contradicts'),
     or(

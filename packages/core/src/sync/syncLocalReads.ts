@@ -186,9 +186,10 @@ export function countPendingPush(
 ): number {
   const cursor: PushCursor | null = lastPushAt === null ? null : { ts: lastPushAt, id: null };
 
-  return (
-    selectMemoriesBatch(db, cursor, batchSize, deviceId, null).length +
-    selectConnectionsBatch(db, cursor, batchSize, deviceId, null).length +
-    selectSessionsBatch(db, cursor, batchSize, deviceId, null).length
-  );
+  let pending = 0;
+  for (const table of [schema.memories, schema.memoryConnections, schema.sessions]) {
+    pending += db.select({ id: table.id }).from(table)
+      .where(pushPageFilter(table, cursor, deviceId, null)).limit(batchSize).all().length;
+  }
+  return pending;
 }

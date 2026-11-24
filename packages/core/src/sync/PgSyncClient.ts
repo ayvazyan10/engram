@@ -65,6 +65,7 @@ interface MergedAccessRow {
   id: string;
   access_count: number;
   last_accessed_at: string | null;
+  embedding_model: string | null;
 }
 
 export interface PushMemoriesResult {
@@ -165,12 +166,20 @@ function conflictClause(table: string, columns: readonly string[], greatestColum
   return `ON CONFLICT (id) DO UPDATE SET\n      ${assignments}\n    WHERE ${gate}`;
 }
 
+function assertPgText(table: string, id: unknown, column: string, value: unknown): void {
+  if (typeof value === 'string' && value.includes('\0')) {
+    throw new Error(`Cannot sync ${table} row ${JSON.stringify(id)}: ${column} contains a NUL character. ` +
+      'Correct that field in SQLite and retry (see docs/CLOUD-SYNC.md).');
+  }
+}
+
 function buildUpsertQuery(spec: UpsertSpec, rows: readonly unknown[][]): { text: string; values: unknown[] } {
   const { table, columns, greatestColumns = [], returning = [] } = spec;
   const values: unknown[] = [];
 
   const valueRows = rows.map((row) => {
-    const placeholders = row.map((value) => {
+    const placeholders = row.map((value, index) => {
+      assertPgText(table, row[0], columns[index]!, value);
       values.push(value);
       return `$${values.length}`;
     });
@@ -283,6 +292,7 @@ const SENTINEL_META_KEY = 'encryption_sentinel';
  * legacy cost for exactly those.
  */
 const KDF_META_KEY = 'encryption_kdf';
+const MODEL_META_KEY = 'embedding_model';
 
 /** Every key that marks a database as having E2E encryption established. */
 const ENCRYPTION_META_KEYS = [SALT_META_KEY, SENTINEL_META_KEY, KDF_META_KEY];
@@ -309,7 +319,7 @@ interface EstablishedMeta {
  * recorded.
  */
 async function insertMetaFirstWins(
-  client: PoolClient,
+  client: Pool | PoolClient,
   key: string,
   value: string
 ): Promise<EstablishedMeta> {
@@ -361,17 +371,26 @@ export class PgSyncClient {
 
   // ─── push ─────────────────────────────────────────────────────────────
 
-  private async writeBatch<T extends QueryResultRow>(text: string, values: unknown[]): Promise<QueryResult<T>> {
-    if (!this.requireUnencrypted) return this.pool.query<T>(text, values);
+  private async writeBatch<T extends QueryResultRow>(text: string, values: unknown[], model?: string): Promise<QueryResult<T>> {
+    if (!this.requireUnencrypted && model === undefined) return this.pool.query<T>(text, values);
 
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
       // Bootstrap's first INSERT takes ROW EXCLUSIVE on this same table
       // until commit. SHARE also protects an empty metadata table.
-      await client.query('LOCK TABLE sync_metadata IN SHARE MODE');
-      await this.assertUnencrypted(client);
+      const needsClaim = model !== undefined && await this.getSyncMeta(MODEL_META_KEY, client) === null;
+      await client.query(needsClaim ? 'LOCK TABLE sync_metadata IN SHARE ROW EXCLUSIVE MODE'
+        : 'LOCK TABLE sync_metadata IN SHARE MODE');
+      if (this.requireUnencrypted) await this.assertUnencrypted(client);
+      if (model !== undefined) await this.assertEmbeddingModel(model, client);
       const result = await client.query<T>(text, values);
+      if (model !== undefined) {
+        // Check the LWW winner. After a fleet migration an older local model
+        // can legitimately lose the upsert and then pull the migrated row.
+        const mixed = result.rows.find((row) => row.embedding_model !== null && row.embedding_model !== model);
+        if (mixed) throw new Error(`Embedding model mismatch for memory ${mixed.id}: expected "${model}", found "${mixed.embedding_model}".`);
+      }
       await client.query('COMMIT');
       return result;
     } catch (err) {
@@ -409,12 +428,12 @@ export class PgSyncClient {
         table: 'memories',
         columns: [...MEMORY_COLUMNS],
         greatestColumns: ['access_count', 'last_accessed_at'],
-        returning: ['id', 'access_count', 'last_accessed_at'],
+        returning: ['id', 'access_count', 'last_accessed_at', 'embedding_model'],
       },
       valueRows
     );
 
-    const result = await this.writeBatch<MergedAccessRow>(text, values);
+    const result = await this.writeBatch<MergedAccessRow>(text, values, getEmbeddingModelId());
     return {
       applied: result.rowCount ?? 0,
       merged: result.rows.map((row) => ({
@@ -433,6 +452,10 @@ export class PgSyncClient {
   /** Merge recalls without resending content or changing its writer or edit timestamp. */
   async pushAccessCounters(rows: MergedAccessCounters[]): Promise<number> {
     if (rows.length === 0) return 0;
+    for (const row of rows) {
+      assertPgText('memories', row.id, 'id', row.id);
+      assertPgText('memories', row.id, 'last_accessed_at', row.lastAccessedAt);
+    }
     const result = await this.writeBatch(
       `UPDATE memories AS m SET access_count = greatest(m.access_count, a.access_count),
          last_accessed_at = greatest(m.last_accessed_at, a.last_accessed_at)
@@ -501,6 +524,14 @@ export class PgSyncClient {
   // is always included: `NULL != deviceId` is itself NULL/false in SQL, so a
   // plain `ne()` would silently exclude it — `isNull(...) OR ne(...)` covers
   // both cases explicitly.
+
+  /** Upper bound for the shared checkpoint, sampled before any table is scanned. */
+  async getPullStartTime(): Promise<string> {
+    const result = await this.pool.query<{ ts: string }>(
+      "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', $1) AS ts", [CURSOR_TS_FORMAT]
+    );
+    return result.rows[0]!.ts;
+  }
 
   /** Pull `memories` rows newer than the cursor, excluding our own device's writes. */
   async pullMemories(cursorTs: string | null, cursorId: string | null, deviceId: string): Promise<PullBatch> {
@@ -583,21 +614,28 @@ export class PgSyncClient {
 
   // ─── embedding model compatibility (2.4) ─────────────────────────────────
 
-  /**
-   * The most common non-null `embedding_model` across all remote memories,
-   * or `null` if every row has a null model (empty database, or every row
-   * was written before `NeuralBrain.store()` started stamping it — see plan
-   * section 4). `null` means "unknown, assume compatible" to the caller.
-   */
-  async getRemoteEmbeddingModel(): Promise<string | null> {
-    const result = await this.pool.query<{ embedding_model: string }>(
-      `SELECT embedding_model
-       FROM memories
-       WHERE embedding_model IS NOT NULL
-       GROUP BY embedding_model
-       ORDER BY count(*) DESC
-       LIMIT 1`
+  /** First connection claims the model. Legacy targets take theirs from existing rows. */
+  async assertEmbeddingModel(model: string, client: Pool | PoolClient = this.pool): Promise<void> {
+    let claimed = await this.getSyncMeta(MODEL_META_KEY, client);
+    if (claimed === null) {
+      const existing = await this.getRemoteEmbeddingModel(client);
+      claimed = (await insertMetaFirstWins(client, MODEL_META_KEY, existing ?? model)).value;
+    }
+    if (claimed !== model) {
+      throw new Error(
+        `Embedding model mismatch: local uses "${model}" but the sync database uses "${claimed}". ` +
+          'Local re-embedding only updates SQLite. Use the remote model, or stop sync across the fleet ' +
+          'and run "engram cloud migrate-model <source> <target>" to convert the shared database.'
+      );
+    }
+  }
+
+  /** Find the model of existing remote rows when bootstrapping a legacy target. */
+  async getRemoteEmbeddingModel(client: Pool | PoolClient = this.pool): Promise<string | null> {
+    const result = await client.query<{ embedding_model: string }>(
+      'SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL LIMIT 2'
     );
+    if (result.rows.length > 1) throw new Error('Embedding model mismatch: the sync database contains multiple models.');
     return result.rows[0]?.embedding_model ?? null;
   }
 
@@ -614,7 +652,7 @@ export class PgSyncClient {
 
     return this.db.transaction(async (tx) => {
       // Serialize with encryption bootstrap and writers until coverage is verified.
-      await tx.execute(sql`LOCK TABLE sync_metadata IN SHARE MODE`);
+      await tx.execute(sql`LOCK TABLE sync_metadata IN SHARE ROW EXCLUSIVE MODE`);
       if (!manager) {
         const { key } = pgSchema.pgSyncMetadata;
         const [encrypted] = await tx.select({ key }).from(pgSchema.pgSyncMetadata)
@@ -626,7 +664,9 @@ export class PgSyncClient {
       const models = await tx.select({ model: embeddingModel, total: count() }).from(pgMemories)
         .where(or(isNotNull(embedding), isNotNull(embeddingModel))).groupBy(embeddingModel);
       const source = models[0];
-      if (models.length !== 1 || source?.model !== sourceModel) {
+      const [claim] = await tx.select().from(pgSchema.pgSyncMetadata).where(eq(pgSchema.pgSyncMetadata.key, MODEL_META_KEY));
+      if (models.length > 1 || (claim && claim.value !== sourceModel) ||
+          (source ? source.model : claim?.value) !== sourceModel) {
         throw new Error(`Expected every remote embedding to use "${sourceModel}". Check the source model.`);
       }
 
@@ -654,7 +694,9 @@ export class PgSyncClient {
           afterId = row.id;
         }
       }
-      if (migrated !== source.total) throw new Error('Incomplete remote embedding coverage. Migration aborted.');
+      if (migrated !== (source?.total ?? 0)) throw new Error('Incomplete remote embedding coverage. Migration aborted.');
+      await tx.insert(pgSchema.pgSyncMetadata).values({ key: MODEL_META_KEY, value: targetModel })
+        .onConflictDoUpdate({ target: pgSchema.pgSyncMetadata.key, set: { value: targetModel, updatedAt: sql`now()` } });
       return migrated;
     }, { isolationLevel: 'read committed' });
   }
@@ -662,8 +704,8 @@ export class PgSyncClient {
   // ─── sync metadata (E2E encryption, Phase 6) ─────────────────────────────
 
   /** Read a key-value pair from the sync_metadata table. */
-  async getSyncMeta(key: string): Promise<string | null> {
-    const result = await this.pool.query<{ value: string }>(
+  async getSyncMeta(key: string, client: Pool | PoolClient = this.pool): Promise<string | null> {
+    const result = await client.query<{ value: string }>(
       'SELECT value FROM sync_metadata WHERE key = $1',
       [key]
     );

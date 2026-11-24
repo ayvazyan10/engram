@@ -339,10 +339,6 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       const db = getDb();
       const { ids, tag } = req.body;
       let modified = 0;
-      // Hoisted out of the loop: one device id for the whole batch, and a
-      // single db.insert (inside getDeviceId's first-call path) instead of one
-      // per row.
-      const deviceId = getDeviceId();
 
       for (const id of ids) {
         const [mem] = await db
@@ -355,10 +351,10 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         const existing: string[] = JSON.parse(mem.tags ?? '[]');
         if (!existing.includes(tag)) {
           existing.push(tag);
-          await db
+          db.transaction((tx) => tx
             .update(schema.memories)
-            .set({ tags: JSON.stringify(existing), updatedAt: new Date().toISOString(), deviceId })
-            .where(eq(schema.memories.id, id));
+            .set({ tags: JSON.stringify(existing), updatedAt: new Date().toISOString(), deviceId: getDeviceId() })
+            .where(eq(schema.memories.id, id)).run(), { behavior: 'immediate' });
           modified++;
         }
       }

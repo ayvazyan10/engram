@@ -27,6 +27,7 @@ import type { Webhook } from '../db/schema.js';
 import {
   assertSafeWebhookTarget,
   assertSafeWebhookUrl,
+  UnsafeWebhookUrlError,
   type HostResolver,
   type SafeWebhookTarget,
 } from './urlGuard.js';
@@ -356,19 +357,12 @@ export class WebhookManager {
     // the hostname a second time is not a check at all: an attacker-controlled
     // nameserver only has to answer "public" here and "169.254.169.254" a
     // millisecond later, and deliveries fire often enough to keep trying.
-    let target: SafeWebhookTarget;
-    try {
-      target = await assertSafeWebhookTarget(wh.url, this.guardOptions());
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      await this.recordFailure(wh.id);
-      return { webhookId: wh.id, url: wh.url, success: false, error: message, attempts: 0 };
-    }
-
+    let target: SafeWebhookTarget | undefined;
     const timeoutMs = this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        target ??= await assertSafeWebhookTarget(wh.url, this.guardOptions());
         const res = await postJson(target, body, headers, timeoutMs);
 
         statusCode = res.status;
@@ -393,6 +387,10 @@ export class WebhookManager {
         if (!retryable) break;
       } catch (err: unknown) {
         lastError = err instanceof Error ? err.message : String(err);
+        if (err instanceof UnsafeWebhookUrlError && !err.retryable) {
+          await this.recordFailure(wh.id);
+          return { webhookId: wh.id, url: wh.url, success: false, error: lastError, attempts: attempt - 1 };
+        }
       }
 
       // Exponential backoff before retry

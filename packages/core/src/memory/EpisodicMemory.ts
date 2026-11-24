@@ -1,10 +1,10 @@
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { getDb, schema } from '../db/index.js';
+import { assertSyncText, getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
 import { embed, getEmbeddingModelId, packFP16 } from '../embedding/Embedder.js';
 import { assertValidImportance } from '../retrieval/ImportanceScorer.js';
-import { getDeviceId } from '../sync/deviceId.js';
+import { deviceIdForWrite } from '../sync/deviceId.js';
 import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
 export interface StoreEpisodicInput {
@@ -80,11 +80,11 @@ export class EpisodicMemory {
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
       updatedAt: now,
-      deviceId: getDeviceId(),
     };
 
+    assertSyncText(record);
     this.indexSink?.beforeMemoryWrite?.();
-    db.insert(schema.memories).values(record).run();
+    db.insert(schema.memories).values({ ...record, deviceId: deviceIdForWrite() }).run();
 
     // Index and graph only after the durable write succeeded, so in-memory
     // state can never run ahead of the database.

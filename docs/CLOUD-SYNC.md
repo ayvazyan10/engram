@@ -229,6 +229,23 @@ If multiple *people* share a single Postgres database (as opposed to one person'
 **"Embedding model mismatch" error**
 - All devices sharing a sync target must use the same embedding model. See [Embedding Model Compatibility](#5-embedding-model-compatibility) for the fix.
 
+**A push reports a NUL character in a local row**
+
+The error identifies the SQLite table, row ID and column. For a live memory, use `brain.updateMemory(id, { content: replacement })` to supply the intended text. The same method accepts `concept` and `summary` and refreshes the embedding when its input changes.
+
+For a field without an editor, inspect the full bytes in SQLite and replace the field explicitly. This example repairs a session source. Bind `:id` to the reported ID and `:replacement` to the complete corrected value.
+
+```sql
+SELECT hex(source) FROM sessions WHERE id = :id;
+UPDATE sessions
+SET source = :replacement,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    device_id = (SELECT value FROM local_meta WHERE key = 'device_id')
+WHERE id = :id AND instr(source, char(0)) > 0;
+```
+
+Run `engram cloud sync` after the local edit to retry the pending page.
+
 **Data isn't appearing on another device**
 - Verify both devices point at the *exact* same `ENGRAM_SYNC_URL` (same host, same database — a typo'd database name silently creates a second, disconnected mesh).
 - Check sync status on both sides (`engram cloud status`, or `GET /api/sync/status`) to confirm they're both actually syncing and not sitting on `ENGRAM_SYNC_MODE=off`.
