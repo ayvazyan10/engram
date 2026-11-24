@@ -117,14 +117,18 @@ When the same row has changed on two devices, Engram resolves it deterministical
 
 Engram enforces this automatically: the first time a device connects to a sync target, it compares its local embedding model against the model already recorded in Postgres. If they differ, sync refuses to proceed and fails with a clear error rather than pushing incompatible vectors.
 
-**To change the embedding model across a synced fleet of devices:**
+The MCP `re_embed` tool and REST `POST /api/embeddings/re-embed` update one device's SQLite vectors. Normal sync refuses a model mismatch, so a local re-embed alone cannot migrate a populated Postgres database.
 
-1. Stop Engram on every device (CLI: `engram stop`; MCP/REST: stop the process).
-2. Change `ENGRAM_EMBEDDING_MODEL` to the new model on **every** device — they all need to agree before anyone reconnects.
-3. On **one** device, run a re-embed to regenerate every memory's vector under the new model:
-   - MCP tool: `re_embed`
-   - REST: `POST /api/embeddings/re-embed`
-4. Start the remaining devices. On their next sync cycle they'll pull the re-embedded vectors from Postgres rather than trying to push their own stale ones.
+If this device has switched models and holds the latest edits, run `engram cloud sync --re-embed` on it. For encrypted sync, supply the usual `ENGRAM_SYNC_ENCRYPTION_KEY`.
+It re-embeds stale local vectors and pushes pending work, including archives and decay, before converting the remaining remote vectors.
+A final sync verifies the new model and pulls the converted rows. Configure the other devices to use that model before they resume sync.
+
+**To migrate a fleet in place**
+
+1. Pause writes and finish a sync on every device using the current model. Stop every Engram server and MCP process before starting the migration.
+2. On one device with the CLI configured for this sync database, run `engram cloud migrate-model <source> <target>` with the full old and new model IDs. For an encrypted database, supply its usual `ENGRAM_SYNC_ENCRYPTION_KEY`.
+3. Wait for the command to report the number of migrated memories. It checks that every remote vector needing conversion has the source model, including archived memories, and generates replacements on the device. Postgres commits them together after the full count matches. An unexpected model, missing model label, or failed conversion rolls back the vector updates.
+4. Configure the target model on every device before restarting. Set `ENGRAM_EMBEDDING_MODEL` for MCP, REST, and one-shot CLI syncs. For servers launched with `engram start`, run `engram configure set embeddingModel <target>`. Resume writes after the devices have pulled the migrated memories.
 
 See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported models.
 
@@ -228,6 +232,23 @@ If multiple *people* share a single Postgres database (as opposed to one person'
 
 **"Embedding model mismatch" error**
 - All devices sharing a sync target must use the same embedding model. See [Embedding Model Compatibility](#5-embedding-model-compatibility) for the fix.
+
+**A push reports a NUL character in a local row**
+
+The error identifies the SQLite table, row ID and column. For a live memory, use `brain.updateMemory(id, { content: replacement })` to supply the intended text. The same method accepts `concept` and `summary` and refreshes the embedding when its input changes.
+
+For a field without an editor, inspect the full bytes in SQLite and replace the field explicitly. This example repairs a session source. Bind `:id` to the reported ID and `:replacement` to the complete corrected value.
+
+```sql
+SELECT hex(source) FROM sessions WHERE id = :id;
+UPDATE sessions
+SET source = :replacement,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    device_id = (SELECT value FROM local_meta WHERE key = 'device_id')
+WHERE id = :id AND instr(source, char(0)) > 0;
+```
+
+Run `engram cloud sync` after the local edit to retry the pending page.
 
 **Data isn't appearing on another device**
 - Verify both devices point at the *exact* same `ENGRAM_SYNC_URL` (same host, same database — a typo'd database name silently creates a second, disconnected mesh).

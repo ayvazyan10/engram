@@ -16,7 +16,7 @@ import { createHash } from 'crypto';
 import { and, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
+import { assertSyncText, closeDb, deleteAssembliesForMemories, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   embed, embedBatch, memoryEmbeddingText, packFP16, unpackFP16,
@@ -24,7 +24,7 @@ import {
 } from './embedding/Embedder.js';
 import { KnowledgeGraph } from './graph/KnowledgeGraph.js';
 import { contradictionStatus, insertContradictionCandidate, upsertConnections, visibleConnection } from './graph/connectionStore.js';
-import { getDeviceId } from './sync/deviceId.js';
+import { deviceIdForWrite, getDeviceId } from './sync/deviceId.js';
 import { EpisodicMemory } from './memory/EpisodicMemory.js';
 import { ProceduralMemory } from './memory/ProceduralMemory.js';
 import { SemanticMemory } from './memory/SemanticMemory.js';
@@ -51,7 +51,7 @@ import { VectorSearch } from './retrieval/VectorSearch.js';
 import { hybridSearch } from './retrieval/HybridSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
 import { indexEntryIsCurrent, mixedEmbeddingModels, storedDimension, storedVector, upsertIfCompatible } from './retrieval/indexEntry.js';
-import { appliedConnectionsSince, appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
+import { appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readEdgeRevision, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
 import type { ChangeCounters, StoreBaseline } from './retrieval/indexBaseline.js';
 import { ReflectionEngine } from './reflection/ReflectionEngine.js';
 import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflection/ReflectionEngine.js';
@@ -342,6 +342,7 @@ export class NeuralBrain {
    * for why one marker alone is not enough.
    */
   private indexClaim: IndexClaim | null = null;
+  private edgeRevision = 0;
 
   /**
    * In-flight reconcile, shared by concurrent readers so a burst of requests
@@ -525,10 +526,10 @@ export class NeuralBrain {
     const db = getDb();
     const before = scanStart ?? readChangeCounters(db);
     const claim = this.indexClaim;
-    if (!scanStart && (!claim?.counters || claim.connection !== getDatabaseConnection()
+    const pendingEdges = this.edgeRevision !== readEdgeRevision(db);
+    if (pendingEdges || (!scanStart && (!claim?.counters || claim.connection !== getDatabaseConnection()
       || claim.counters.dataVersion !== before.dataVersion
-      || appliedConnectionsSince(db, claim.counters.localChanges)
-      || appliedMemoryIdsSince(db, claim.counters.localChanges).length > 0)) {
+      || appliedMemoryIdsSince(db, claim.counters.localChanges).length > 0))) {
       this.indexClaim = null;
       return;
     }
@@ -700,6 +701,8 @@ export class NeuralBrain {
 
   private reloadGraph(memories: Pick<Memory, 'id' | 'type' | 'concept'>[]): void {
     const connections = schema.memoryConnections;
+    // Read before the edges, so a pull landing mid-load triggers the next reload.
+    this.edgeRevision = readEdgeRevision(getDb());
     const edges = getDb().select({
       sourceId: connections.sourceId, targetId: connections.targetId, relationship: connections.relationship,
       strength: connections.strength, bidirectional: connections.bidirectional,
@@ -759,7 +762,10 @@ export class NeuralBrain {
     if (this.vectorSearch.embeddingModel !== getEmbeddingModelId()) this.indexClaim = null;
     if (this.claimHolds(counters)) return 0;
 
-    const pass = this.reconcileIfStale(counters).finally(() => {
+    const pass = this.reconcileIfStale(counters).catch((error: unknown) => {
+      this.indexClaim = null;
+      throw error;
+    }).finally(() => {
       this.pendingSync = null;
     });
     this.pendingSync = pass;
@@ -791,9 +797,12 @@ export class NeuralBrain {
     // report one — "unknown", so the fingerprint decides alone.
     const claimed = this.indexClaim;
     const externalCommit = counters.dataVersion !== null && counters.dataVersion !== claimed?.counters?.dataVersion;
+    const db = getDb();
     const localChanges = claimed?.counters?.localChanges ?? null;
-    const appliedIds = appliedMemoryIdsSince(getDb(), localChanges);
-    if (appliedIds.length === 0 && !externalCommit && !appliedConnectionsSince(getDb(), localChanges)
+    const appliedIds = appliedMemoryIdsSince(db, localChanges);
+    // Pulled edges (possibly by another process) leave the memory fingerprint unchanged.
+    const pendingEdges = this.edgeRevision !== readEdgeRevision(db);
+    if (appliedIds.length === 0 && !externalCommit && !pendingEdges
       && baselineMatches(claimed?.baseline ?? null, baseline)) {
       // Only other tables moved, or rows the index already agrees with. Re-claim
       // so the next read is back on the O(1) path.
@@ -972,6 +981,7 @@ export class NeuralBrain {
   async storeBatch(inputs: StoreInput[]): Promise<StoreResult[]> {
     this.assertInitialized();
     if (inputs.length === 0) return [];
+    for (const input of inputs) assertSyncText(input);
     await this.syncIndexFromStore();
     const model = getEmbeddingModelId();
     const embeddings = await embedBatch(inputs.map((input) => memoryEmbeddingText({
@@ -998,10 +1008,6 @@ export class NeuralBrain {
     const db = getDb();
     const type = input.type ?? 'episodic';
     const source = input.source ?? this.config.defaultSource ?? null;
-    // Hoisted once per store() call rather than read per-row below — the id
-    // is memoized on disk, but there's no reason to touch it more than once
-    // per write.
-    const deviceId = getDeviceId();
 
     await this.syncIndexFromStore();
     const concept = input.concept ?? extractConcept(input.content);
@@ -1012,7 +1018,6 @@ export class NeuralBrain {
     // No awaits before the transaction: a slow embed must not backdate the
     // memory and its auto-link edges behind another process's sync cursor.
     const now = new Date().toISOString();
-
     const record: NewMemory = {
       id: uuidv4(),
       type,
@@ -1032,9 +1037,9 @@ export class NeuralBrain {
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
       updatedAt: now,
-      deviceId,
     };
 
+    assertSyncText(record);
     const duplicate = this.deduplicateStore(record, embedding, dedupThreshold);
     if (duplicate) {
       await this.refreshIndexBaseline();
@@ -1063,7 +1068,6 @@ export class NeuralBrain {
           metadata: '{}',
           createdAt: now,
           updatedAt: now,
-          deviceId,
         }));
     } catch {
       // Auto-link is best-effort — don't fail the store
@@ -1079,6 +1083,8 @@ export class NeuralBrain {
     // await, so every async step (embedding) happens above.
     this.checkIndexClaimBeforeWrite();
     db.transaction((tx) => {
+      record.deviceId = getDeviceId();
+      for (const edge of edges) edge.deviceId = record.deviceId;
       tx.insert(schema.memories).values(record).run();
       if (edges.length > 0) {
         // upsertConnections rather than a raw insert: the source id is fresh
@@ -1087,7 +1093,7 @@ export class NeuralBrain {
         // resurrection rule (see graph/connectionStore.ts).
         upsertConnections(tx, edges);
       }
-    });
+    }, { behavior: 'immediate' });
 
     // In-memory state is updated only after the durable write succeeded —
     // previously the index and graph were advanced before the edges were
@@ -1146,10 +1152,11 @@ export class NeuralBrain {
             }),
             createdAt: now,
             updatedAt: now,
-            deviceId,
           };
 
-          if (insertContradictionCandidate(db, edge)) queued.push(c);
+          const inserted = db.transaction((tx) => insertContradictionCandidate(tx, { ...edge, deviceId: getDeviceId() }),
+            { behavior: 'immediate' });
+          if (inserted) queued.push(c);
         }
         contradictionResult = { ...contradictionResult, contradictions: queued, hasContradictions: queued.length > 0 };
       }
@@ -1222,7 +1229,7 @@ export class NeuralBrain {
       tags: JSON.stringify([...new Set([...oldTags, ...newTags])]),
       importance: Math.max(existing.importance, record.importance ?? existing.importance),
       updatedAt: record.updatedAt,
-      deviceId: record.deviceId,
+      deviceId: deviceIdForWrite(),
     }).where(live).returning().get();
     if (!memory) return undefined;
     return {
@@ -1351,10 +1358,9 @@ export class NeuralBrain {
     if (ids.length === 0) return true;
     const db = getDb();
     const archivedAt = new Date().toISOString();
-    const deviceId = getDeviceId();
-
     this.checkIndexClaimBeforeWrite();
     return db.transaction((tx) => {
+      const deviceId = getDeviceId();
       const matches = and(inArray(schema.memories.id, ids), condition);
       if (eligible) {
         const live = tx.select().from(schema.memories).where(matches).all();
@@ -1366,10 +1372,7 @@ export class NeuralBrain {
         .where(matches).run();
       if (!archived.changes) return false;
 
-      tx.delete(schema.contextAssemblies).where(sql`exists (
-        select 1 from json_each(${schema.contextAssemblies.assembledContext}) as entry
-        where ${inArray(sql`json_extract(entry.value, '$.memoryId')`, ids)}
-      )`).run();
+      deleteAssembliesForMemories(tx, ids);
 
       // Tombstone instead of hard-delete: a physical DELETE can't be
       // represented in a `WHERE updated_at > cursor` sync query either, so a
@@ -1415,6 +1418,7 @@ export class NeuralBrain {
     const db = getDb();
     const live = and(eq(schema.memories.id, resolvedId), isNull(schema.memories.archivedAt), this.memoryScope(true));
     const { content, importance, tags, concept, summary } = input;
+    assertSyncText({ content, concept, summary });
     for (;;) {
       const existing = db.select().from(schema.memories).where(live).get();
       if (!existing) throw new Error(`Memory not found: ${id}`);
@@ -1439,7 +1443,7 @@ export class NeuralBrain {
         updates.embeddingModel = model;
       }
       const memory = db.update(schema.memories).set({
-        ...updates, updatedAt: sql`strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, deviceId: getDeviceId(),
+        ...updates, updatedAt: sql`strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`, deviceId: deviceIdForWrite(),
       }).where(and(live, unchangedEmbeddingInputs(existing))).returning().get();
       if (!memory) continue;
       if (newVector) {
@@ -1491,9 +1495,9 @@ export class NeuralBrain {
       // every other write site produces.
       startedAt: now,
       updatedAt: now,
-      deviceId: getDeviceId(),
     };
-    await db.insert(schema.sessions).values(session);
+    assertSyncText(session);
+    await db.insert(schema.sessions).values({ ...session, deviceId: deviceIdForWrite() });
     return session.id;
   }
 
@@ -1505,7 +1509,7 @@ export class NeuralBrain {
     const now = new Date().toISOString();
     await db
       .update(schema.sessions)
-      .set({ endedAt: now, updatedAt: now, deviceId: getDeviceId() })
+      .set({ endedAt: now, updatedAt: now, deviceId: deviceIdForWrite() })
       .where(this.activeNamespace
         ? and(eq(schema.sessions.id, sessionId), eq(schema.sessions.namespace, this.activeNamespace))
         : eq(schema.sessions.id, sessionId));
@@ -2030,7 +2034,7 @@ export class NeuralBrain {
       if (operation === 'add' && tags.includes(tag)) return tags;
       const updated = operation === 'add' ? [...tags, tag] : tags.filter((t) => t !== tag);
       tx.update(schema.memories)
-        .set({ tags: JSON.stringify(updated), updatedAt: new Date().toISOString(), deviceId: getDeviceId() })
+        .set({ tags: JSON.stringify(updated), updatedAt: new Date().toISOString(), deviceId: deviceIdForWrite() })
         .where(match).run();
       return updated;
     }, { behavior: 'immediate' });
@@ -2112,7 +2116,7 @@ export class NeuralBrain {
   /**
    * Re-embed all memories (or only stale/legacy ones) with the current model.
    *
-   * @param onlyStale  If true, only repair embeddings whose model ID or dimension differs from the active model. Default: true.
+   * @param onlyStale  If true, only re-embed vectors with a missing or different model ID or a mismatched dimension. Default: true.
    * @param batchSize  Number of memories to process per batch. Default: 32.
    * @param onProgress Optional callback fired after each batch.
    */
@@ -2126,9 +2130,6 @@ export class NeuralBrain {
     const db = getDb();
     const currentModel = getEmbeddingModelId();
     const currentDim = await this.resolveModelDimension(currentModel);
-    // Hoisted out of the per-row loop below — this is the device performing
-    // the re-embed, not something that varies per memory.
-    const deviceId = getDeviceId();
 
     // A reset drops even rows already embedded with the target model. A stale-only
     // pass skips those rows, so the next read must reconcile them from storage.
@@ -2144,8 +2145,8 @@ export class NeuralBrain {
       .from(schema.memories)
       .where(and(...this.liveConditions()));
 
-    const toReEmbed = all.filter((m) => m.embedding
-      && (!onlyStale || m.embeddingModel !== currentModel || storedDimension(m.embedding) !== currentDim));
+    const toReEmbed = all.filter((m) => m.embedding && (!onlyStale || m.embeddingModel !== currentModel
+      || m.embeddingDim !== currentDim || storedDimension(m.embedding) !== currentDim));
 
     const progress: ReEmbedProgress = {
       total: toReEmbed.length,
@@ -2177,7 +2178,7 @@ export class NeuralBrain {
                 embeddingDim: newEmbedding.length,
                 embeddingModel: currentModel,
                 updatedAt: new Date().toISOString(),
-                deviceId,
+                deviceId: deviceIdForWrite(),
               })
               .where(and(eq(schema.memories.id, memory.id),
                 unchangedEmbeddingInputs(memory), isNull(schema.memories.archivedAt)))
@@ -2246,14 +2247,12 @@ export class NeuralBrain {
     const db = getDb();
     const currentModel = getEmbeddingModelId();
     const now = new Date().toISOString();
-    const deviceId = getDeviceId();
-
     const result = db
       .update(schema.memories)
       // updatedAt/deviceId must move with the change — this write silently
       // mutated embeddingModel with no updatedAt bump, so a backfill would
       // never propagate to another device's sync cursor.
-      .set({ embeddingModel: currentModel, updatedAt: now, deviceId })
+      .set({ embeddingModel: currentModel, updatedAt: now, deviceId: deviceIdForWrite() })
       .where(
         and(
           ...this.liveConditions(),
@@ -2381,7 +2380,7 @@ export class NeuralBrain {
     const now = new Date().toISOString();
     const updated = getDb().update(schema.memoryConnections).set({
       metadata: JSON.stringify({ ...JSON.parse(edge.metadata), status: verdict === 'contradiction' ? 'confirmed' : 'dismissed' }),
-      deletedAt: verdict === 'none' ? now : null, updatedAt: now, deviceId: getDeviceId(),
+      deletedAt: verdict === 'none' ? now : null, updatedAt: now, deviceId: deviceIdForWrite(),
     }).where(and(eq(schema.memoryConnections.id, edge.id),
       ...this.contradictionConditions(undefined, undefined, 'candidate'))).run();
     if (!updated.changes) throw new Error('Contradiction candidate not found');

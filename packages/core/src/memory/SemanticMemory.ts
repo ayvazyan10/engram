@@ -1,10 +1,10 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { getDb, schema } from '../db/index.js';
+import { assertSyncText, getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory, NewMemoryConnection, RelationshipType } from '../db/schema.js';
 import { memoryEmbeddingText, embed, getEmbeddingModelId, packFP16 } from '../embedding/Embedder.js';
 import { assertValidImportance } from '../retrieval/ImportanceScorer.js';
-import { getDeviceId } from '../sync/deviceId.js';
+import { deviceIdForWrite, getDeviceId } from '../sync/deviceId.js';
 import { upsertConnections } from '../graph/connectionStore.js';
 import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
@@ -61,7 +61,6 @@ export class SemanticMemory {
     if (input.importance !== undefined) assertValidImportance(input.importance);
 
     const db = getDb();
-    const deviceId = getDeviceId();
 
     const fullText = memoryEmbeddingText({ ...input, type: 'semantic' });
     const embeddingModel = getEmbeddingModelId();
@@ -81,7 +80,6 @@ export class SemanticMemory {
       namespace: this.storeNamespace(input.namespace),
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
-      deviceId,
     };
 
     const connections: NewMemoryConnection[] = (input.relatesTo ?? []).map((rel) => ({
@@ -92,7 +90,6 @@ export class SemanticMemory {
       strength: rel.strength ?? 1.0,
       bidirectional: rel.relationship === 'relates_to',
       metadata: '{}',
-      deviceId,
     }));
 
     if (this.namespaceMode === 'isolated' && connections.length > 0) {
@@ -110,6 +107,7 @@ export class SemanticMemory {
     // throw AFTER the memory row was already committed: store() rejected while
     // leaving an orphaned, edge-less memory behind, and a retry then created a
     // duplicate. Embedding happens above because the callback must stay sync.
+    assertSyncText(record);
     this.indexSink?.beforeMemoryWrite?.();
     const now = new Date().toISOString();
     record.createdAt = now;
@@ -119,6 +117,8 @@ export class SemanticMemory {
       connection.updatedAt = now;
     }
     db.transaction((tx) => {
+      record.deviceId = getDeviceId();
+      for (const connection of connections) connection.deviceId = record.deviceId;
       tx.insert(schema.memories).values(record).run();
       if (connections.length > 0) {
         // upsertConnections rather than a raw insert — see
@@ -127,7 +127,7 @@ export class SemanticMemory {
         // throwing the UNIQUE constraint violation a naive insert would.
         upsertConnections(tx, connections);
       }
-    });
+    }, { behavior: 'immediate' });
 
     // Index and graph only after the durable write succeeded, so in-memory
     // state can never run ahead of the database. The edges travel with it:
@@ -175,11 +175,11 @@ export class SemanticMemory {
   }
 
   async update(id: string, updates: { content?: string; confidence?: number; importance?: number }): Promise<void> {
+    assertSyncText(updates);
     if (updates.importance !== undefined) assertValidImportance(updates.importance);
 
     const db = getDb();
     const updateData: Partial<NewMemory> = {
-      deviceId: getDeviceId(),
     };
 
     // Held for the sink below: re-embedding writes a new vector to the row, and
@@ -229,7 +229,7 @@ export class SemanticMemory {
 
     this.indexSink?.beforeMemoryWrite?.();
     updateData.updatedAt = new Date().toISOString();
-    db.update(schema.memories).set(updateData).where(eq(schema.memories.id, id)).run();
+    db.update(schema.memories).set({ ...updateData, deviceId: deviceIdForWrite() }).where(eq(schema.memories.id, id)).run();
 
     if (reindex) {
       await this.indexSink?.onMemoryWritten({

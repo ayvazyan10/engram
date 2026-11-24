@@ -139,6 +139,7 @@ export function writeResolution(
   tx: Pick<ReturnType<typeof getDb>, 'update'>, sourceId: string, targetId: string, archivedId?: string,
 ): void {
   const resolvedAt = new Date().toISOString();
+  // Read inside the caller's transaction, like every other sync write.
   const deviceId = getDeviceId();
 
   if (archivedId) {

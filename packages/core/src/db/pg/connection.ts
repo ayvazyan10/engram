@@ -35,7 +35,8 @@ export function redactSyncUrl(url: string): string {
     if (parsed.password) {
       parsed.password = '***';
     }
-    if (parsed.searchParams.has('password')) parsed.searchParams.set('password', '***');
+    parsed.search = '';
+    parsed.hash = '';
     return parsed.toString();
   } catch {
     return '<unparseable-connection-string>';
@@ -49,6 +50,15 @@ export function redactSyncUrl(url: string): string {
  * callers (e.g. `engram cloud connect`) can validate user input eagerly.
  */
 export function validateSyncUrl(url: string): void {
+  validatedConnectionString(url, false);
+}
+
+/** pg accepts literal percent signs; escape them before decoding target components. */
+export function parseSyncUrl(url: string): URL {
+  return new URL(url.trim().replace(/%(?![\da-f]{2})/gi, '%25'));
+}
+
+function validatedConnectionString(url: string, defaultSslMode: boolean): string {
   if (!url || url.trim().length === 0) {
     throw new Error(
       'ENGRAM_SYNC_URL is missing or empty. Cloud sync needs a PostgreSQL connection string, ' +
@@ -58,7 +68,7 @@ export function validateSyncUrl(url: string): void {
 
   let parsed: URL;
   try {
-    parsed = new URL(url);
+    parsed = parseSyncUrl(url);
   } catch {
     throw new Error(
       'ENGRAM_SYNC_URL is not a valid URL. It must be a postgres:// or postgresql:// connection string.'
@@ -72,11 +82,15 @@ export function validateSyncUrl(url: string): void {
     );
   }
 
+  const sslModes = parsed.searchParams.getAll('sslmode');
+  if (sslModes.length > 1) {
+    throw new Error('ENGRAM_SYNC_URL must contain at most one sslmode parameter.');
+  }
   if (process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] === 'true') {
-    return;
+    return parsed.toString();
   }
 
-  if (parsed.searchParams.getAll('sslmode').at(-1) !== 'require') {
+  if (sslModes[0] !== 'require' && !(defaultSslMode && sslModes.length === 0)) {
     throw new Error(
       [
         'ENGRAM_SYNC_URL must require TLS (add "?sslmode=require") — cloud sync sends memory',
@@ -86,20 +100,7 @@ export function validateSyncUrl(url: string): void {
       ].join(' ')
     );
   }
-}
-
-/**
- * Appends `sslmode=require` to `url` if it isn't already present, unless
- * ENGRAM_SYNC_ALLOW_UNENCRYPTED=true. A convenience default, not a
- * substitute for `validateSyncUrl` — it just saves the common "forgot
- * sslmode" case from failing validation outright.
- */
-function withDefaultSslMode(url: string): string {
-  if (process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] === 'true' || !URL.canParse(url)) {
-    return url;
-  }
-  const parsed = new URL(url);
-  if (parsed.searchParams.has('sslmode')) return url;
+  // Give pg the same literal sslmode key/value we just validated.
   parsed.searchParams.set('sslmode', 'require');
   return parsed.toString();
 }
@@ -113,8 +114,7 @@ function withDefaultSslMode(url: string): string {
  * connections, and the sync engine only ever needs one or two at a time.
  */
 export async function createPgSyncConnection(url: string): Promise<PgSyncConnection> {
-  const connectionString = withDefaultSslMode(url);
-  validateSyncUrl(connectionString);
+  const connectionString = validatedConnectionString(url, true);
 
   let pg: typeof import('pg');
   try {

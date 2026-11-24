@@ -21,7 +21,7 @@
  * which live entirely outside this class.
  */
 
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import { createPgSyncConnection, redactSyncUrl } from '../db/pg/connection.js';
@@ -37,7 +37,7 @@ import { shouldApplyPulledRow } from './conflict.js';
 import { PgSyncClient } from './PgSyncClient.js';
 import { EncryptionManager } from './encryption.js';
 import {
-  countPendingPush, selectConnectionsBatch, selectMemoriesBatch, selectSessionsBatch,
+  countPendingPush, initializeAccessQueue, selectAccessCountersBatch, selectConnectionsBatch, selectMemoriesBatch, selectSessionsBatch,
 } from './syncLocalReads.js';
 import type { SyncDb } from './syncLocalReads.js';
 import {
@@ -71,7 +71,7 @@ export interface SyncConfig {
   /** Called when a sync cycle fails. Never thrown past — informational only. */
   onSyncError?: (error: Error) => void;
   /**
-   * Called after `pull()` applies at least one new/updated memory locally.
+   * Called after `pull()` applies at least one new/updated memory or connection locally.
    * The integration point (e.g. `NeuralBrain`) should use this to rebuild
    * its in-memory vector index — `SyncEngine` has no index of its own.
    */
@@ -103,13 +103,13 @@ export class SyncEngine {
   private readonly config: SyncConfig;
   private readonly syncUrl: string;
   private readonly syncId: string;
-  private readonly deviceId: string;
+  private deviceId: string;
   private readonly db: SyncDb;
 
   private pgConn: PgSyncConnection | null = null;
   private pgClient: PgSyncClient | null = null;
   private connectingPromise: Promise<void> | null = null;
-  private embeddingModelChecked = false;
+  private checkedEmbeddingModel: string | null = null;
   private encryptionManager: EncryptionManager | null = null;
 
   private intervalTimer: NodeJS.Timeout | null = null;
@@ -118,6 +118,7 @@ export class SyncEngine {
   private inFlight: Promise<SyncResult> | null = null;
   private currentPhase: 'push' | 'pull' | null = null;
   private backoffMs = BACKOFF_INITIAL_MS;
+  private nextRetryAt = 0;
 
   private disposed = false;
   private readonly onBeforeExit = (): void => {
@@ -125,15 +126,12 @@ export class SyncEngine {
   };
 
   constructor(config: SyncConfig) {
-    this.config = config;
+    this.config = { ...config, mode: config.mode ?? 'auto' };
     this.syncUrl = config.syncUrl;
     this.syncId = computeSyncId(config.syncUrl);
     this.deviceId = getDeviceId();
     this.db = getDb();
-    // `computeSyncId` stopped hashing the password (see cursor.ts), which
-    // re-keys the row. Carry an existing one across before anything reads
-    // it, or the first cycle mistakes "never synced" for a fresh target and
-    // re-pushes/re-pulls the whole database.
+    // Retire ambiguous target keys before any scan reads a checkpoint.
     migrateLegacySyncState(this.db, config.syncUrl);
     process.once('beforeExit', this.onBeforeExit);
   }
@@ -141,10 +139,10 @@ export class SyncEngine {
   // ─── public API ───────────────────────────────────────────────────────
 
   /** One-shot full sync: push then pull. Only one sync/push/pull runs at a time. */
-  async sync(): Promise<SyncResult> {
+  async sync({ skipEmbeddingModelCheck = false } = {}): Promise<SyncResult> {
     return this.runGuarded(async () => {
-      const pushed = await this.doPush();
-      const { pulled, conflicts } = await this.doPull();
+      const pushed = await this.doPush(skipEmbeddingModelCheck);
+      const { pulled, conflicts } = await this.doPull(skipEmbeddingModelCheck);
       return { pushed, pulled, conflicts };
     });
   }
@@ -167,6 +165,7 @@ export class SyncEngine {
 
   /** Current sync status. */
   status(): SyncStatus {
+    const deviceId = this.currentPhase ? this.deviceId : getDeviceId();
     const cursor = readCursor(this.db, this.syncId);
     const state: SyncStatus['state'] = this.currentPhase
       ? this.currentPhase === 'push' ? 'pushing' : 'pulling'
@@ -177,10 +176,10 @@ export class SyncEngine {
     return {
       state,
       lastSyncAt: cursor?.lastSyncAt ?? null,
-      pendingPushCount: countPendingPush(this.db, cursor?.lastPushAt ?? null, LOCAL_BATCH_SIZE, this.deviceId),
+      pendingPushCount: countPendingPush(this.db, cursor?.lastPushAt ?? null, LOCAL_BATCH_SIZE, deviceId),
       lastError: cursor?.lastError ?? null,
       pullCursor: cursor?.pullCursor ?? null,
-      deviceId: this.deviceId,
+      deviceId,
       embeddingModel: cursor?.embeddingModel ?? null,
     };
   }
@@ -190,14 +189,15 @@ export class SyncEngine {
     if (this.intervalTimer || this.config.mode !== 'auto') return;
 
     const intervalMs = this.config.intervalMs ?? DEFAULT_INTERVAL_MS;
-    this.intervalTimer = setInterval(() => {
-      // sync() already records failures to cursor.lastError and reports
-      // them via onSyncError (see runGuarded) — this catch exists only to
-      // stop a rejected promise from becoming an unhandled rejection.
-      this.sync().catch(() => {});
-    }, intervalMs);
+    this.intervalTimer = setInterval(() => this.syncAutomatically(), intervalMs);
     this.intervalTimer.unref?.();
 
+    this.syncAutomatically();
+  }
+
+  private syncAutomatically(): void {
+    if (this.inFlight || Date.now() < this.nextRetryAt) return;
+    // runGuarded records the error and reports it through onSyncError.
     this.sync().catch(() => {});
   }
 
@@ -209,8 +209,8 @@ export class SyncEngine {
     const debounceMs = this.config.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      this.sync().catch(() => {});
-    }, debounceMs);
+      this.syncAutomatically();
+    }, Math.max(debounceMs, this.nextRetryAt - Date.now()));
     this.debounceTimer.unref?.();
   }
 
@@ -268,27 +268,30 @@ export class SyncEngine {
   private async executeGuarded(fn: () => Promise<Omit<SyncResult, 'durationMs'>>): Promise<SyncResult> {
     const start = Date.now();
     try {
+      this.deviceId = getDeviceId();
       const partial = await fn();
       const result: SyncResult = { ...partial, durationMs: Date.now() - start };
       this.backoffMs = BACKOFF_INITIAL_MS;
+      this.nextRetryAt = 0;
       writeCursor(this.db, this.syncId, {
         lastSyncAt: new Date().toISOString(),
         lastError: null,
       });
+      this.currentPhase = null;
       this.config.onSyncStatus?.(this.status());
       return result;
     } catch (err) {
+      this.currentPhase = null;
       this.handleSyncError(err);
       this.config.onSyncStatus?.(this.status());
       throw err;
-    } finally {
-      this.currentPhase = null;
     }
   }
 
   private handleSyncError(error: unknown): void {
     const message = this.redactMessage(error instanceof Error ? error.message : String(error));
     writeCursor(this.db, this.syncId, { lastError: message });
+    this.nextRetryAt = Date.now() + this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, BACKOFF_MAX_MS);
     this.config.onSyncError?.(error instanceof Error ? error : new Error(message));
   }
@@ -301,13 +304,16 @@ export class SyncEngine {
 
   // ─── connection + embedding-model compatibility (2.4) ────────────────────
 
-  private async ensureConnected(): Promise<PgSyncClient> {
+  private async ensureConnected(skipEmbeddingModelCheck: boolean): Promise<PgSyncClient> {
     if (this.disposed) {
       throw new Error('SyncEngine has been disposed; create a new instance to sync again.');
     }
-    if (this.pgClient) return this.pgClient;
+    if (this.pgClient) {
+      await this.checkEmbeddingModelCompatibility(skipEmbeddingModelCheck);
+      return this.pgClient;
+    }
     if (!this.connectingPromise) {
-      this.connectingPromise = this.connect();
+      this.connectingPromise = this.connect(skipEmbeddingModelCheck);
     }
     await this.connectingPromise;
     if (!this.pgClient) {
@@ -316,22 +322,25 @@ export class SyncEngine {
     return this.pgClient;
   }
 
-  private async connect(): Promise<void> {
+  private async connect(skipEmbeddingModelCheck: boolean): Promise<void> {
     try {
       this.pgConn = await createPgSyncConnection(this.syncUrl);
       this.pgClient = new PgSyncClient({
         db: this.pgConn.db,
         pool: this.pgConn.pool,
         batchSize: LOCAL_BATCH_SIZE,
+        requireUnencrypted: !this.config.encryptionKey,
       });
-      await this.checkEmbeddingModelCompatibility();
+      await this.checkEmbeddingModelCompatibility(skipEmbeddingModelCheck);
       await this.initializeEncryption();
+      initializeAccessQueue(this.db, this.syncId);
     } catch (err) {
       this.connectingPromise = null;
       const conn = this.pgConn;
       this.pgConn = null;
       this.pgClient = null;
       this.encryptionManager = null;
+      this.checkedEmbeddingModel = null;
       if (conn) await conn.close().catch(() => {});
       throw err;
     }
@@ -354,14 +363,7 @@ export class SyncEngine {
     if (!this.pgClient) return;
 
     if (!this.config.encryptionKey) {
-      if (await this.pgClient.hasEncryptionMetadata()) {
-        throw new Error(
-          'This sync database has end-to-end encryption enabled, but this process has no ' +
-            'passphrase configured. Set ENGRAM_SYNC_ENCRYPTION_KEY to the passphrase the ' +
-            'database was encrypted with — syncing without it would overwrite encrypted rows ' +
-            'with plaintext.'
-        );
-      }
+      await this.pgClient.assertUnencrypted();
       return;
     }
 
@@ -372,35 +374,43 @@ export class SyncEngine {
 
   /**
    * Guards against mixing incompatible embedding vector spaces across
-   * devices (plan section 4). Runs once per connection lifetime. `null` on
-   * the remote side means "unknown, assume compatible" — most rows never
-   * get `embedding_model` stamped outside `NeuralBrain.store()` (plan 2.4).
+   * devices on connection and whenever this process switches models.
    */
-  private async checkEmbeddingModelCompatibility(): Promise<void> {
-    if (this.embeddingModelChecked || !this.pgClient) return;
-
-    const localModel = getEmbeddingModelId();
-    const remoteModel = await this.pgClient.getRemoteEmbeddingModel();
-
-    if (remoteModel !== null && remoteModel !== localModel) {
-      throw new Error(
-        `Embedding model mismatch: local uses "${localModel}" but the sync database uses "${remoteModel}". ` +
-          'Mixing models would corrupt vector search. Run "engram cloud sync --re-embed" to re-generate embeddings.'
-      );
+  private async checkEmbeddingModelCompatibility(skipEmbeddingModelCheck: boolean): Promise<void> {
+    if (skipEmbeddingModelCheck) {
+      // The next normal cycle must read the claim after remote conversion.
+      this.checkedEmbeddingModel = null;
+      return;
     }
+    const localModel = getEmbeddingModelId();
+    if (localModel === this.checkedEmbeddingModel || !this.pgClient) return;
+    await this.pgClient.assertEmbeddingModel(localModel);
 
     writeCursor(this.db, this.syncId, { embeddingModel: localModel });
-    this.embeddingModelChecked = true;
+    this.checkedEmbeddingModel = localModel;
   }
 
   // ─── push ─────────────────────────────────────────────────────────────
 
-  private async doPush(): Promise<SyncResult['pushed']> {
+  private assertDeviceIdCurrent(): void {
+    if (this.deviceId !== getDeviceId()) throw new Error('Device ID changed during sync. Retry with the new identity.');
+  }
+
+  private checkpointScan(checkpoint: { lastPushAt: string } | { pullCursor: string }): void {
+    this.db.transaction((tx) => {
+      this.assertDeviceIdCurrent();
+      writeCursor(tx, this.syncId, checkpoint);
+    }, { behavior: 'immediate' });
+  }
+
+  private async doPush(skipEmbeddingModelCheck = false): Promise<SyncResult['pushed']> {
     this.currentPhase = 'push';
-    const client = await this.ensureConnected();
+    const scanStartedAt = new Date().toISOString();
+    const client = await this.ensureConnected(skipEmbeddingModelCheck);
     // Attribute legacy rows on the device that owns them, without changing
     // their edit timestamps. The server cannot determine a NULL row's owner.
     this.db.transaction((tx) => {
+      this.assertDeviceIdCurrent();
       for (const table of [schema.memories, schema.memoryConnections, schema.sessions]) {
         tx.update(table).set({ deviceId: this.deviceId }).where(isNull(table.deviceId)).run();
       }
@@ -412,18 +422,23 @@ export class SyncEngine {
     const overlapMs = policy.decayConflictWindowMs ?? DEFAULT_DECAY_CONFLICT_WINDOW_MS;
     const cursor = readCursor(this.db, this.syncId);
     const startCursor = cursor?.lastPushAt ?? null;
+    const decayKey = eq(schema.localMeta.key, `sync_decay:${this.syncId}`);
+    const decay = this.db.select({ value: schema.localMeta.value,
+      stamp: sql<string>`json_extract(${schema.localMeta.value}, '$[0]')`,
+    }).from(schema.localMeta).where(decayKey).get();
+    const memoryOverlapMs = Math.max(overlapMs, decay && startCursor ? Date.parse(startCursor) - Date.parse(decay.stamp) : 0);
 
     const memories = await drainPushBatches(
-      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
+      (c) => selectMemoriesBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, memoryOverlapMs),
       // `pushMemoriesMerging` rather than `pushMemories`: the MAX merge on
       // access bookkeeping happens server-side, and a device that wins
       // last-write-wins never pulls its own row back, so this is the only
       // point at which it can learn the merged counters.
       async (rows) => {
         const result = await client.pushMemoriesMerging(
-          encryptMemoriesForPush(this.encryptionManager, rows)
+          encryptMemoriesForPush(this.encryptionManager, rows), skipEmbeddingModelCheck
         );
-        applyMergedAccessCounters(this.db, rows, result.merged);
+        for (const counters of result.merged) applyMergedAccessCounters(this.db, counters);
         return result.applied;
       },
       (row) => row.updatedAt,
@@ -431,14 +446,35 @@ export class SyncEngine {
       startCursor,
       LOCAL_BATCH_SIZE
     );
+    // Older clients checkpointed skipped pair collisions. Revisit those edges
+    // once per target, even when both ordinary cursors have moved past them.
+    const pairsKey = `sync_connection_pairs:${this.syncId}`;
+    const pairScan = this.db.select({ value: schema.localMeta.value }).from(schema.localMeta)
+      .where(eq(schema.localMeta.key, pairsKey)).get();
+    let appliedEdge = false;
     const connections = await drainPushBatches(
       (c) => selectConnectionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
-      (rows) => client.pushConnections(encryptConnectionsForPush(this.encryptionManager, rows)),
+      (rows) => client.pushConnections(encryptConnectionsForPush(this.encryptionManager, rows), async (row) => {
+        const stored = await client.getConnectionByPair(row);
+        const metadata = this.encryptionManager?.decryptConnection(stored).metadata ?? stored.metadata;
+        const { applied, pendingPush } = applyPulledConnection(this.db, { ...stored, metadata }, this.syncId);
+        appliedEdge ||= applied;
+        return pendingPush ? client.pushConnections(encryptConnectionsForPush(this.encryptionManager, [pendingPush])) : 0;
+      }),
       (row) => row.updatedAt,
       (row) => row.id,
-      startCursor,
+      pairScan?.value === 'done' ? startCursor : null,
       LOCAL_BATCH_SIZE
     );
+    if (pairScan?.value !== 'done') {
+      // A concurrent pull can rekey another edge while this scan is in flight.
+      // Acknowledge only the scan we started, so that edge stays eligible.
+      this.db.insert(schema.localMeta).values({ key: pairsKey, value: 'done' }).onConflictDoUpdate({
+        target: schema.localMeta.key, set: { value: 'done' },
+        setWhere: eq(schema.localMeta.value, pairScan?.value ?? 'done'),
+      }).run();
+    }
+    if (appliedEdge) await this.config.onIndexRebuildNeeded?.();
     const sessions = await drainPushBatches(
       (c) => selectSessionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
       (rows) => client.pushSessions(encryptSessionsForPush(this.encryptionManager, rows)),
@@ -448,24 +484,45 @@ export class SyncEngine {
       LOCAL_BATCH_SIZE
     );
 
-    const overallMax = maxNullable(
-      maxNullable(memories.maxUpdatedAt, connections.maxUpdatedAt),
-      sessions.maxUpdatedAt
-    );
-    if (overallMax !== null && overallMax !== startCursor) {
-      writeCursor(this.db, this.syncId, { lastPushAt: overallMax });
-    }
+    const accesses = await this.pushAccessCounters(client);
 
-    return { memories: memories.count, connections: connections.count, sessions: sessions.count };
+    // A scan covers edits through its start; later commits remain eligible
+    // next cycle. Idle scans advance too, so old overlap rows age out.
+    this.checkpointScan({ lastPushAt: scanStartedAt });
+    if (decay) this.db.delete(schema.localMeta).where(and(decayKey, eq(schema.localMeta.value, decay.value))).run();
+
+    return { memories: memories.count + accesses, connections: connections.count, sessions: sessions.count };
+  }
+
+  private async pushAccessCounters(client: PgSyncClient): Promise<number> {
+    let afterKey = '';
+    let applied = 0;
+    for (;;) {
+      const rows = selectAccessCountersBatch(this.db, this.syncId, afterKey, LOCAL_BATCH_SIZE);
+      if (rows.length === 0) break;
+      applied += await client.pushAccessCounters(rows);
+      // A recall committed while the batch was in flight keeps its newer
+      // snapshot in the queue. A failed push leaves the entire page pending.
+      this.db.transaction((tx) => {
+        for (const row of rows) {
+          tx.delete(schema.localMeta).where(and(eq(schema.localMeta.key, row.key),
+            eq(schema.localMeta.value, row.value))).run();
+        }
+      });
+      if (rows.length < LOCAL_BATCH_SIZE) break;
+      afterKey = rows[rows.length - 1]!.key;
+    }
+    return applied;
   }
 
   // ─── pull ─────────────────────────────────────────────────────────────
 
-  private async doPull(): Promise<{ pulled: SyncResult['pulled']; conflicts: number }> {
+  private async doPull(skipEmbeddingModelCheck = false): Promise<{ pulled: SyncResult['pulled']; conflicts: number }> {
     this.currentPhase = 'pull';
-    const client = await this.ensureConnected();
+    const client = await this.ensureConnected(skipEmbeddingModelCheck);
     const cursor = readCursor(this.db, this.syncId);
     const baseCursor = pullCursorWithOverlap(cursor?.pullCursor ?? null);
+    const scanStartedAt = await client.getPullStartTime();
     const shouldApply = (deviceId: string | null): boolean => shouldApplyPulledRow(deviceId, this.deviceId);
     const manager = this.encryptionManager;
 
@@ -476,11 +533,20 @@ export class SyncEngine {
       (row) => applyPulledMemory(this.db, row),
       baseCursor
     );
+    const accesses = await drainPullBatches(
+      (ts, id) => client.pullOwnedAccessCounters(ts, id, this.deviceId),
+      () => true,
+      (row) => {
+        applyMergedAccessCounters(this.db, row);
+        return { applied: false, conflict: false };
+      },
+      baseCursor
+    );
     const connections = await drainPullBatches<PgMemoryConnection>(
       (ts, id) => client.pullConnections(ts, id, this.deviceId).then((b) =>
         decryptPulledConnections(manager, { ...b, rows: b.connections })),
       (row) => shouldApply(row.deviceId),
-      (row) => applyPulledConnection(this.db, row),
+      (row) => applyPulledConnection(this.db, row, this.syncId),
       baseCursor
     );
     const sessions = await drainPullBatches<PgSession>(
@@ -493,7 +559,7 @@ export class SyncEngine {
 
     const overallMax = maxNullable(
       maxNullable(memories.maxServerUpdatedAt, connections.maxServerUpdatedAt),
-      sessions.maxServerUpdatedAt
+      maxNullable(sessions.maxServerUpdatedAt, accesses.maxServerUpdatedAt)
     );
     // One cursor covers all three tables, so a table that stopped on an
     // undecryptable row can still be jumped over by another table's
@@ -502,11 +568,15 @@ export class SyncEngine {
     // and everything near it ageing out of the 5-minute overlap unnoticed.
     const blocked = memories.blocked || connections.blocked || sessions.blocked;
     if (overallMax !== null && !blocked) {
-      writeCursor(this.db, this.syncId, { pullCursor: overallMax });
+      const pullCursor = overallMax > scanStartedAt ? scanStartedAt : overallMax;
+      this.checkpointScan({ pullCursor });
     }
 
-    if (memories.applied > 0 && this.config.onIndexRebuildNeeded) {
+    if ((memories.applied > 0 || connections.applied > 0) && this.config.onIndexRebuildNeeded) {
       await this.config.onIndexRebuildNeeded();
+    }
+    if (blocked) {
+      throw new Error('Pull blocked by decryption failure. Check ENGRAM_SYNC_ENCRYPTION_KEY and the row identified in the warning.');
     }
 
     return {

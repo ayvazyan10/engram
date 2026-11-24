@@ -1,9 +1,9 @@
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { getDb, schema } from '../db/index.js';
+import { assertSyncText, getDb, schema } from '../db/index.js';
 import type { Memory, NewMemory } from '../db/schema.js';
 import { memoryEmbeddingText, embed, getEmbeddingModelId, packFP16, unpackFP16 } from '../embedding/Embedder.js';
-import { getDeviceId } from '../sync/deviceId.js';
+import { deviceIdForWrite } from '../sync/deviceId.js';
 import type { MemoryIndexSink } from './MemoryIndexSink.js';
 
 /**
@@ -106,12 +106,12 @@ export class ProceduralMemory {
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
-      deviceId: getDeviceId(),
     };
 
+    assertSyncText(record);
     this.indexSink?.beforeMemoryWrite?.();
     record.updatedAt = new Date().toISOString();
-    db.insert(schema.memories).values(record).run();
+    db.insert(schema.memories).values({ ...record, deviceId: deviceIdForWrite() }).run();
 
     // Index and graph only after the durable write succeeded, so in-memory
     // state can never run ahead of the database.
@@ -184,7 +184,7 @@ export class ProceduralMemory {
     const db = getDb();
     await db
       .update(schema.memories)
-      .set({ confidence: newConfidence, updatedAt: new Date().toISOString(), deviceId: getDeviceId() })
+      .set({ confidence: newConfidence, updatedAt: new Date().toISOString(), deviceId: deviceIdForWrite() })
       .where(eq(schema.memories.id, id));
   }
 }

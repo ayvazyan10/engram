@@ -168,7 +168,6 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         metadata: req.body.relationship === 'contradicts' ? JSON.stringify({ status: 'confirmed' }) : '{}',
         createdAt: now,
         updatedAt: now,
-        deviceId: getDeviceId(),
       };
 
       // A live duplicate is a conflict, not a server fault. Letting
@@ -199,7 +198,8 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
       // occupies the same (source, target, relationship) slot instead of
       // throwing the UNIQUE constraint violation a naive insert would (e.g. a
       // connection that was forgotten and is now being re-created).
-      upsertConnection(db, connection);
+      db.transaction((tx) => upsertConnection(tx, { ...connection, deviceId: getDeviceId() }),
+        { behavior: 'immediate' });
       notifySyncWrite();
 
       // Re-read the persisted row rather than trusting the locally built

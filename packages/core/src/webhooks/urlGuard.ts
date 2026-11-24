@@ -14,7 +14,7 @@ import dns from 'dns';
 import net from 'net';
 
 export class UnsafeWebhookUrlError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly retryable = false) {
     super(message);
     this.name = 'UnsafeWebhookUrlError';
   }
@@ -283,8 +283,10 @@ export async function assertSafeWebhookTarget(
   let addresses: string[];
   try {
     addresses = await resolver(hostname);
-  } catch {
-    throw new UnsafeWebhookUrlError(`Could not resolve webhook host: ${hostname}`);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    throw new UnsafeWebhookUrlError(`Could not resolve webhook host: ${hostname}`,
+      code !== 'ENOTFOUND' && code !== 'ENODATA');
   }
 
   if (addresses.length === 0) {

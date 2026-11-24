@@ -9,7 +9,7 @@ import { and, asc, eq, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { Memory } from '../db/schema.js';
 import { computeRetentionScore, decayImportance } from '../retrieval/ImportanceScorer.js';
-import { getDeviceId } from '../sync/deviceId.js';
+import { deviceIdForWrite } from '../sync/deviceId.js';
 import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from './DecayPolicy.js';
 import type { DecayPolicyConfig } from './DecayPolicy.js';
 
@@ -211,19 +211,24 @@ export class DecayEngine {
 
             if (newImportance < (memory.importance ?? 0.5)) {
               if (!dryRun) {
-                const write = db
-                  .update(schema.memories)
+                const stamp = decayStamp.toISOString();
+                const written = db.transaction((tx) => {
                   // `device_id` too: the push query only selects rows this
                   // device owns, so a decayed peer-written row would otherwise
                   // never propagate its new importance anywhere.
-                  .set({
-                    importance: newImportance,
-                    // Deliberately not `now` — see decayStamp above.
-                    updatedAt: decayStamp.toISOString(),
-                    deviceId: getDeviceId(),
-                  })
-                  .where(unchanged).run();
-                if (!write.changes) continue;
+                  const write = tx.update(schema.memories).set({
+                    importance: newImportance, updatedAt: stamp, deviceId: deviceIdForWrite(),
+                  }).where(unchanged).run();
+                  if (!write.changes) return false;
+                  // Each target needs to scan back to the earliest outstanding decay write.
+                  // Even writes sharing a stamp must invalidate an in-flight acknowledgement.
+                  tx.run(sql`INSERT INTO local_meta (key, value)
+                    SELECT 'sync_decay:' || id, json_array(${stamp}, random()) FROM sync_state WHERE id IS NOT NULL
+                    ON CONFLICT(key) DO UPDATE SET value = json_array(
+                      min(json_extract(local_meta.value, '$[0]'), ${stamp}), random())`);
+                  return true;
+                }, { behavior: 'immediate' });
+                if (!written) continue;
               }
               result.decayedCount++;
             }

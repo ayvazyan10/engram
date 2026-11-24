@@ -227,19 +227,13 @@ describe('migrateLegacySyncState', () => {
       .run();
   }
 
-  it('moves a row written under the old password-derived id onto the new one', () => {
+  it('retires a case-folded legacy id that could refer to a different user or database', () => {
     const db = getDb();
     seedRow(db, legacySyncId(url));
 
     migrateLegacySyncState(db, url);
 
-    const cursor = readCursor(db, computeSyncId(url));
-    expect(cursor).not.toBeNull();
-    expect(cursor?.pullCursor).toBe('2026-01-01T00:00:00.000Z');
-    expect(cursor?.lastPushAt).toBe('2026-01-01T00:00:01.000Z');
-    expect(cursor?.deviceId).toBe('device-legacy');
-    expect(cursor?.embeddingModel).toBe('text-embedding-3-small');
-    expect(cursor?.lastError).toBe('a remembered failure');
+    expect(readCursor(db, computeSyncId(url))).toBeNull();
     // The old row is retired, so this can never run twice.
     expect(readCursor(db, legacySyncId(url))).toBeNull();
   });

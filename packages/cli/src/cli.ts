@@ -753,10 +753,23 @@ cloudCmd
     }
   });
 
+async function migrateRemoteEmbeddings(syncUrl: string, source?: string): Promise<number> {
+  const { createPgSyncConnection, PgSyncClient } = await import('@engram-ai-memory/core');
+  const { syncEncryptionKey } = await import('./syncOptions.js');
+  const key = syncEncryptionKey();
+  const conn = await createPgSyncConnection(syncUrl);
+  try {
+    return await new PgSyncClient(conn).migrateEmbeddingModel(source, key);
+  } finally {
+    await conn.close();
+  }
+}
+
 cloudCmd
   .command('sync')
   .description('Run a one-shot sync cycle (push + pull)')
-  .action(async () => {
+  .option('--re-embed', 'Push this device’s edits before converting the shared database to its embedding model')
+  .action(async (opts: { reEmbed?: boolean }) => {
     const config = loadConfig();
     if (!config.syncUrl) {
       console.error('Cloud sync is not configured. Run: engram cloud connect <postgres-url>');
@@ -770,12 +783,35 @@ cloudCmd
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
-    const { SyncEngine } = await import('@engram-ai-memory/core');
+    if (opts.reEmbed && !process.env['ENGRAM_EMBEDDING_MODEL']?.trim() && config.embeddingModel) {
+      process.env['ENGRAM_EMBEDDING_MODEL'] = config.embeddingModel;
+    }
+    const { NeuralBrain, SyncEngine } = await import('@engram-ai-memory/core');
     // See `cloud status` above for why this is not a top-level import.
     const { syncEngineOptions } = await import('./syncOptions.js');
+    let reEmbedded: number | undefined;
+    if (opts.reEmbed) {
+      const brain = new NeuralBrain({ indexPath: config.indexPath });
+      try {
+        await brain.initialize();
+        const { processed, failed } = await brain.reEmbed(true);
+        if (failed > 0) throw new Error(`Failed to re-embed ${failed} local memories.`);
+        reEmbedded = processed;
+      } finally {
+        brain.shutdown();
+      }
+    }
+
     const engine = new SyncEngine(syncEngineOptions({ syncUrl: config.syncUrl }));
     try {
       console.log('Syncing…');
+      if (reEmbedded !== undefined) {
+        const first = await engine.sync({ skipEmbeddingModelCheck: true });
+        const converted = await migrateRemoteEmbeddings(config.syncUrl);
+        const last = await engine.sync();
+        console.log(`Re-embedded ${reEmbedded} locally, pushed ${first.pushed.memories + last.pushed.memories} memories, converted ${converted} remotely.`);
+        return;
+      }
       const result = await engine.sync();
       console.log(`✅ Sync complete in ${result.durationMs}ms`);
       console.log(`   Pushed: ${result.pushed.memories} memories, ${result.pushed.connections} connections, ${result.pushed.sessions} sessions`);
@@ -785,10 +821,25 @@ cloudCmd
       }
     } catch (err) {
       console.error(`❌ Sync failed: ${(err as Error).message}`);
-      process.exit(1);
+      process.exitCode = 1;
     } finally {
       await engine.dispose();
     }
+  });
+
+cloudCmd
+  .command('migrate-model <source> <target>')
+  .description('Re-embed the shared Postgres database after stopping sync on every device')
+  .action(async (source: string, target: string) => {
+    const { syncUrl } = loadConfig();
+    if (!syncUrl) throw new Error('Run engram cloud connect <postgres-url> first.');
+    if (disablesSyncTls(syncUrl)) {
+      process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+    }
+    const { switchEmbeddingModel } = await import('@engram-ai-memory/core');
+    switchEmbeddingModel(target);
+    const migrated = await migrateRemoteEmbeddings(syncUrl, source);
+    console.log(`Migrated ${migrated} remote memories from "${source}" to "${target}".`);
   });
 
 cloudCmd

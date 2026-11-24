@@ -123,6 +123,6 @@ describe('redactSyncUrl', () => {
     expect(redacted).toContain('ep-xxx.neon.tech');
     expect(redacted).toContain('5432');
     expect(redacted).toContain('engram');
-    expect(redacted).toContain('sslmode=require');
+    expect(redacted).not.toContain('sslmode=require');
   });
 });

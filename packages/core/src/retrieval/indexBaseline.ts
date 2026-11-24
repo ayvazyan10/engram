@@ -25,7 +25,7 @@
  *    costs.
  */
 
-import { and, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { getDataVersion, getDb, schema } from '../db/index.js';
 
@@ -49,17 +49,31 @@ export function appliedMemoryIdsSince(db: Db, changes: number | null): string[] 
     .map(([id]) => id);
 }
 
-// An edge-only pull leaves the live-memory fingerprint unchanged.
-const lastAppliedConnection = new WeakMap<Db, number>();
+// The CLI can pull through a different SQLite connection or process than the
+// brain doing recall. Keep the latest pull revision per affected source in
+// local_meta, committed atomically with the edge.
+const EDGE_REVISION = 'sync_edge_revision';
+const EDGE_SOURCE = 'sync_edge_source:';
 
-export function recordAppliedConnection(db: Db): void {
-  const changes = readChangeCounters(db).localChanges;
-  if (changes !== null) lastAppliedConnection.set(db, changes);
+export function recordAppliedEdge(db: Db, source: string, previousSource = source): void {
+  const revision = db.insert(schema.localMeta).values({ key: EDGE_REVISION, value: '1' })
+    .onConflictDoUpdate({ target: schema.localMeta.key, set: { value: sql`value + 1` } })
+    .returning({ value: schema.localMeta.value }).get().value;
+  const sources = source === previousSource ? [source] : [source, previousSource];
+  db.insert(schema.localMeta).values(sources.map((id) => ({ key: EDGE_SOURCE + id, value: revision })))
+    .onConflictDoUpdate({ target: schema.localMeta.key, set: { value: revision } }).run();
 }
 
-export function appliedConnectionsSince(db: Db, changes: number | null): boolean {
-  const last = lastAppliedConnection.get(db);
-  return last !== undefined && (changes === null || last > changes);
+export function readEdgeRevision(db: Db): number {
+  const row = db.select({ value: schema.localMeta.value }).from(schema.localMeta)
+    .where(eq(schema.localMeta.key, EDGE_REVISION)).get();
+  return Number(row?.value ?? 0);
+}
+
+export function edgeSourcesSince(db: Db, revision: number): string[] {
+  return db.select({ key: schema.localMeta.key }).from(schema.localMeta)
+    .where(sql`${schema.localMeta.key} GLOB ${EDGE_SOURCE + '*'} AND CAST(${schema.localMeta.value} AS INTEGER) > ${revision}`)
+    .all().map(({ key }) => key.slice(EDGE_SOURCE.length));
 }
 
 /** The two O(1) change counters, each blind to what the other sees. */

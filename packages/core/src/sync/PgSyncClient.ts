@@ -19,14 +19,18 @@
  */
 
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import type { Pool, PoolClient, QueryResult } from 'pg';
-import { and, asc, eq, getTableColumns, gt, isNull, ne, or, sql } from 'drizzle-orm';
+import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { and, asc, count, eq, getTableColumns, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import * as pgSchema from '../db/pg/schema.js';
 import { pgMemories, pgMemoryConnections, pgSessions } from '../db/pg/schema.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import type { Memory, MemoryConnection, Session } from '../db/schema.js';
+import { embed, getEmbeddingModelId, memoryEmbeddingText, packFP16 } from '../embedding/Embedder.js';
+import { EncryptionManager } from './encryption.js';
+import { resolveConnectionConflict } from './conflict.js';
+import { isEncrypted } from './crypto.js';
 
 const DEFAULT_BATCH_SIZE = 500;
 
@@ -63,6 +67,7 @@ interface MergedAccessRow {
   id: string;
   access_count: number;
   last_accessed_at: string | null;
+  embedding_model: string | null;
 }
 
 export interface PushMemoriesResult {
@@ -77,11 +82,13 @@ export interface PgSyncClientOptions {
   pool: Pool;
   /** Rows per push/pull page. Default 500. */
   batchSize?: number;
+  /** The sync engine is exchanging plaintext and must refuse an encrypted store. */
+  requireUnencrypted?: boolean;
 }
 
 // ─── LWW upsert SQL builder ────────────────────────────────────────────────
 // All three synced tables use `id` as their primary key and the same
-// last-write-wins shape: newer `updated_at` wins; a tie is broken by the
+// last-write-wins shape: newer edit or tombstone wins; a tie is broken by the
 // lexicographically greater `device_id`. `access_count` / `last_accessed_at`
 // on `memories` are the one exception — those are MAX'd instead of LWW'd
 // (see plan section 4, "Разрешение конфликтов").
@@ -96,12 +103,15 @@ interface UpsertSpec {
   returning?: string[];
 }
 
-/** Last-write-wins: NULL timestamps lose, newer wins, then greater `device_id`. */
+/** Match conflict.ts: NULL sorts first, even below an empty non-NULL string. */
 function lastWriteWins(table: string): string {
-  return `(${table}.updated_at IS NULL
-           OR EXCLUDED.updated_at > ${table}.updated_at
-           OR (EXCLUDED.updated_at = ${table}.updated_at
-               AND EXCLUDED.device_id > ${table}.device_id))`;
+  const tombstone = table === 'memories' ? 'archived_at' : 'deleted_at';
+  const version = (row: string): string => {
+    const time = `GREATEST(${row}.updated_at COLLATE "C", ${row}.${tombstone})`;
+    return `(${time} IS NOT NULL, COALESCE(${time}, ''),
+             ${row}.device_id IS NOT NULL, COALESCE(${row}.device_id, '') COLLATE "C")`;
+  };
+  return `(${version('EXCLUDED')} > ${version(table)})`;
 }
 
 /** NULL-safe "the incoming value is strictly greater than the stored one". */
@@ -158,12 +168,20 @@ function conflictClause(table: string, columns: readonly string[], greatestColum
   return `ON CONFLICT (id) DO UPDATE SET\n      ${assignments}\n    WHERE ${gate}`;
 }
 
+function assertPgText(table: string, id: unknown, column: string, value: unknown): void {
+  if (typeof value === 'string' && value.includes('\0')) {
+    throw new Error(`Cannot sync ${table} row ${JSON.stringify(id)}: ${column} contains a NUL character. ` +
+      'Correct that field in SQLite and retry (see docs/CLOUD-SYNC.md).');
+  }
+}
+
 function buildUpsertQuery(spec: UpsertSpec, rows: readonly unknown[][]): { text: string; values: unknown[] } {
   const { table, columns, greatestColumns = [], returning = [] } = spec;
   const values: unknown[] = [];
 
   const valueRows = rows.map((row) => {
-    const placeholders = row.map((value) => {
+    const placeholders = row.map((value, index) => {
+      assertPgText(table, row[0], columns[index]!, value);
       values.push(value);
       return `$${values.length}`;
     });
@@ -222,10 +240,13 @@ function pullPageFilter(
   columns: PullColumns,
   cursorTs: string | null,
   cursorId: string | null,
-  deviceId: string
+  deviceId: string,
+  ownRows = false
 ): SQL | undefined {
-  const notOurs = or(isNull(columns.deviceId), ne(columns.deviceId, deviceId));
-  if (cursorTs === null) return notOurs;
+  const owner = ownRows
+    ? eq(columns.deviceId, deviceId)
+    : or(isNull(columns.deviceId), ne(columns.deviceId, deviceId));
+  if (cursorTs === null) return owner;
 
   const cursor = sql`${cursorTs}::timestamptz`;
   const afterCursor =
@@ -236,7 +257,7 @@ function pullPageFilter(
           and(eq(columns.serverUpdatedAt, cursor), gt(columns.id, cursorId))
         );
 
-  return and(notOurs, afterCursor);
+  return and(owner, afterCursor);
 }
 
 // ─── column lists (DB column names, snake_case) ────────────────────────────
@@ -273,6 +294,10 @@ const SENTINEL_META_KEY = 'encryption_sentinel';
  * legacy cost for exactly those.
  */
 const KDF_META_KEY = 'encryption_kdf';
+const MODEL_META_KEY = 'embedding_model';
+const MODEL_MISMATCH_GUIDANCE =
+  'Run "engram cloud sync --re-embed" if this device holds the up-to-date data. ' +
+  'To convert a fleet, stop sync across all devices and run "engram cloud migrate-model <source> <target>".';
 
 /** Every key that marks a database as having E2E encryption established. */
 const ENCRYPTION_META_KEYS = [SALT_META_KEY, SENTINEL_META_KEY, KDF_META_KEY];
@@ -299,7 +324,7 @@ interface EstablishedMeta {
  * recorded.
  */
 async function insertMetaFirstWins(
-  client: PoolClient,
+  client: Pool | PoolClient,
   key: string,
   value: string
 ): Promise<EstablishedMeta> {
@@ -340,14 +365,46 @@ export class PgSyncClient {
   private readonly db: NodePgDatabase<typeof pgSchema>;
   private readonly pool: Pool;
   private readonly batchSize: number;
+  private readonly requireUnencrypted: boolean;
 
   constructor(options: PgSyncClientOptions) {
     this.db = options.db;
     this.pool = options.pool;
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
+    this.requireUnencrypted = options.requireUnencrypted ?? false;
   }
 
   // ─── push ─────────────────────────────────────────────────────────────
+
+  private async writeBatch<T extends QueryResultRow>(text: string, values: unknown[], model?: string): Promise<QueryResult<T>> {
+    if (!this.requireUnencrypted && model === undefined) return this.pool.query<T>(text, values);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      // Bootstrap's first INSERT takes ROW EXCLUSIVE on this same table
+      // until commit. SHARE also protects an empty metadata table.
+      const needsClaim = model !== undefined && await this.getSyncMeta(MODEL_META_KEY, client) === null;
+      await client.query(needsClaim ? 'LOCK TABLE sync_metadata IN SHARE ROW EXCLUSIVE MODE'
+        : 'LOCK TABLE sync_metadata IN SHARE MODE');
+      if (this.requireUnencrypted) await this.assertUnencrypted(client);
+      if (model !== undefined) await this.assertEmbeddingModel(model, client);
+      const result = await client.query<T>(text, values);
+      if (model !== undefined) {
+        // Check the LWW winner. After a fleet migration an older local model
+        // can legitimately lose the upsert and then pull the migrated row.
+        const mixed = result.rows.find((row) => row.embedding_model !== null && row.embedding_model !== model);
+        if (mixed) throw new Error(`Embedding model mismatch for memory ${mixed.id}: expected "${model}", found "${mixed.embedding_model}". ${MODEL_MISMATCH_GUIDANCE}`);
+      }
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 
   /**
    * Push local `memories` rows with an LWW upsert, returning the access
@@ -361,7 +418,7 @@ export class PgSyncClient {
    * *other* device happens to touch the row again — which for a memory
    * nobody edits twice is never.
    */
-  async pushMemoriesMerging(rows: Memory[]): Promise<PushMemoriesResult> {
+  async pushMemoriesMerging(rows: Memory[], skipEmbeddingModelCheck = false): Promise<PushMemoriesResult> {
     if (rows.length === 0) return { applied: 0, merged: [] };
 
     const valueRows = rows.map((m) => [
@@ -376,12 +433,13 @@ export class PgSyncClient {
         table: 'memories',
         columns: [...MEMORY_COLUMNS],
         greatestColumns: ['access_count', 'last_accessed_at'],
-        returning: ['id', 'access_count', 'last_accessed_at'],
+        returning: ['id', 'access_count', 'last_accessed_at', 'embedding_model'],
       },
       valueRows
     );
 
-    const result = await this.pool.query<MergedAccessRow>(text, values);
+    const model = skipEmbeddingModelCheck ? undefined : getEmbeddingModelId();
+    const result = await this.writeBatch<MergedAccessRow>(text, values, model);
     return {
       applied: result.rowCount ?? 0,
       merged: result.rows.map((row) => ({
@@ -397,8 +455,39 @@ export class PgSyncClient {
     return (await this.pushMemoriesMerging(rows)).applied;
   }
 
-  /** Push local `memory_connections` rows with an LWW upsert. Returns the count actually applied. */
-  async pushConnections(rows: MemoryConnection[]): Promise<number> {
+  /** Merge recalls without resending content or changing its writer or edit timestamp. */
+  async pushAccessCounters(rows: MergedAccessCounters[]): Promise<number> {
+    if (rows.length === 0) return 0;
+    for (const row of rows) {
+      assertPgText('memories', row.id, 'id', row.id);
+      assertPgText('memories', row.id, 'last_accessed_at', row.lastAccessedAt);
+    }
+    const result = await this.writeBatch(
+      `UPDATE memories AS m SET access_count = greatest(m.access_count, a.access_count),
+         last_accessed_at = greatest(m.last_accessed_at, a.last_accessed_at)
+       FROM unnest($1::text[], $2::integer[], $3::text[]) AS a(id, access_count, last_accessed_at)
+       WHERE m.id = a.id AND (m.access_count < a.access_count OR m.last_accessed_at < a.last_accessed_at
+         OR (m.last_accessed_at IS NULL AND a.last_accessed_at IS NOT NULL))`,
+      [rows.map((r) => r.id), rows.map((r) => r.accessCount), rows.map((r) => r.lastAccessedAt)]
+    );
+    return result.rowCount ?? 0;
+  }
+
+  /** Read the persisted edge after a uniqueness conflict, independent of pull cursors and device filters. */
+  async getConnectionByPair(row: MemoryConnection): Promise<PgMemoryConnection> {
+    const { sourceId, targetId, relationship } = pgMemoryConnections;
+    const [stored] = await this.db.select().from(pgMemoryConnections).where(and(
+      eq(sourceId, row.sourceId), eq(targetId, row.targetId), eq(relationship, row.relationship)
+    )).limit(1);
+    if (this.requireUnencrypted) await this.assertUnencrypted();
+    if (!stored) throw new Error(`Connection pair changed during sync of ${row.id}. Retry sync.`);
+    return stored;
+  }
+
+  /** Push connections with LWW. The sync engine also reconciles pair collisions with SQLite. */
+  async pushConnections(
+    rows: MemoryConnection[], onPairConflict?: (row: MemoryConnection) => Promise<number>
+  ): Promise<number> {
     if (rows.length === 0) return 0;
 
     const valueRows = rows.map((c) => [
@@ -412,17 +501,24 @@ export class PgSyncClient {
     );
 
     try {
-      const result: QueryResult = await this.pool.query(text, values);
+      const result = await this.writeBatch(text, values);
       return result.rowCount ?? 0;
     } catch (error) {
       if (typeof error !== 'object' || error === null
         || !('code' in error) || error.code !== '23505'
         || !('constraint' in error) || error.constraint !== 'idx_pg_connections_unique_pair') throw error;
-      // The failed statement is atomic. Retry its rows separately so only the
-      // duplicate pair is skipped and id-based updates retain LWW semantics.
-      if (rows.length === 1) return 0;
+      // The batch rolled back atomically. Isolate the colliding pair.
+      if (rows.length === 1) {
+        const row = rows[0]!;
+        if (onPairConflict) return onPairConflict(row);
+        const stored = await this.getConnectionByPair(row);
+        const result = resolveConnectionConflict(row, stored);
+        if (result.winner === 'remote' || result.reason === 'lww:tie') return 0;
+        if (isEncrypted(row.metadata)) throw new Error('Encrypted connection metadata must be rebound to the persisted edge ID.');
+        return this.pushConnections([{ ...row, id: stored.id }]);
+      }
       let applied = 0;
-      for (const row of rows) applied += await this.pushConnections([row]);
+      for (const row of rows) applied += await this.pushConnections([row], onPairConflict);
       return applied;
     }
   }
@@ -441,7 +537,7 @@ export class PgSyncClient {
       valueRows
     );
 
-    const result: QueryResult = await this.pool.query(text, values);
+    const result = await this.writeBatch(text, values);
     return result.rowCount ?? 0;
   }
 
@@ -455,6 +551,14 @@ export class PgSyncClient {
   // plain `ne()` would silently exclude it — `isNull(...) OR ne(...)` covers
   // both cases explicitly.
 
+  /** Upper bound for the shared checkpoint, sampled before any table is scanned. */
+  async getPullStartTime(): Promise<string> {
+    const result = await this.pool.query<{ ts: string }>(
+      "SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', $1) AS ts", [CURSOR_TS_FORMAT]
+    );
+    return result.rows[0]!.ts;
+  }
+
   /** Pull `memories` rows newer than the cursor, excluding our own device's writes. */
   async pullMemories(cursorTs: string | null, cursorId: string | null, deviceId: string): Promise<PullBatch> {
     const rows = await this.db
@@ -464,6 +568,7 @@ export class PgSyncClient {
       .orderBy(asc(pgMemories.serverUpdatedAt), asc(pgMemories.id))
       .limit(this.batchSize);
 
+    if (this.requireUnencrypted) await this.assertUnencrypted();
     const last = rows.at(-1);
     return {
       memories: rows.map(stripCursor),
@@ -473,6 +578,19 @@ export class PgSyncClient {
       lastId: last ? last.id : null,
       hasMore: rows.length === this.batchSize,
     };
+  }
+
+  /** Peers can advance these counters while the content row still belongs to this device. */
+  async pullOwnedAccessCounters(cursorTs: string | null, cursorId: string | null, deviceId: string) {
+    const { id, accessCount, lastAccessedAt, serverUpdatedAt } = pgMemories;
+    const rows = await this.db.select({ id, accessCount, lastAccessedAt, cursorTs: cursorText(serverUpdatedAt) })
+      .from(pgMemories)
+      .where(and(pullPageFilter(pgMemories, cursorTs, cursorId, deviceId, true),
+        or(isNotNull(lastAccessedAt), gt(accessCount, 0))))
+      .orderBy(asc(serverUpdatedAt), asc(id)).limit(this.batchSize);
+    const last = rows.at(-1);
+    return { rows, maxServerUpdatedAt: last?.cursorTs ?? null, lastId: last?.id ?? null,
+      hasMore: rows.length === this.batchSize };
   }
 
   /** Pull `memory_connections` rows newer than the cursor, excluding our own device's writes. */
@@ -487,6 +605,7 @@ export class PgSyncClient {
       .orderBy(asc(pgMemoryConnections.serverUpdatedAt), asc(pgMemoryConnections.id))
       .limit(this.batchSize);
 
+    if (this.requireUnencrypted) await this.assertUnencrypted();
     const last = rows.at(-1);
     return {
       memories: [],
@@ -507,6 +626,7 @@ export class PgSyncClient {
       .orderBy(asc(pgSessions.serverUpdatedAt), asc(pgSessions.id))
       .limit(this.batchSize);
 
+    if (this.requireUnencrypted) await this.assertUnencrypted();
     const last = rows.at(-1);
     return {
       memories: [],
@@ -520,29 +640,102 @@ export class PgSyncClient {
 
   // ─── embedding model compatibility (2.4) ─────────────────────────────────
 
-  /**
-   * The most common non-null `embedding_model` across all remote memories,
-   * or `null` if every row has a null model (empty database, or every row
-   * was written before `NeuralBrain.store()` started stamping it — see plan
-   * section 4). `null` means "unknown, assume compatible" to the caller.
-   */
-  async getRemoteEmbeddingModel(): Promise<string | null> {
-    const result = await this.pool.query<{ embedding_model: string }>(
-      `SELECT embedding_model
-       FROM memories
-       WHERE embedding_model IS NOT NULL
-       GROUP BY embedding_model
-       ORDER BY count(*) DESC
-       LIMIT 1`
+  /** First connection claims the model. Legacy targets take theirs from existing rows. */
+  async assertEmbeddingModel(model: string, client: Pool | PoolClient = this.pool): Promise<void> {
+    let claimed = await this.getSyncMeta(MODEL_META_KEY, client);
+    if (claimed === null) {
+      const existing = await this.getRemoteEmbeddingModel(client);
+      claimed = (await insertMetaFirstWins(client, MODEL_META_KEY, existing ?? model)).value;
+    }
+    if (claimed !== model) {
+      throw new Error(
+        `Embedding model mismatch: local uses "${model}" but the sync database uses "${claimed}". ` +
+          MODEL_MISMATCH_GUIDANCE
+      );
+    }
+  }
+
+  /** Find the model of existing remote rows when bootstrapping a legacy target. */
+  async getRemoteEmbeddingModel(client: Pool | PoolClient = this.pool): Promise<string | null> {
+    const result = await client.query<{ embedding_model: string }>(
+      'SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL LIMIT 2'
     );
+    if (result.rows.length > 1) throw new Error(`Embedding model mismatch: the sync database contains multiple models. ${MODEL_MISMATCH_GUIDANCE}`);
     return result.rows[0]?.embedding_model ?? null;
+  }
+
+  /** Regenerate non-target remote vectors in one transaction. Fleet migrations require a specific source. */
+  async migrateEmbeddingModel(sourceModel?: string, encryptionKey?: string): Promise<number> {
+    const targetModel = getEmbeddingModelId();
+    if (sourceModel === targetModel) throw new Error('Choose a different target embedding model.');
+
+    let manager: EncryptionManager | null = null;
+    if (encryptionKey && await this.hasEncryptionMetadata()) {
+      manager = new EncryptionManager(this);
+      await manager.initialize(encryptionKey);
+    }
+
+    return this.db.transaction(async (tx) => {
+      // Serialize with encryption bootstrap and writers until coverage is verified.
+      await tx.execute(sql`LOCK TABLE sync_metadata IN SHARE ROW EXCLUSIVE MODE`);
+      if (!manager) {
+        const { key } = pgSchema.pgSyncMetadata;
+        const [encrypted] = await tx.select({ key }).from(pgSchema.pgSyncMetadata)
+          .where(inArray(key, ENCRYPTION_META_KEYS)).limit(1);
+        if (encrypted) throw new Error('Set ENGRAM_SYNC_ENCRYPTION_KEY to migrate this encrypted database.');
+      }
+      await tx.execute(sql`LOCK TABLE memories IN SHARE ROW EXCLUSIVE MODE`);
+      const { embedding, embeddingModel, id } = pgMemories;
+      const hasEmbedding = or(isNotNull(embedding), isNotNull(embeddingModel));
+      const models = await tx.select({ model: embeddingModel, total: count() }).from(pgMemories)
+        .where(hasEmbedding).groupBy(embeddingModel);
+      const remaining = models.filter(({ model }) => model !== targetModel);
+      if (sourceModel !== undefined) {
+        const [claim] = await tx.select().from(pgSchema.pgSyncMetadata).where(eq(pgSchema.pgSyncMetadata.key, MODEL_META_KEY));
+        if ((claim && claim.value !== sourceModel) || (!claim && models.length === 0) ||
+            remaining.some(({ model }) => model !== sourceModel)) {
+          throw new Error(`Expected the source model "${sourceModel}" for this migration. Check the remote claim and model labels.`);
+        }
+      }
+
+      const expected = remaining.reduce((total, group) => total + group.total, 0);
+      const needsMigration = and(hasEmbedding, sql`${embeddingModel} IS DISTINCT FROM ${targetModel}`);
+      let afterId: string | undefined;
+      let migrated = 0;
+      for (;;) {
+        const rows: PgMemory[] = await tx.select().from(pgMemories)
+          .where(and(needsMigration, afterId === undefined ? undefined : gt(id, afterId)))
+          .orderBy(id).limit(this.batchSize);
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const plain = manager ? manager.decryptRow(row) : row;
+          const vector = await embed(memoryEmbeddingText({ ...plain, type: row.type }), targetModel);
+          if (!vector.length) throw new Error(`Empty embedding for memory ${row.id}.`);
+          const replacement = { ...plain, embedding: packFP16(vector) };
+          const stored = manager ? manager.encryptRow(replacement) : replacement;
+          // Every replica must pull this revision, including the original writer.
+          const updatedAt = new Date(Math.max(Date.now(), Date.parse(row.updatedAt) + 1,
+            Date.parse(row.archivedAt ?? row.updatedAt) + 1)).toISOString();
+          const result = await tx.update(pgMemories).set({
+            content: stored.content, embedding: stored.embedding, embeddingDim: vector.length,
+            embeddingModel: targetModel, updatedAt, deviceId: null,
+          }).where(eq(id, row.id));
+          migrated += result.rowCount ?? 0;
+          afterId = row.id;
+        }
+      }
+      if (migrated !== expected) throw new Error('Incomplete remote embedding coverage. Migration aborted.');
+      await tx.insert(pgSchema.pgSyncMetadata).values({ key: MODEL_META_KEY, value: targetModel })
+        .onConflictDoUpdate({ target: pgSchema.pgSyncMetadata.key, set: { value: targetModel, updatedAt: sql`now()` } });
+      return migrated;
+    }, { isolationLevel: 'read committed' });
   }
 
   // ─── sync metadata (E2E encryption, Phase 6) ─────────────────────────────
 
   /** Read a key-value pair from the sync_metadata table. */
-  async getSyncMeta(key: string): Promise<string | null> {
-    const result = await this.pool.query<{ value: string }>(
+  async getSyncMeta(key: string, client: Pool | PoolClient = this.pool): Promise<string | null> {
+    const result = await client.query<{ value: string }>(
       'SELECT value FROM sync_metadata WHERE key = $1',
       [key]
     );
@@ -565,12 +758,23 @@ export class PgSyncClient {
    * configured against a store whose rows are ciphertext — see
    * `SyncEngine.initializeEncryption`.
    */
-  async hasEncryptionMetadata(): Promise<boolean> {
-    const result = await this.pool.query<{ present: boolean }>(
+  async hasEncryptionMetadata(client: Pool | PoolClient = this.pool): Promise<boolean> {
+    const result = await client.query<{ present: boolean }>(
       'SELECT true AS present FROM sync_metadata WHERE key = ANY($1::text[]) LIMIT 1',
       [ENCRYPTION_META_KEYS]
     );
     return result.rows.length > 0;
+  }
+
+  async assertUnencrypted(client: Pool | PoolClient = this.pool): Promise<void> {
+    if (await this.hasEncryptionMetadata(client)) {
+      throw new Error(
+        'This sync database has end-to-end encryption enabled, but this process has no ' +
+          'passphrase configured. Set ENGRAM_SYNC_ENCRYPTION_KEY to the passphrase the ' +
+          'database was encrypted with — syncing without it would overwrite encrypted rows ' +
+          'with plaintext.'
+      );
+    }
   }
 
   /**

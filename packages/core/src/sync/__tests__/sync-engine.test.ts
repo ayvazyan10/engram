@@ -745,8 +745,7 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
-        const pullResult = await syncAsDevice(b, { encryptionKey: passphrase });
-        expect(pullResult.pulled.memories).toBe(1); // only mem-ok, mem-corrupted was skipped
+        await expect(syncAsDevice(b, { encryptionKey: passphrase })).rejects.toThrow(/decryption failure/);
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('mem-corrupted'));
       } finally {
         warnSpy.mockRestore();
@@ -879,7 +878,7 @@ describeWithPg('SyncEngine — multi-device convergence (Phase 2)', () => {
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
-        await syncAsDevice(b, { encryptionKey: passphrase });
+        await expect(syncAsDevice(b, { encryptionKey: passphrase })).rejects.toThrow(/decryption failure/);
       } finally {
         warnSpy.mockRestore();
       }

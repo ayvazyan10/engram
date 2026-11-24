@@ -72,22 +72,6 @@ export const SCRYPT_PARAMS_CURRENT: ScryptParams = { N: 131072, r: 8, p: 1 };
  */
 export const SCRYPT_PARAMS_LEGACY: ScryptParams = { N: 32768, r: 8, p: 1 };
 
-/**
- * Bounds on parameters read back from the sync database.
- *
- * These arrive from the server, so they are attacker-controlled in the
- * threat model this module exists for. Without a floor, an operator could
- * publish `N=1024` and every client would obligingly derive a key cheap
- * enough to brute-force offline; without a ceiling, `N=2^30` is a
- * remote memory-exhaustion switch. The floor is the legacy cost, so the
- * worst a hostile server can do is hold a database at the security level it
- * already had.
- */
-const SCRYPT_N_MIN = SCRYPT_PARAMS_LEGACY.N;
-const SCRYPT_N_MAX = 1 << 22;
-const SCRYPT_R_MAX = 32;
-const SCRYPT_P_MAX = 16;
-
 /** Fixed plaintext used to verify a passphrase without storing it. */
 const SENTINEL_PLAINTEXT = 'engram-sentinel-v1';
 
@@ -151,15 +135,9 @@ export function encodeScryptParams(params: ScryptParams): string {
   return JSON.stringify({ kdf: 'scrypt', N: params.N, r: params.r, p: params.p });
 }
 
-function isPowerOfTwo(value: number): boolean {
-  return Number.isInteger(value) && value > 0 && (value & (value - 1)) === 0;
-}
-
 /**
- * Parse KDF parameters read back from the sync database, rejecting anything
- * outside the bounds above. Throws rather than falling back to a default:
- * silently substituting one cost for another is how a client ends up with a
- * key that does not match the sentinel it is about to verify against.
+ * Only the legacy and current writer profiles have supported memory and CPU
+ * costs. Substituting a different profile would derive the wrong key.
  */
 export function decodeScryptParams(encoded: string): ScryptParams {
   let parsed: unknown;
@@ -177,20 +155,17 @@ export function decodeScryptParams(encoded: string): ScryptParams {
     );
   }
 
-  const { N, r, p } = record as { N: unknown; r: unknown; p: unknown };
-  const ok =
-    typeof N === 'number' && typeof r === 'number' && typeof p === 'number' &&
-    isPowerOfTwo(N) && N >= SCRYPT_N_MIN && N <= SCRYPT_N_MAX &&
-    Number.isInteger(r) && r >= 1 && r <= SCRYPT_R_MAX &&
-    Number.isInteger(p) && p >= 1 && p <= SCRYPT_P_MAX;
-
-  if (!ok) {
+  const { N, r, p } = record;
+  const profile = [SCRYPT_PARAMS_LEGACY, SCRYPT_PARAMS_CURRENT].find(
+    (params) => params.N === N && params.r === r && params.p === p
+  );
+  if (!profile) {
     throw new EncryptionError(
       `KDF parameters out of the accepted range (N=${String(N)}, r=${String(r)}, p=${String(p)})`,
       'BAD_KDF_PARAMS',
     );
   }
-  return { N, r, p };
+  return { ...profile };
 }
 
 /**

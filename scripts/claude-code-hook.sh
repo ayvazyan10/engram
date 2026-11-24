@@ -52,6 +52,7 @@ ENGRAM_NAMESPACE_MODE="${ENGRAM_NAMESPACE_MODE:-$(config_value namespaceMode)}"
 [ -n "$ENGRAM_NAMESPACE" ] && export ENGRAM_NAMESPACE
 [ -n "$ENGRAM_NAMESPACE_MODE" ] && export ENGRAM_NAMESPACE_MODE
 
-npx -y -p @engram-ai-memory/mcp engram-store-session "Session summary: ${SUMMARY}" 2>/dev/null || true
+npx -y -p @engram-ai-memory/mcp engram-store-session "Session summary: ${SUMMARY}" ||
+  echo "[engram-store-session] command failed (exit $?)" >&2
 
 exit 0

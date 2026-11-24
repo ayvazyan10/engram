@@ -13,7 +13,26 @@ export type { Memory, NewMemory, MemoryType, RelationshipType, MemoryConnection,
 
 // Re-export the drizzle type for backwards compat
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import { inArray, sql } from 'drizzle-orm';
 type DrizzleDb = BetterSQLite3Database<typeof schema>;
+
+/** Validate text as it will be stored. JSON-serialized fields already escape NUL. */
+export function assertSyncText(fields: object): void {
+  for (const [column, value] of Object.entries(fields)) {
+    if (typeof value === 'string' && value.includes('\0')) {
+      throw Object.assign(new Error(`${column} contains a NUL character, which PostgreSQL text cannot store.`),
+        { statusCode: 400 });
+    }
+  }
+}
+
+/** Remove device-local recall history in the transaction archiving these memories. */
+export function deleteAssembliesForMemories(tx: Pick<DrizzleDb, 'delete'>, ids: string[]): void {
+  tx.delete(schema.contextAssemblies).where(sql`exists (
+    select 1 from json_each(${schema.contextAssemblies.assembledContext}) as entry
+    where ${inArray(sql`json_extract(entry.value, '$.memoryId')`, ids)}
+  )`).run();
+}
 
 /**
  * Get the drizzle ORM instance.

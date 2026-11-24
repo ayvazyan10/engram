@@ -153,13 +153,13 @@ function tableInfo(dbFile, table) {
 function sampleMemories(dbFile, limit = 20) {
   const db = new Database(dbFile, { readonly: true });
   try {
-    const hasMemories = db
-      .prepare("SELECT COUNT(*) as cnt FROM sqlite_master WHERE type='table' AND name='memories'")
-      .get().cnt;
-    if (!hasMemories) return [];
+    const columns = db.pragma('table_info(memories)').map((c) => c.name);
+    if (columns.length === 0) return [];
+    const optional = ['embedding_model', 'namespace'].map((name) =>
+      columns.includes(name) ? name : `NULL AS ${name}`);
     return db
       .prepare(
-        `SELECT id, content, embedding, embedding_model, namespace, created_at, updated_at
+        `SELECT id, content, embedding, ${optional.join(', ')}, created_at, updated_at
          FROM memories ORDER BY id LIMIT ?`
       )
       .all(limit);
@@ -185,6 +185,31 @@ for (const [table, count] of Object.entries(countsBefore)) {
 }
 const sampleBefore = sampleMemories(copyPath, 20);
 console.log(`[info] Sampled ${sampleBefore.length} memories rows for byte-comparison`);
+
+const newColumns = {
+  memories: ['device_id'],
+  memory_connections: ['updated_at', 'deleted_at', 'device_id'],
+  sessions: ['updated_at', 'deleted_at', 'device_id'],
+};
+const markerKey = 'sync_null_updated_at_v1';
+const beforeDb = new Database(copyPath, { readonly: true });
+const hadMarker = tablesBefore.includes('local_meta') &&
+  Boolean(beforeDb.prepare('SELECT 1 FROM local_meta WHERE key = ?').get(markerKey));
+const expectedRows = new Map();
+for (const [table, columns] of Object.entries(newColumns)) {
+  if (!tablesBefore.includes(table)) continue;
+  const names = tableInfo(copyPath, table).map((c) => c.name);
+  const projection = columns.map((column) => {
+    const original = names.includes(column) ? column : 'NULL';
+    if (!hadMarker && column === 'updated_at') {
+      const origin = table === 'sessions' ? 'started_at' : 'created_at';
+      return `coalesce(${original}, ${origin}) AS updated_at`;
+    }
+    return `${original} AS ${column}`;
+  });
+  expectedRows.set(table, beforeDb.prepare(`SELECT id, ${projection.join(', ')} FROM ${table} ORDER BY id`).all());
+}
+beforeDb.close();
 
 // ─── 2. Run the migration through the REAL adapter code path ──────────────
 
@@ -212,12 +237,13 @@ console.log('\n=== Verifying ===');
 const tablesAfter = listTables(copyPath);
 const countsAfter = rowCounts(copyPath, tablesAfter);
 
-// 3a. Row counts unchanged for every table that existed before.
+// 3a. The backfill marker is the only row added to an existing table.
 for (const table of tablesBefore) {
+  const expected = countsBefore[table] + Number(table === 'local_meta' && !hadMarker);
   record(
-    `row count unchanged: ${table}`,
-    countsBefore[table] === countsAfter[table],
-    `before=${countsBefore[table]} after=${countsAfter[table]}`
+    `expected row count: ${table}`,
+    expected === countsAfter[table],
+    `expected=${expected} after=${countsAfter[table]}`
   );
 }
 
@@ -235,7 +261,7 @@ for (const before of sampleBefore) {
   for (const field of fields) {
     if (before[field] !== after[field]) {
       sampleMismatches++;
-      console.log(`[FAIL]   row ${before.id}.${field} changed: ${JSON.stringify(before[field])} -> ${JSON.stringify(after[field])}`);
+      console.log(`[FAIL]   row ${before.id}.${field} changed`);
     }
   }
   if (hashBlob(before.embedding) !== hashBlob(after.embedding)) {
@@ -249,13 +275,8 @@ record(
   sampleMismatches > 0 ? `${sampleMismatches} field/row mismatches` : undefined
 );
 
-// 3c. New v0.5.0 columns exist and are NULL on pre-existing rows.
-const newColumns = {
-  memories: ['device_id'],
-  memory_connections: ['updated_at', 'deleted_at', 'device_id'],
-  sessions: ['updated_at', 'deleted_at', 'device_id'],
-};
-
+// 3c. Preserve existing sync fields and verify each backfilled timestamp.
+const afterDb = new Database(copyPath, { readonly: true });
 for (const [table, columns] of Object.entries(newColumns)) {
   if (!tablesAfter.includes(table)) {
     record(`table exists: ${table}`, false, 'missing entirely');
@@ -266,23 +287,23 @@ for (const [table, columns] of Object.entries(newColumns)) {
   for (const column of columns) {
     const present = colNames.includes(column);
     record(`column exists: ${table}.${column}`, present);
-    if (present && countsBefore[table] > 0) {
-      const db = new Database(copyPath, { readonly: true });
-      try {
-        const nonNull = db
-          .prepare(`SELECT COUNT(*) as cnt FROM "${table}" WHERE "${column}" IS NOT NULL`)
-          .get().cnt;
-        record(
-          `${table}.${column} is NULL on all pre-existing rows`,
-          nonNull === 0,
-          nonNull > 0 ? `${nonNull} non-NULL values found (write paths must not populate this yet)` : undefined
-        );
-      } finally {
-        db.close();
-      }
-    }
   }
+  const expected = expectedRows.get(table);
+  if (!expected || !columns.every((column) => colNames.includes(column))) continue;
+  let mismatches = 0;
+  let i = 0;
+  for (const row of afterDb.prepare(`SELECT id, ${columns.join(', ')} FROM ${table} ORDER BY id`).iterate()) {
+    const before = expected[i++];
+    if (!before || before.id !== row.id || columns.some((column) => before[column] !== row[column])) mismatches++;
+  }
+  record(`expected sync values by row: ${table}`, mismatches === 0 && i === expected.length,
+    `${mismatches} mismatches, expected ${expected.length} rows, found ${i}`);
 }
+if (!hadMarker && tablesAfter.includes('local_meta')) {
+  const marker = afterDb.prepare('SELECT value FROM local_meta WHERE key = ?').get(markerKey);
+  record('timestamp backfill marker inserted', marker?.value === '1');
+}
+afterDb.close();
 
 // 3d. Both new tables exist.
 for (const table of ['local_meta', 'sync_state']) {
