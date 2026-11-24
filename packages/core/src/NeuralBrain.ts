@@ -16,7 +16,7 @@ import { createHash } from 'crypto';
 import { and, desc, eq, gt, gte, inArray, isNull, like, lt, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
-import { closeDb, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
+import { closeDb, deleteAssembliesForMemories, getDatabaseConnection, getDb, schema, walCheckpoint } from './db/index.js';
 import type { Memory, MemoryType, NewMemory, NewMemoryConnection, NewSession, RelationshipType } from './db/schema.js';
 import {
   embed, embedBatch, memoryEmbeddingText, packFP16, unpackFP16,
@@ -51,7 +51,7 @@ import { VectorSearch } from './retrieval/VectorSearch.js';
 import { hybridSearch } from './retrieval/HybridSearch.js';
 import type { VectorEntry } from './retrieval/VectorSearch.js';
 import { indexEntryIsCurrent, mixedEmbeddingModels, storedDimension, storedVector, upsertIfCompatible } from './retrieval/indexEntry.js';
-import { appliedMemoryIdsSince, baselineMatches, countersMatch, readChangeCounters, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
+import { appliedMemoryIdsSince, baselineMatches, countersMatch, edgeSourcesSince, readChangeCounters, readEdgeRevision, readStoreBaseline, sameCounters } from './retrieval/indexBaseline.js';
 import type { ChangeCounters, StoreBaseline } from './retrieval/indexBaseline.js';
 import { ReflectionEngine } from './reflection/ReflectionEngine.js';
 import type { ReflectionConfig, ReflectionTask, ReflectionType } from './reflection/ReflectionEngine.js';
@@ -326,6 +326,7 @@ export class NeuralBrain {
    * for why one marker alone is not enough.
    */
   private indexClaim: IndexClaim | null = null;
+  private edgeRevision = 0;
 
   /**
    * In-flight reconcile, shared by concurrent readers so a burst of requests
@@ -501,9 +502,10 @@ export class NeuralBrain {
     const db = getDb();
     const before = readChangeCounters(db);
     const claim = this.indexClaim;
-    if (!rebuilt && (!claim?.counters || claim.connection !== getDatabaseConnection()
+    const pendingEdges = this.edgeRevision !== readEdgeRevision(db);
+    if (pendingEdges || (!rebuilt && (!claim?.counters || claim.connection !== getDatabaseConnection()
       || claim.counters.dataVersion !== before.dataVersion
-      || appliedMemoryIdsSince(db, claim.counters.localChanges).length > 0)) {
+      || appliedMemoryIdsSince(db, claim.counters.localChanges).length > 0))) {
       this.indexClaim = null;
       return;
     }
@@ -661,6 +663,7 @@ export class NeuralBrain {
     // excluded here — otherwise a connection "deleted" on this or another
     // device reappears in the graph on the next restart.
     const activeIds = new Set(allMemories.map((memory) => memory.id));
+    this.edgeRevision = readEdgeRevision(db);
     const loadedConnections = await db
       .select()
       .from(schema.memoryConnections)
@@ -750,7 +753,10 @@ export class NeuralBrain {
     if (this.vectorSearch.embeddingModel !== getEmbeddingModelId()) this.indexClaim = null;
     if (this.claimHolds(counters)) return 0;
 
-    const pass = this.reconcileIfStale(counters).finally(() => {
+    const pass = this.reconcileIfStale(counters).catch((error: unknown) => {
+      this.indexClaim = null;
+      throw error;
+    }).finally(() => {
       this.pendingSync = null;
     });
     this.pendingSync = pass;
@@ -782,19 +788,24 @@ export class NeuralBrain {
     // report one — "unknown", so the fingerprint decides alone.
     const claimed = this.indexClaim;
     const externalCommit = counters.dataVersion !== null && counters.dataVersion !== claimed?.counters?.dataVersion;
-    const appliedIds = appliedMemoryIdsSince(getDb(), claimed?.counters?.localChanges ?? null);
-    if (appliedIds.length === 0 && !externalCommit && baselineMatches(claimed?.baseline ?? null, baseline)) {
+    const db = getDb();
+    const appliedIds = appliedMemoryIdsSince(db, claimed?.counters?.localChanges ?? null);
+    const revision = readEdgeRevision(db);
+    const edgeSources = revision === this.edgeRevision ? [] : edgeSourcesSince(db, this.edgeRevision);
+    if (appliedIds.length === 0 && edgeSources.length === 0 && !externalCommit && baselineMatches(claimed?.baseline ?? null, baseline)) {
       // Only other tables moved, or rows the index already agrees with. Re-claim
       // so the next read is back on the O(1) path.
       this.claimIndexState(counters, baseline);
       return 0;
     }
 
-    return this.reconcileIndex(counters, baseline, appliedIds);
+    const changed = await this.reconcileIndex(counters, baseline, appliedIds, edgeSources);
+    this.edgeRevision = revision;
+    return changed;
   }
 
   /** The reconcile itself — see syncIndexFromStore for why and when. */
-  private async reconcileIndex(counters: ChangeCounters, baseline: StoreBaseline, appliedIds: string[]): Promise<number> {
+  private async reconcileIndex(counters: ChangeCounters, baseline: StoreBaseline, appliedIds: string[], edgeSources: string[]): Promise<number> {
     const db = getDb();
 
     // Claim before reading. Both markers were read before the queries below, so
@@ -877,40 +888,38 @@ export class NeuralBrain {
 
     const refreshed = await this.refreshChangedVectors(previous, baseline, indexed, appliedIds);
 
-    // Edges touching the newly arrived nodes, so graph expansion during recall
-    // sees them rather than treating them as isolated. Only edges with a new
-    // endpoint are fetched, to keep the reconcile proportional to what changed
-    // rather than to the whole connection table. addEdge is idempotent, so an
-    // edge whose two endpoints fall in different id chunks is simply replaced
-    // the second time round rather than double-added. Edges created externally
-    // between two nodes this process already had are still missed until restart
-    // — a narrower gap than the one being closed here, and one that costs a
-    // full adjacency rebuild to close.
-    if (missing.length > 0) {
-      for (let i = 0; i < missing.length; i += CHUNK) {
-        const slice = missing.slice(i, i + CHUNK);
-        const edges = await db
-          .select()
-          .from(schema.memoryConnections)
-          .where(
-            and(
-              or(
-                inArray(schema.memoryConnections.sourceId, slice),
-                inArray(schema.memoryConnections.targetId, slice)
-              ),
-              isNull(schema.memoryConnections.deletedAt), visibleConnection()
-            )
-          );
+    // Drop stale outgoing edges (including their mirrors) before replaying the
+    // visible rows touching each changed source or newly loaded endpoint.
+    for (const id of edgeSources) {
+      for (const edge of this.graph.getNeighbors(id)) {
+        this.graph.removeEdge(id, edge.targetId, edge.relationship);
+      }
+    }
+    const edgeEndpoints = [...new Set([...missing, ...edgeSources])];
+    for (let i = 0; i < edgeEndpoints.length; i += CHUNK) {
+      const slice = edgeEndpoints.slice(i, i + CHUNK);
+      const edges = await db
+        .select()
+        .from(schema.memoryConnections)
+        .where(
+          and(
+            or(
+              inArray(schema.memoryConnections.sourceId, slice),
+              inArray(schema.memoryConnections.targetId, slice)
+            ),
+            isNull(schema.memoryConnections.deletedAt), visibleConnection()
+          )
+        );
 
-        for (const conn of edges) {
-          this.graph.addEdge({
-            sourceId: conn.sourceId,
-            targetId: conn.targetId,
-            relationship: conn.relationship as RelationshipType,
-            strength: conn.strength,
-            bidirectional: Boolean(conn.bidirectional),
-          });
-        }
+      for (const conn of edges) {
+        if (!live.has(conn.sourceId) || !live.has(conn.targetId)) continue;
+        this.graph.addEdge({
+          sourceId: conn.sourceId,
+          targetId: conn.targetId,
+          relationship: conn.relationship as RelationshipType,
+          strength: conn.strength,
+          bidirectional: Boolean(conn.bidirectional),
+        });
       }
     }
 
@@ -1389,10 +1398,7 @@ export class NeuralBrain {
         .where(inArray(schema.memories.id, ids))
         .run();
 
-      tx.delete(schema.contextAssemblies).where(sql`exists (
-        select 1 from json_each(${schema.contextAssemblies.assembledContext}) as entry
-        where ${inArray(sql`json_extract(entry.value, '$.memoryId')`, ids)}
-      )`).run();
+      deleteAssembliesForMemories(tx, ids);
 
       // Tombstone instead of hard-delete: a physical DELETE can't be
       // represented in a `WHERE updated_at > cursor` sync query either, so a

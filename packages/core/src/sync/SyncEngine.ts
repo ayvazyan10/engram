@@ -21,7 +21,7 @@
  * which live entirely outside this class.
  */
 
-import { eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { getDb, schema } from '../db/index.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import { createPgSyncConnection, redactSyncUrl } from '../db/pg/connection.js';
@@ -37,7 +37,7 @@ import { shouldApplyPulledRow } from './conflict.js';
 import { PgSyncClient } from './PgSyncClient.js';
 import { EncryptionManager } from './encryption.js';
 import {
-  countPendingPush, selectConnectionsBatch, selectMemoriesBatch, selectSessionsBatch,
+  countPendingPush, initializeAccessQueue, selectAccessCountersBatch, selectConnectionsBatch, selectMemoriesBatch, selectSessionsBatch,
 } from './syncLocalReads.js';
 import type { SyncDb } from './syncLocalReads.js';
 import {
@@ -71,7 +71,7 @@ export interface SyncConfig {
   /** Called when a sync cycle fails. Never thrown past — informational only. */
   onSyncError?: (error: Error) => void;
   /**
-   * Called after `pull()` applies at least one new/updated memory locally.
+   * Called after `pull()` applies at least one new/updated memory or connection locally.
    * The integration point (e.g. `NeuralBrain`) should use this to rebuild
    * its in-memory vector index — `SyncEngine` has no index of its own.
    */
@@ -332,9 +332,11 @@ export class SyncEngine {
         db: this.pgConn.db,
         pool: this.pgConn.pool,
         batchSize: LOCAL_BATCH_SIZE,
+        requireUnencrypted: !this.config.encryptionKey,
       });
       await this.checkEmbeddingModelCompatibility();
       await this.initializeEncryption();
+      initializeAccessQueue(this.db, this.syncId);
     } catch (err) {
       this.connectingPromise = null;
       const conn = this.pgConn;
@@ -363,14 +365,7 @@ export class SyncEngine {
     if (!this.pgClient) return;
 
     if (!this.config.encryptionKey) {
-      if (await this.pgClient.hasEncryptionMetadata()) {
-        throw new Error(
-          'This sync database has end-to-end encryption enabled, but this process has no ' +
-            'passphrase configured. Set ENGRAM_SYNC_ENCRYPTION_KEY to the passphrase the ' +
-            'database was encrypted with — syncing without it would overwrite encrypted rows ' +
-            'with plaintext.'
-        );
-      }
+      await this.pgClient.assertUnencrypted();
       return;
     }
 
@@ -406,6 +401,7 @@ export class SyncEngine {
 
   private async doPush(): Promise<SyncResult['pushed']> {
     this.currentPhase = 'push';
+    const scanStartedAt = new Date().toISOString();
     const client = await this.ensureConnected();
     // Attribute legacy rows on the device that owns them, without changing
     // their edit timestamps. The server cannot determine a NULL row's owner.
@@ -432,7 +428,7 @@ export class SyncEngine {
         const result = await client.pushMemoriesMerging(
           encryptMemoriesForPush(this.encryptionManager, rows)
         );
-        applyMergedAccessCounters(this.db, rows, result.merged);
+        for (const counters of result.merged) applyMergedAccessCounters(this.db, counters);
         return result.applied;
       },
       (row) => row.updatedAt,
@@ -457,15 +453,34 @@ export class SyncEngine {
       LOCAL_BATCH_SIZE
     );
 
-    const overallMax = maxNullable(
-      maxNullable(memories.maxUpdatedAt, connections.maxUpdatedAt),
-      sessions.maxUpdatedAt
-    );
-    if (overallMax !== null && overallMax !== startCursor) {
-      writeCursor(this.db, this.syncId, { lastPushAt: overallMax });
-    }
+    const accesses = await this.pushAccessCounters(client);
 
-    return { memories: memories.count, connections: connections.count, sessions: sessions.count };
+    // A scan covers edits through its start; later commits remain eligible
+    // next cycle. Idle scans advance too, so old overlap rows age out.
+    writeCursor(this.db, this.syncId, { lastPushAt: scanStartedAt });
+
+    return { memories: memories.count + accesses, connections: connections.count, sessions: sessions.count };
+  }
+
+  private async pushAccessCounters(client: PgSyncClient): Promise<number> {
+    let afterKey = '';
+    let applied = 0;
+    for (;;) {
+      const rows = selectAccessCountersBatch(this.db, this.syncId, afterKey, LOCAL_BATCH_SIZE);
+      if (rows.length === 0) break;
+      applied += await client.pushAccessCounters(rows);
+      // A recall committed while the batch was in flight keeps its newer
+      // snapshot in the queue. A failed push leaves the entire page pending.
+      this.db.transaction((tx) => {
+        for (const row of rows) {
+          tx.delete(schema.localMeta).where(and(eq(schema.localMeta.key, row.key),
+            eq(schema.localMeta.value, row.value))).run();
+        }
+      });
+      if (rows.length < LOCAL_BATCH_SIZE) break;
+      afterKey = rows[rows.length - 1]!.key;
+    }
+    return applied;
   }
 
   // ─── pull ─────────────────────────────────────────────────────────────
@@ -485,6 +500,15 @@ export class SyncEngine {
       (row) => applyPulledMemory(this.db, row),
       baseCursor
     );
+    const accesses = await drainPullBatches(
+      (ts, id) => client.pullOwnedAccessCounters(ts, id, this.deviceId),
+      () => true,
+      (row) => {
+        applyMergedAccessCounters(this.db, row);
+        return { applied: false, conflict: false };
+      },
+      baseCursor
+    );
     const connections = await drainPullBatches<PgMemoryConnection>(
       (ts, id) => client.pullConnections(ts, id, this.deviceId).then((b) =>
         decryptPulledConnections(manager, { ...b, rows: b.connections })),
@@ -502,7 +526,7 @@ export class SyncEngine {
 
     const overallMax = maxNullable(
       maxNullable(memories.maxServerUpdatedAt, connections.maxServerUpdatedAt),
-      sessions.maxServerUpdatedAt
+      maxNullable(sessions.maxServerUpdatedAt, accesses.maxServerUpdatedAt)
     );
     // One cursor covers all three tables, so a table that stopped on an
     // undecryptable row can still be jumped over by another table's
@@ -514,7 +538,7 @@ export class SyncEngine {
       writeCursor(this.db, this.syncId, { pullCursor: overallMax });
     }
 
-    if (memories.applied > 0 && this.config.onIndexRebuildNeeded) {
+    if ((memories.applied > 0 || connections.applied > 0) && this.config.onIndexRebuildNeeded) {
       await this.config.onIndexRebuildNeeded();
     }
 

@@ -5,7 +5,7 @@
  */
 
 import { DEFAULT_DECAY_CONFLICT_WINDOW_MS } from '../lifecycle/DecayPolicy.js';
-import { and, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, eq, gt, gte, isNull, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import type { SQLiteColumn } from 'drizzle-orm/sqlite-core';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -49,24 +49,23 @@ function pushPageFilter(
   columns: PushColumns,
   cursor: PushCursor | null,
   deviceId: string,
-  overlapMs: number
+  overlapMs: number | null
 ): SQL | undefined {
   const ours = or(isNull(columns.deviceId), eq(columns.deviceId, deviceId));
   if (cursor === null) return ours;
 
   // Overlap only the first page; subsequent pages use their exact (time, id)
   // boundary so a backdated group larger than one page still drains once.
-  // A zero overlap is also used by status to count only rows after the cursor.
-  const cursorTs = cursor.id === null && overlapMs > 0
-    ? new Date(Date.parse(cursor.ts) - overlapMs - 1).toISOString()
-    : cursor.ts;
-  const afterCursor =
-    cursor.id === null
-      ? gt(columns.updatedAt, cursorTs)
-      : or(
-          gt(columns.updatedAt, cursorTs),
-          and(eq(columns.updatedAt, cursorTs), gt(columns.id, cursor.id))
-        );
+  if (cursor.id === null) {
+    // Status asks for a strict count. A scan includes the boundary, even
+    // with a zero window: another writer can commit in the same millisecond.
+    return and(ours, overlapMs === null ? gt(columns.updatedAt, cursor.ts) :
+      gte(columns.updatedAt, new Date(Date.parse(cursor.ts) - overlapMs).toISOString()));
+  }
+  const afterCursor = or(
+    gt(columns.updatedAt, cursor.ts),
+    and(eq(columns.updatedAt, cursor.ts), gt(columns.id, cursor.id))
+  );
 
   return and(ours, afterCursor);
 }
@@ -76,7 +75,7 @@ export function selectMemoriesBatch(
   cursor: PushCursor | null,
   batchSize: number,
   deviceId: string,
-  overlapMs = DEFAULT_DECAY_CONFLICT_WINDOW_MS
+  overlapMs: number | null = DEFAULT_DECAY_CONFLICT_WINDOW_MS
 ): Memory[] {
   const columns: PushColumns = {
     id: schema.memories.id,
@@ -97,7 +96,7 @@ export function selectConnectionsBatch(
   cursor: PushCursor | null,
   batchSize: number,
   deviceId: string,
-  overlapMs = DEFAULT_DECAY_CONFLICT_WINDOW_MS
+  overlapMs: number | null = DEFAULT_DECAY_CONFLICT_WINDOW_MS
 ): MemoryConnection[] {
   const columns: PushColumns = {
     id: schema.memoryConnections.id,
@@ -118,7 +117,7 @@ export function selectSessionsBatch(
   cursor: PushCursor | null,
   batchSize: number,
   deviceId: string,
-  overlapMs = DEFAULT_DECAY_CONFLICT_WINDOW_MS
+  overlapMs: number | null = DEFAULT_DECAY_CONFLICT_WINDOW_MS
 ): Session[] {
   const columns: PushColumns = {
     id: schema.sessions.id,
@@ -132,6 +131,45 @@ export function selectSessionsBatch(
     .orderBy(schema.sessions.updatedAt, schema.sessions.id)
     .limit(batchSize)
     .all();
+}
+
+/** Install bookkeeping only for databases using sync, and seed each target once. */
+export function initializeAccessQueue(db: SyncDb, syncId: string): void {
+  const seeded = `sync_access_seeded:${syncId}`;
+  db.transaction((tx) => {
+    if (tx.select({ key: schema.localMeta.key }).from(schema.localMeta)
+      .where(eq(schema.localMeta.key, seeded)).get()) return;
+
+    // Runs in the writer's transaction, including recalls in other processes.
+    // Each pending value is the counter snapshot that must be acknowledged.
+    tx.run(sql`CREATE TRIGGER IF NOT EXISTS sync_queue_memory_access
+      AFTER UPDATE OF access_count, last_accessed_at ON memories
+      WHEN NEW.access_count IS NOT OLD.access_count OR NEW.last_accessed_at IS NOT OLD.last_accessed_at
+      BEGIN
+        INSERT INTO local_meta (key, value)
+        SELECT 'sync_access:' || id || ':' || NEW.id, json_array(NEW.access_count, NEW.last_accessed_at)
+          FROM sync_state WHERE id IS NOT NULL
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+      END`);
+    tx.run(sql`INSERT INTO local_meta (key, value)
+      SELECT ${'sync_access:' + syncId + ':'} || id, json_array(access_count, last_accessed_at)
+        FROM memories WHERE access_count > 0 OR last_accessed_at IS NOT NULL
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    tx.insert(schema.localMeta).values({ key: seeded, value: '1' }).run();
+  }, { behavior: 'immediate' });
+}
+
+export function selectAccessCountersBatch(db: SyncDb, syncId: string, afterKey: string, batchSize: number) {
+  const prefix = `sync_access:${syncId}:`;
+  const { key, value } = schema.localMeta;
+  return db.select({
+    key, value,
+    id: sql<string>`substr(${key}, ${prefix.length + 1})`,
+    accessCount: sql<number>`json_extract(${value}, '$[0]')`,
+    lastAccessedAt: sql<string | null>`json_extract(${value}, '$[1]')`,
+  }).from(schema.localMeta)
+    .where(and(sql`${key} GLOB ${prefix + '*'}`, gt(key, afterKey)))
+    .orderBy(key).limit(batchSize).all();
 }
 
 /**
@@ -149,8 +187,8 @@ export function countPendingPush(
   const cursor: PushCursor | null = lastPushAt === null ? null : { ts: lastPushAt, id: null };
 
   return (
-    selectMemoriesBatch(db, cursor, batchSize, deviceId, 0).length +
-    selectConnectionsBatch(db, cursor, batchSize, deviceId, 0).length +
-    selectSessionsBatch(db, cursor, batchSize, deviceId, 0).length
+    selectMemoriesBatch(db, cursor, batchSize, deviceId, null).length +
+    selectConnectionsBatch(db, cursor, batchSize, deviceId, null).length +
+    selectSessionsBatch(db, cursor, batchSize, deviceId, null).length
   );
 }

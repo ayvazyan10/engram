@@ -93,7 +93,7 @@ export interface CursorState {
   syncId: string;
   deviceId: string;
   pullCursor: string | null; // server_updated_at of last accepted row (ISO string)
-  lastPushAt: string | null; // updated_at of last pushed row (ISO string)
+  lastPushAt: string | null; // local start time of the last successful push scan
   lastSyncAt: string | null; // timestamp of last successful sync cycle
   lastError: string | null; // last sync error message (password-redacted)
   embeddingModel: string | null; // guards against incompatible embeddings

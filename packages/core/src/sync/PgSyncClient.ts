@@ -19,8 +19,8 @@
  */
 
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
-import type { Pool, PoolClient, QueryResult } from 'pg';
-import { and, asc, eq, getTableColumns, gt, isNull, ne, or, sql } from 'drizzle-orm';
+import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
+import { and, asc, eq, getTableColumns, gt, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import * as pgSchema from '../db/pg/schema.js';
@@ -77,6 +77,8 @@ export interface PgSyncClientOptions {
   pool: Pool;
   /** Rows per push/pull page. Default 500. */
   batchSize?: number;
+  /** The sync engine is exchanging plaintext and must refuse an encrypted store. */
+  requireUnencrypted?: boolean;
 }
 
 // ─── LWW upsert SQL builder ────────────────────────────────────────────────
@@ -222,10 +224,13 @@ function pullPageFilter(
   columns: PullColumns,
   cursorTs: string | null,
   cursorId: string | null,
-  deviceId: string
+  deviceId: string,
+  ownRows = false
 ): SQL | undefined {
-  const notOurs = or(isNull(columns.deviceId), ne(columns.deviceId, deviceId));
-  if (cursorTs === null) return notOurs;
+  const owner = ownRows
+    ? eq(columns.deviceId, deviceId)
+    : or(isNull(columns.deviceId), ne(columns.deviceId, deviceId));
+  if (cursorTs === null) return owner;
 
   const cursor = sql`${cursorTs}::timestamptz`;
   const afterCursor =
@@ -236,7 +241,7 @@ function pullPageFilter(
           and(eq(columns.serverUpdatedAt, cursor), gt(columns.id, cursorId))
         );
 
-  return and(notOurs, afterCursor);
+  return and(owner, afterCursor);
 }
 
 // ─── column lists (DB column names, snake_case) ────────────────────────────
@@ -340,14 +345,37 @@ export class PgSyncClient {
   private readonly db: NodePgDatabase<typeof pgSchema>;
   private readonly pool: Pool;
   private readonly batchSize: number;
+  private readonly requireUnencrypted: boolean;
 
   constructor(options: PgSyncClientOptions) {
     this.db = options.db;
     this.pool = options.pool;
     this.batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
+    this.requireUnencrypted = options.requireUnencrypted ?? false;
   }
 
   // ─── push ─────────────────────────────────────────────────────────────
+
+  private async writeBatch<T extends QueryResultRow>(text: string, values: unknown[]): Promise<QueryResult<T>> {
+    if (!this.requireUnencrypted) return this.pool.query<T>(text, values);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      // Bootstrap's first INSERT takes ROW EXCLUSIVE on this same table
+      // until commit. SHARE also protects an empty metadata table.
+      await client.query('LOCK TABLE sync_metadata IN SHARE MODE');
+      await this.assertUnencrypted(client);
+      const result = await client.query<T>(text, values);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
 
   /**
    * Push local `memories` rows with an LWW upsert, returning the access
@@ -381,7 +409,7 @@ export class PgSyncClient {
       valueRows
     );
 
-    const result = await this.pool.query<MergedAccessRow>(text, values);
+    const result = await this.writeBatch<MergedAccessRow>(text, values);
     return {
       applied: result.rowCount ?? 0,
       merged: result.rows.map((row) => ({
@@ -395,6 +423,20 @@ export class PgSyncClient {
   /** Push local `memories` rows with an LWW upsert. Returns the count actually applied. */
   async pushMemories(rows: Memory[]): Promise<number> {
     return (await this.pushMemoriesMerging(rows)).applied;
+  }
+
+  /** Merge recalls without resending content or changing its writer or edit timestamp. */
+  async pushAccessCounters(rows: MergedAccessCounters[]): Promise<number> {
+    if (rows.length === 0) return 0;
+    const result = await this.writeBatch(
+      `UPDATE memories AS m SET access_count = greatest(m.access_count, a.access_count),
+         last_accessed_at = greatest(m.last_accessed_at, a.last_accessed_at)
+       FROM unnest($1::text[], $2::integer[], $3::text[]) AS a(id, access_count, last_accessed_at)
+       WHERE m.id = a.id AND (m.access_count < a.access_count OR m.last_accessed_at < a.last_accessed_at
+         OR (m.last_accessed_at IS NULL AND a.last_accessed_at IS NOT NULL))`,
+      [rows.map((r) => r.id), rows.map((r) => r.accessCount), rows.map((r) => r.lastAccessedAt)]
+    );
+    return result.rowCount ?? 0;
   }
 
   /** Push local `memory_connections` rows with an LWW upsert. Returns the count actually applied. */
@@ -412,7 +454,7 @@ export class PgSyncClient {
     );
 
     try {
-      const result: QueryResult = await this.pool.query(text, values);
+      const result = await this.writeBatch(text, values);
       return result.rowCount ?? 0;
     } catch (error) {
       if (typeof error !== 'object' || error === null
@@ -441,7 +483,7 @@ export class PgSyncClient {
       valueRows
     );
 
-    const result: QueryResult = await this.pool.query(text, values);
+    const result = await this.writeBatch(text, values);
     return result.rowCount ?? 0;
   }
 
@@ -464,6 +506,7 @@ export class PgSyncClient {
       .orderBy(asc(pgMemories.serverUpdatedAt), asc(pgMemories.id))
       .limit(this.batchSize);
 
+    if (this.requireUnencrypted) await this.assertUnencrypted();
     const last = rows.at(-1);
     return {
       memories: rows.map(stripCursor),
@@ -473,6 +516,19 @@ export class PgSyncClient {
       lastId: last ? last.id : null,
       hasMore: rows.length === this.batchSize,
     };
+  }
+
+  /** Peers can advance these counters while the content row still belongs to this device. */
+  async pullOwnedAccessCounters(cursorTs: string | null, cursorId: string | null, deviceId: string) {
+    const { id, accessCount, lastAccessedAt, serverUpdatedAt } = pgMemories;
+    const rows = await this.db.select({ id, accessCount, lastAccessedAt, cursorTs: cursorText(serverUpdatedAt) })
+      .from(pgMemories)
+      .where(and(pullPageFilter(pgMemories, cursorTs, cursorId, deviceId, true),
+        or(isNotNull(lastAccessedAt), gt(accessCount, 0))))
+      .orderBy(asc(serverUpdatedAt), asc(id)).limit(this.batchSize);
+    const last = rows.at(-1);
+    return { rows, maxServerUpdatedAt: last?.cursorTs ?? null, lastId: last?.id ?? null,
+      hasMore: rows.length === this.batchSize };
   }
 
   /** Pull `memory_connections` rows newer than the cursor, excluding our own device's writes. */
@@ -487,6 +543,7 @@ export class PgSyncClient {
       .orderBy(asc(pgMemoryConnections.serverUpdatedAt), asc(pgMemoryConnections.id))
       .limit(this.batchSize);
 
+    if (this.requireUnencrypted) await this.assertUnencrypted();
     const last = rows.at(-1);
     return {
       memories: [],
@@ -507,6 +564,7 @@ export class PgSyncClient {
       .orderBy(asc(pgSessions.serverUpdatedAt), asc(pgSessions.id))
       .limit(this.batchSize);
 
+    if (this.requireUnencrypted) await this.assertUnencrypted();
     const last = rows.at(-1);
     return {
       memories: [],
@@ -565,12 +623,23 @@ export class PgSyncClient {
    * configured against a store whose rows are ciphertext — see
    * `SyncEngine.initializeEncryption`.
    */
-  async hasEncryptionMetadata(): Promise<boolean> {
-    const result = await this.pool.query<{ present: boolean }>(
+  async hasEncryptionMetadata(client: Pool | PoolClient = this.pool): Promise<boolean> {
+    const result = await client.query<{ present: boolean }>(
       'SELECT true AS present FROM sync_metadata WHERE key = ANY($1::text[]) LIMIT 1',
       [ENCRYPTION_META_KEYS]
     );
     return result.rows.length > 0;
+  }
+
+  async assertUnencrypted(client: Pool | PoolClient = this.pool): Promise<void> {
+    if (await this.hasEncryptionMetadata(client)) {
+      throw new Error(
+        'This sync database has end-to-end encryption enabled, but this process has no ' +
+          'passphrase configured. Set ENGRAM_SYNC_ENCRYPTION_KEY to the passphrase the ' +
+          'database was encrypted with — syncing without it would overwrite encrypted rows ' +
+          'with plaintext.'
+      );
+    }
   }
 
   /**

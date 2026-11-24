@@ -6,8 +6,9 @@
  * existed), so `SyncEngine` can aggregate `SyncResult.pulled` / `.conflicts`.
  */
 
-import { recordAppliedMemory } from '../retrieval/indexBaseline.js';
-import { eq } from 'drizzle-orm';
+import { deleteAssembliesForMemories } from '../db/index.js';
+import { recordAppliedEdge, recordAppliedMemory } from '../retrieval/indexBaseline.js';
+import { and, eq, lt, or, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type {
   Memory, MemoryConnection, Session,
@@ -65,92 +66,76 @@ function mergeAccessCounters(db: SyncDb, local: Memory, merged: Partial<Memory>)
 }
 
 export function applyPulledMemory(db: SyncDb, remote: PgMemory): ApplyOutcome {
-  const local: Memory | undefined = db
-    .select()
-    .from(schema.memories)
-    .where(eq(schema.memories.id, remote.id))
-    .get();
+  const outcome = db.transaction((tx) => {
+    const local: Memory | undefined = tx
+      .select()
+      .from(schema.memories)
+      .where(eq(schema.memories.id, remote.id))
+      .get();
 
-  if (!local) {
-    db.insert(schema.memories).values(pgMemoryToNewMemory(remote)).onConflictDoNothing().run();
-    recordAppliedMemory(db, remote.id);
-    return { applied: true, conflict: false };
-  }
+    if (!local) {
+      tx.insert(schema.memories).values(pgMemoryToNewMemory(remote)).onConflictDoNothing().run();
+      return { applied: true, conflict: false };
+    }
 
-  const result = resolveMemoryConflict(local, remote);
-  if (result.winner !== 'remote') {
-    mergeAccessCounters(db, local, result.merged);
-    // Still not "applied": no content changed locally, so this must not
-    // inflate `SyncResult.pulled` or trigger a vector-index rebuild.
-    return { applied: false, conflict: true };
-  }
+    const result = resolveMemoryConflict(local, remote);
+    if (result.winner !== 'remote') {
+      mergeAccessCounters(tx, local, result.merged);
+      // Still not "applied": no content changed locally, so this must not
+      // inflate `SyncResult.pulled` or trigger a vector-index rebuild.
+      return { applied: false, conflict: true };
+    }
 
-  db.update(schema.memories).set(result.merged).where(eq(schema.memories.id, remote.id)).run();
-  recordAppliedMemory(db, remote.id);
-  return { applied: true, conflict: true };
+    tx.update(schema.memories).set(result.merged).where(eq(schema.memories.id, remote.id)).run();
+    if (local.archivedAt === null && remote.archivedAt !== null) {
+      deleteAssembliesForMemories(tx, [remote.id]);
+    }
+    return { applied: true, conflict: true };
+  }, { behavior: 'immediate' });
+  if (outcome.applied) recordAppliedMemory(db, remote.id);
+  return outcome;
 }
 
-/**
- * Fold the server's MAX-merged access bookkeeping back into the local rows we
- * just pushed.
- *
- * `pushed` is what we sent, so it is also what the local rows held a moment
- * ago — no re-read is needed to know whether the merge moved anything. Only
- * rows where it did are written, and `updated_at` is left alone for the same
- * reason as in `mergeAccessCounters`: this is bookkeeping, not an edit.
- */
-export function applyMergedAccessCounters(
-  db: SyncDb,
-  pushed: readonly Memory[],
-  merged: readonly MergedAccessCounters[]
-): void {
-  if (merged.length === 0) return;
-  const before = new Map(pushed.map((row) => [row.id, row]));
-
-  for (const row of merged) {
-    const local = before.get(row.id);
-    if (local === undefined) continue;
-    if (local.accessCount === row.accessCount && local.lastAccessedAt === row.lastAccessedAt) continue;
-
-    db.update(schema.memories)
-      .set({ accessCount: row.accessCount, lastAccessedAt: row.lastAccessedAt })
-      .where(eq(schema.memories.id, row.id))
-      .run();
-  }
+/** Merge against the current counters, including recalls committed while a push was in flight. */
+export function applyMergedAccessCounters(db: SyncDb, row: MergedAccessCounters): void {
+  const { id, accessCount, lastAccessedAt } = schema.memories;
+  const laterAccess = sql`${row.lastAccessedAt} > coalesce(${lastAccessedAt}, '')`;
+  db.update(schema.memories)
+    .set({
+      accessCount: sql`max(${accessCount}, ${row.accessCount})`,
+      lastAccessedAt: sql`case when ${laterAccess} then ${row.lastAccessedAt} else ${lastAccessedAt} end`,
+    })
+    .where(and(eq(id, row.id), or(lt(accessCount, row.accessCount), laterAccess)))
+    .run();
 }
 
 export function applyPulledConnection(db: SyncDb, remote: PgMemoryConnection): ApplyOutcome {
-  try {
-    const local: MemoryConnection | undefined = db
+  return db.transaction((tx) => {
+    const local: MemoryConnection | undefined = tx
       .select()
       .from(schema.memoryConnections)
       .where(eq(schema.memoryConnections.id, remote.id))
       .get();
 
     if (!local) {
-      db.insert(schema.memoryConnections)
+      const inserted = tx.insert(schema.memoryConnections)
         .values(pgConnectionToNewConnection(remote))
         .onConflictDoNothing()
         .run();
-      return { applied: true, conflict: false };
+      if (inserted.changes > 0) recordAppliedEdge(tx, remote.sourceId);
+      return { applied: inserted.changes > 0, conflict: false };
     }
 
     const result = resolveConnectionConflict(local, remote);
     if (result.winner !== 'remote') return { applied: false, conflict: true };
 
-    db.update(schema.memoryConnections)
+    tx.update(schema.memoryConnections)
       .set(result.merged)
       .where(eq(schema.memoryConnections.id, remote.id))
       .run();
+    recordAppliedEdge(tx, remote.sourceId, local.sourceId);
     return { applied: true, conflict: true };
-  } catch {
-    // Most likely a FK violation: the source/target memory hasn't landed
-    // locally yet (its own batch hasn't been pulled this cycle, or it
-    // belongs to a device that hasn't pushed it yet). Skip this row — it
-    // stays inside the next pull's overlap window and is retried once the
-    // dependency exists, rather than failing the whole sync.
-    return { applied: false, conflict: false };
-  }
+  }, { behavior: 'immediate' });
 }
 
 export function applyPulledSession(db: SyncDb, remote: PgSession): ApplyOutcome {

@@ -7,6 +7,7 @@
  */
 
 import path from 'path';
+import { mkdirSync } from 'node:fs';
 import os from 'node:os';
 import type { Database as SqliteHandle } from 'better-sqlite3';
 import * as schema from './schema.js';
@@ -163,6 +164,9 @@ function createSqliteConnection(dbPath: string): DatabaseConnection {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- see above
   const { drizzle } = require('drizzle-orm/better-sqlite3');
 
+  if (dbPath === resolveDbPath(undefined)) {
+    mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
+  }
   const sqlite = new Database(dbPath);
 
   // Enable WAL mode for better write performance
