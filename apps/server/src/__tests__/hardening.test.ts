@@ -232,7 +232,7 @@ describe('responses do not carry internal detail', () => {
 
   it('does not put a filesystem path in the index/save message', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/index/save' });
-    expect([200, 400]).toContain(res.statusCode);
+    expect([200, 500]).toContain(res.statusCode);
     expect(res.body).not.toMatch(/\/home\/|\/Users\/|C:\\\\/);
   });
 

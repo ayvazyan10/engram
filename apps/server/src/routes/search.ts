@@ -110,6 +110,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
       touch?: boolean;
       types?: MemoryType[];
       sources?: string[];
+      source?: string;
       sessionId?: string;
       since?: string;
       until?: string;
@@ -137,6 +138,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
             items: { type: 'string', enum: ['episodic', 'semantic', 'procedural'] },
           },
           sources: { type: 'array', items: { type: 'string' } },
+          source: { type: 'string' },
           sessionId: { type: 'string' },
           ...filterProperties,
           crossNamespace: { type: 'boolean', default: false },
@@ -169,7 +171,7 @@ export const searchRoutes: FastifyPluginAsync = async (app) => {
         until: req.body.until,
         tags: req.body.tags,
         sessionId: req.body.sessionId,
-        source: 'rest-api',
+        source: req.body.source ?? 'rest-api',
         crossNamespace: req.body.crossNamespace,
         namespace: req.body.namespace,
         global: req.body.global,

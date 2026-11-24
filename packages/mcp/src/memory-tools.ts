@@ -76,6 +76,7 @@ function registerUpdateMemory({ server, brain, ensureInitialized, syncEngine }: 
     },
     { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     async ({ id, ...updates }) => {
+      if (!Object.keys(updates).length) throw new Error('Provide at least one of content, importance, tags, or concept.');
       await ensureInitialized();
       const memory = await brain.updateMemory(id, updates);
       syncEngine?.notifyWrite();
@@ -105,7 +106,7 @@ function registerSearchMemory({ server, brain, ensureInitialized }: ToolContext)
         .max(1)
         .optional()
         .default(0.3)
-        .describe('Minimum similarity threshold (0.0–1.0)'),
+        .describe('Minimum cosine similarity (0.0–1.0). Hybrid search can also return keyword matches below this threshold.'),
       types: z
         .array(z.enum(['episodic', 'semantic', 'procedural']))
         .optional()

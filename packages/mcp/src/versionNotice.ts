@@ -121,7 +121,7 @@ async function staleServerNotice(installed: string): Promise<string> {
       }
       return kind === 'MCP'
         ? `Engram MCP in this session was started before the installed v${installed} build — restart the client to load it.`
-        : `An Engram HTTP server is running an older build (version unknown), installed v${installed} — run \`engram stop\` then \`engram start\` to load it.`;
+        : 'An Engram HTTP server was started before the installed build. Run `engram stop` then `engram start` to load it.';
     }
   }
   return '';
