@@ -119,11 +119,15 @@ Engram enforces this automatically: the first time a device connects to a sync t
 
 The MCP `re_embed` tool and REST `POST /api/embeddings/re-embed` update one device's SQLite vectors. Normal sync refuses a model mismatch, so a local re-embed alone cannot migrate a populated Postgres database.
 
+If this device has switched models and holds the latest edits, run `engram cloud sync --re-embed` on it. For encrypted sync, supply the usual `ENGRAM_SYNC_ENCRYPTION_KEY`.
+It re-embeds stale local vectors and pushes pending work, including archives and decay, before converting the remaining remote vectors.
+A final sync verifies the new model and pulls the converted rows. Configure the other devices to use that model before they resume sync.
+
 **To migrate a fleet in place**
 
 1. Pause writes and finish a sync on every device using the current model. Stop every Engram server and MCP process before starting the migration.
 2. On one device with the CLI configured for this sync database, run `engram cloud migrate-model <source> <target>` with the full old and new model IDs. For an encrypted database, supply its usual `ENGRAM_SYNC_ENCRYPTION_KEY`.
-3. Wait for the command to report the number of migrated memories. It checks that all remote vectors have the source model, including archived memories, and generates their replacements on the device. Postgres commits them together after the full count matches. A model mismatch, missing model label, or failed conversion rolls back the vector updates.
+3. Wait for the command to report the number of migrated memories. It checks that every remote vector needing conversion has the source model, including archived memories, and generates replacements on the device. Postgres commits them together after the full count matches. An unexpected model, missing model label, or failed conversion rolls back the vector updates.
 4. Configure the target model on every device before restarting. Set `ENGRAM_EMBEDDING_MODEL` for MCP, REST, and one-shot CLI syncs. For servers launched with `engram start`, run `engram configure set embeddingModel <target>`. Resume writes after the devices have pulled the migrated memories.
 
 See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported models.

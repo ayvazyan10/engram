@@ -2169,7 +2169,7 @@ export class NeuralBrain {
   /**
    * Re-embed all memories (or only stale/legacy ones) with the current model.
    *
-   * @param onlyStale  If true, only re-embed memories with a different or missing model ID. Default: true.
+   * @param onlyStale  If true, only re-embed vectors with a missing or different model ID or a mismatched dimension. Default: true.
    * @param batchSize  Number of memories to process per batch. Default: 32.
    * @param onProgress Optional callback fired after each batch.
    */
@@ -2199,7 +2199,8 @@ export class NeuralBrain {
       .where(and(...this.liveConditions()));
 
     const toReEmbed = onlyStale
-      ? all.filter((m) => m.embedding && m.embeddingModel !== currentModel)
+      ? all.filter((m) => m.embedding && (m.embeddingModel !== currentModel ||
+          m.embeddingDim !== currentDim || storedDimension(m.embedding) !== currentDim))
       : all.filter((m) => m.embedding);
 
     const progress: ReEmbedProgress = {

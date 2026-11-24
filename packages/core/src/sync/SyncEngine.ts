@@ -139,10 +139,10 @@ export class SyncEngine {
   // ─── public API ───────────────────────────────────────────────────────
 
   /** One-shot full sync: push then pull. Only one sync/push/pull runs at a time. */
-  async sync(): Promise<SyncResult> {
+  async sync({ skipEmbeddingModelCheck = false } = {}): Promise<SyncResult> {
     return this.runGuarded(async () => {
-      const pushed = await this.doPush();
-      const { pulled, conflicts } = await this.doPull();
+      const pushed = await this.doPush(skipEmbeddingModelCheck);
+      const { pulled, conflicts } = await this.doPull(skipEmbeddingModelCheck);
       return { pushed, pulled, conflicts };
     });
   }
@@ -305,16 +305,16 @@ export class SyncEngine {
 
   // ─── connection + embedding-model compatibility (2.4) ────────────────────
 
-  private async ensureConnected(): Promise<PgSyncClient> {
+  private async ensureConnected(skipEmbeddingModelCheck: boolean): Promise<PgSyncClient> {
     if (this.disposed) {
       throw new Error('SyncEngine has been disposed; create a new instance to sync again.');
     }
     if (this.pgClient) {
-      await this.checkEmbeddingModelCompatibility();
+      await this.checkEmbeddingModelCompatibility(skipEmbeddingModelCheck);
       return this.pgClient;
     }
     if (!this.connectingPromise) {
-      this.connectingPromise = this.connect();
+      this.connectingPromise = this.connect(skipEmbeddingModelCheck);
     }
     await this.connectingPromise;
     if (!this.pgClient) {
@@ -323,7 +323,7 @@ export class SyncEngine {
     return this.pgClient;
   }
 
-  private async connect(): Promise<void> {
+  private async connect(skipEmbeddingModelCheck: boolean): Promise<void> {
     try {
       this.pgConn = await createPgSyncConnection(this.syncUrl);
       this.pgClient = new PgSyncClient({
@@ -332,7 +332,7 @@ export class SyncEngine {
         batchSize: LOCAL_BATCH_SIZE,
         requireUnencrypted: !this.config.encryptionKey,
       });
-      await this.checkEmbeddingModelCompatibility();
+      await this.checkEmbeddingModelCompatibility(skipEmbeddingModelCheck);
       await this.initializeEncryption();
       initializeAccessQueue(this.db, this.syncId);
     } catch (err) {
@@ -377,7 +377,12 @@ export class SyncEngine {
    * Guards against mixing incompatible embedding vector spaces across
    * devices on connection and whenever this process switches models.
    */
-  private async checkEmbeddingModelCompatibility(): Promise<void> {
+  private async checkEmbeddingModelCompatibility(skipEmbeddingModelCheck: boolean): Promise<void> {
+    if (skipEmbeddingModelCheck) {
+      // The next normal cycle must read the claim after remote conversion.
+      this.checkedEmbeddingModel = null;
+      return;
+    }
     const localModel = getEmbeddingModelId();
     if (localModel === this.checkedEmbeddingModel || !this.pgClient) return;
     await this.pgClient.assertEmbeddingModel(localModel);
@@ -399,10 +404,10 @@ export class SyncEngine {
     }, { behavior: 'immediate' });
   }
 
-  private async doPush(): Promise<SyncResult['pushed']> {
+  private async doPush(skipEmbeddingModelCheck = false): Promise<SyncResult['pushed']> {
     this.currentPhase = 'push';
     const scanStartedAt = new Date().toISOString();
-    const client = await this.ensureConnected();
+    const client = await this.ensureConnected(skipEmbeddingModelCheck);
     // Attribute legacy rows on the device that owns them, without changing
     // their edit timestamps. The server cannot determine a NULL row's owner.
     this.db.transaction((tx) => {
@@ -432,7 +437,7 @@ export class SyncEngine {
       // point at which it can learn the merged counters.
       async (rows) => {
         const result = await client.pushMemoriesMerging(
-          encryptMemoriesForPush(this.encryptionManager, rows)
+          encryptMemoriesForPush(this.encryptionManager, rows), skipEmbeddingModelCheck
         );
         for (const counters of result.merged) applyMergedAccessCounters(this.db, counters);
         return result.applied;
@@ -513,9 +518,9 @@ export class SyncEngine {
 
   // ─── pull ─────────────────────────────────────────────────────────────
 
-  private async doPull(): Promise<{ pulled: SyncResult['pulled']; conflicts: number }> {
+  private async doPull(skipEmbeddingModelCheck = false): Promise<{ pulled: SyncResult['pulled']; conflicts: number }> {
     this.currentPhase = 'pull';
-    const client = await this.ensureConnected();
+    const client = await this.ensureConnected(skipEmbeddingModelCheck);
     const cursor = readCursor(this.db, this.syncId);
     const baseCursor = pullCursorWithOverlap(cursor?.pullCursor ?? null);
     const scanStartedAt = await client.getPullStartTime();

@@ -295,6 +295,9 @@ const SENTINEL_META_KEY = 'encryption_sentinel';
  */
 const KDF_META_KEY = 'encryption_kdf';
 const MODEL_META_KEY = 'embedding_model';
+const MODEL_MISMATCH_GUIDANCE =
+  'Run "engram cloud sync --re-embed" if this device holds the up-to-date data. ' +
+  'To convert a fleet, stop sync across all devices and run "engram cloud migrate-model <source> <target>".';
 
 /** Every key that marks a database as having E2E encryption established. */
 const ENCRYPTION_META_KEYS = [SALT_META_KEY, SENTINEL_META_KEY, KDF_META_KEY];
@@ -391,7 +394,7 @@ export class PgSyncClient {
         // Check the LWW winner. After a fleet migration an older local model
         // can legitimately lose the upsert and then pull the migrated row.
         const mixed = result.rows.find((row) => row.embedding_model !== null && row.embedding_model !== model);
-        if (mixed) throw new Error(`Embedding model mismatch for memory ${mixed.id}: expected "${model}", found "${mixed.embedding_model}".`);
+        if (mixed) throw new Error(`Embedding model mismatch for memory ${mixed.id}: expected "${model}", found "${mixed.embedding_model}". ${MODEL_MISMATCH_GUIDANCE}`);
       }
       await client.query('COMMIT');
       return result;
@@ -415,7 +418,7 @@ export class PgSyncClient {
    * *other* device happens to touch the row again — which for a memory
    * nobody edits twice is never.
    */
-  async pushMemoriesMerging(rows: Memory[]): Promise<PushMemoriesResult> {
+  async pushMemoriesMerging(rows: Memory[], skipEmbeddingModelCheck = false): Promise<PushMemoriesResult> {
     if (rows.length === 0) return { applied: 0, merged: [] };
 
     const valueRows = rows.map((m) => [
@@ -435,7 +438,8 @@ export class PgSyncClient {
       valueRows
     );
 
-    const result = await this.writeBatch<MergedAccessRow>(text, values, getEmbeddingModelId());
+    const model = skipEmbeddingModelCheck ? undefined : getEmbeddingModelId();
+    const result = await this.writeBatch<MergedAccessRow>(text, values, model);
     return {
       applied: result.rowCount ?? 0,
       merged: result.rows.map((row) => ({
@@ -646,8 +650,7 @@ export class PgSyncClient {
     if (claimed !== model) {
       throw new Error(
         `Embedding model mismatch: local uses "${model}" but the sync database uses "${claimed}". ` +
-          'Local re-embedding only updates SQLite. Use the remote model, or stop sync across the fleet ' +
-          'and run "engram cloud migrate-model <source> <target>" to convert the shared database.'
+          MODEL_MISMATCH_GUIDANCE
       );
     }
   }
@@ -657,12 +660,12 @@ export class PgSyncClient {
     const result = await client.query<{ embedding_model: string }>(
       'SELECT DISTINCT embedding_model FROM memories WHERE embedding_model IS NOT NULL LIMIT 2'
     );
-    if (result.rows.length > 1) throw new Error('Embedding model mismatch: the sync database contains multiple models.');
+    if (result.rows.length > 1) throw new Error(`Embedding model mismatch: the sync database contains multiple models. ${MODEL_MISMATCH_GUIDANCE}`);
     return result.rows[0]?.embedding_model ?? null;
   }
 
-  /** Offline fleet migration. Regenerate the remote vectors on this device in one transaction. */
-  async migrateEmbeddingModel(sourceModel: string, encryptionKey?: string): Promise<number> {
+  /** Regenerate non-target remote vectors in one transaction. Fleet migrations require a specific source. */
+  async migrateEmbeddingModel(sourceModel?: string, encryptionKey?: string): Promise<number> {
     const targetModel = getEmbeddingModelId();
     if (sourceModel === targetModel) throw new Error('Choose a different target embedding model.');
 
@@ -683,20 +686,25 @@ export class PgSyncClient {
       }
       await tx.execute(sql`LOCK TABLE memories IN SHARE ROW EXCLUSIVE MODE`);
       const { embedding, embeddingModel, id } = pgMemories;
+      const hasEmbedding = or(isNotNull(embedding), isNotNull(embeddingModel));
       const models = await tx.select({ model: embeddingModel, total: count() }).from(pgMemories)
-        .where(or(isNotNull(embedding), isNotNull(embeddingModel))).groupBy(embeddingModel);
-      const source = models[0];
-      const [claim] = await tx.select().from(pgSchema.pgSyncMetadata).where(eq(pgSchema.pgSyncMetadata.key, MODEL_META_KEY));
-      if (models.length > 1 || (claim && claim.value !== sourceModel) ||
-          (source ? source.model : claim?.value) !== sourceModel) {
-        throw new Error(`Expected every remote embedding to use "${sourceModel}". Check the source model.`);
+        .where(hasEmbedding).groupBy(embeddingModel);
+      const remaining = models.filter(({ model }) => model !== targetModel);
+      if (sourceModel !== undefined) {
+        const [claim] = await tx.select().from(pgSchema.pgSyncMetadata).where(eq(pgSchema.pgSyncMetadata.key, MODEL_META_KEY));
+        if ((claim && claim.value !== sourceModel) || (!claim && models.length === 0) ||
+            remaining.some(({ model }) => model !== sourceModel)) {
+          throw new Error(`Expected the source model "${sourceModel}" for this migration. Check the remote claim and model labels.`);
+        }
       }
 
+      const expected = remaining.reduce((total, group) => total + group.total, 0);
+      const needsMigration = and(hasEmbedding, sql`${embeddingModel} IS DISTINCT FROM ${targetModel}`);
       let afterId: string | undefined;
       let migrated = 0;
       for (;;) {
         const rows: PgMemory[] = await tx.select().from(pgMemories)
-          .where(and(eq(embeddingModel, sourceModel), afterId === undefined ? undefined : gt(id, afterId)))
+          .where(and(needsMigration, afterId === undefined ? undefined : gt(id, afterId)))
           .orderBy(id).limit(this.batchSize);
         if (rows.length === 0) break;
         for (const row of rows) {
@@ -716,7 +724,7 @@ export class PgSyncClient {
           afterId = row.id;
         }
       }
-      if (migrated !== (source?.total ?? 0)) throw new Error('Incomplete remote embedding coverage. Migration aborted.');
+      if (migrated !== expected) throw new Error('Incomplete remote embedding coverage. Migration aborted.');
       await tx.insert(pgSchema.pgSyncMetadata).values({ key: MODEL_META_KEY, value: targetModel })
         .onConflictDoUpdate({ target: pgSchema.pgSyncMetadata.key, set: { value: targetModel, updatedAt: sql`now()` } });
       return migrated;
