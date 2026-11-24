@@ -43,7 +43,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       },
     },
     handler: async (req, reply) => {
-      if (brain.getNamespaceMode() === 'isolated' && req.body.namespace && req.body.namespace !== brain.getNamespace()) {
+      if (brain.getNamespaceMode() === 'isolated' && req.body.namespace !== undefined && req.body.namespace !== brain.getNamespace()) {
         return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
       }
       const { content, type, source, sessionId, tags, metadata, importance, concept, namespace } = req.body;
@@ -107,7 +107,7 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       },
       handler: async (req, reply) => {
         if (brain.getNamespaceMode() === 'isolated' && req.body.memories.some((memory) =>
-          memory.namespace && memory.namespace !== brain.getNamespace()
+          memory.namespace !== undefined && memory.namespace !== brain.getNamespace()
         )) {
           return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
         }

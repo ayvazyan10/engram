@@ -596,7 +596,7 @@ function registerCompleteDistill({ server, brain, ensureInitialized, syncEngine,
         // Report policy-discarded facts and carry on so the session can finish.
         const discardedIds: string[] = [];
         for (const { global, ...fact } of facts) {
-          const result = await brain.store({ ...fact, source: clientSource(), namespace: global ? null : undefined });
+          const result = await brain.store({ ...fact, source: clientSource(), namespace: global ? null : session.namespace ?? undefined });
           syncEngine?.notifyWrite();
           if (result.memory.id === id) {
             throw new Error('Fact was not retained separately from the raw session; session remains pending');

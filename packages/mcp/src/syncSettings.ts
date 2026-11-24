@@ -55,13 +55,17 @@ function resolveInterval(raw: string | undefined): number | undefined {
 }
 
 export function readSyncSettings(env: SyncEnv): SyncSettings {
+  const encryptionKey = env['ENGRAM_SYNC_ENCRYPTION_KEY'] || undefined;
+  if (encryptionKey && !encryptionKey.trim()) {
+    throw new Error('ENGRAM_SYNC_ENCRYPTION_KEY must contain a non-whitespace character or be empty to disable encryption');
+  }
   return {
     syncUrl: present(env['ENGRAM_SYNC_URL']),
     mode: resolveMode(env['ENGRAM_SYNC_MODE']),
     intervalMs: resolveInterval(env['ENGRAM_SYNC_INTERVAL']),
     // Passed through byte-for-byte: trimming it would derive a different key
     // and make every previously-encrypted row unreadable.
-    encryptionKey: present(env['ENGRAM_SYNC_ENCRYPTION_KEY']),
+    encryptionKey,
   };
 }
 

@@ -89,7 +89,7 @@ function createServer(notice: string): McpServer {
         'Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user\'s explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.',
         '- Recall when prior decisions or project history would help: recall_context for broad context, search_memory for a specific fact. Recalled memories can be stale — verify before relying on them.',
         '- Store durable facts worth keeping beyond this session: decisions and their reasons, conventions, fixes, user preferences. Not routine chatter. Follow the user\'s wishes about what to store.',
-        '- Memories are scoped to the current project by default. Use global: true only for facts about the user that hold in every project.',
+        '- Follow the namespace guidance in store_memory for project-specific memories. Use global: true only for facts about the user that hold in every project.',
         '- Correct a stale fact with update_memory (by id); retire one with forget.',
         notice,
       ].filter(Boolean).join('\n'),

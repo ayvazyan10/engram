@@ -24,7 +24,9 @@ function registerStoreMemory({ server, brain, ensureInitialized, syncEngine, cli
       importance: z.number().min(0).max(1).optional().describe('Importance score 0.0–1.0 (default varies by type)'),
       concept: z.string().optional().describe('For semantic memories: the concept name'),
       sessionId: z.string().optional().describe('Session ID to group related episodic memories'),
-      namespace: z.string().optional().describe('Leave unset; the server scopes to the current project.'),
+      namespace: z.string().optional().describe(brain.getNamespace()
+        ? 'Leave unset to store in the current project.'
+        : 'Set the project namespace for a project-specific memory. Omitting it stores the memory globally.'),
       global: z.boolean().optional().describe('true only for facts about the user that hold in every project.'),
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },

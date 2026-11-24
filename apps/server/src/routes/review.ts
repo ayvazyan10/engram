@@ -59,7 +59,7 @@ export const reviewRoutes: FastifyPluginAsync = async (app) => {
       if (ids.length !== (queue === 'duplicates' ? 2 : 1)) return reply.code(400).send({ error: 'Wrong number of ids for queue' });
       const db = getDb();
       const rows = db.select().from(schema.memories).where(and(inArray(schema.memories.id, ids), isNull(schema.memories.archivedAt))).all();
-      if (rows.length !== ids.length || rows.some((row) => !brain.canAccessNamespace(row.namespace) || (brain.getNamespace() && row.namespace !== brain.getNamespace()))) {
+      if (rows.length !== ids.length || rows.some((row) => !brain.canAccessNamespace(row.namespace))) {
         return reply.code(404).send({ error: 'Memory not found' });
       }
       // Synchronous read/modify/write: no request can interleave and lose another dismissal.

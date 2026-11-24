@@ -70,7 +70,8 @@ export function makeBufferedRequest(
   path: string,
   method: string,
   headers: Record<string, string>,
-  body: Buffer
+  body: Buffer,
+  signal?: AbortSignal
 ): Promise<{ status: number; headers: http.OutgoingHttpHeaders; body: Buffer }> {
   return new Promise((resolve, reject) => {
     const options = requestOptions(target, path, method, {
@@ -78,7 +79,7 @@ export function makeBufferedRequest(
       'content-length': body.length.toString(),
     });
 
-    const req = protocolFor(target).request(options, (res) => {
+    const req = protocolFor(target).request({ ...options, signal }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
       // The response stream needs its own 'error' listener: a mid-response

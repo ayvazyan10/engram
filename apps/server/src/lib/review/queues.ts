@@ -67,9 +67,7 @@ export function reviewReader() {
       isNull(schema.memoryConnections.deletedAt), inArray(schema.memoryConnections.sourceId, visible),
       inArray(schema.memoryConnections.targetId, visible),
     )).orderBy(schema.memoryConnections.id).all().filter((e) => e.sourceId !== e.targetId && byId.has(e.sourceId) && byId.has(e.targetId));
-    // Core's exact REST scope also adds the active namespace for global=true.
-    // Use soft visibility for global reads; the scoped row IDs below filter pairs.
-    const contradictions = await brain.getContradictions(scope.namespace, undefined, 0, scope.global === 'true' ? undefined : false);
+    const contradictions = await brain.getContradictions(scope.namespace, undefined, 0, scope.global === 'true');
     const dismissed = new Set(readDismissals());
     const policy = brain.getDecayPolicy();
     const decay = new DecayEngine(policy);

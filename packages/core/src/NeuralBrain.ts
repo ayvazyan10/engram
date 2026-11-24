@@ -2375,7 +2375,7 @@ export class NeuralBrain {
       ? or(eq(schema.memories.namespace, this.activeNamespace), isNull(schema.memories.namespace))!
       : isNull(schema.memories.namespace));
     if (global !== undefined) {
-      if (this.activeNamespace) conditions.push(eq(schema.memories.namespace, this.activeNamespace));
+      if (this.activeNamespace && !global) conditions.push(eq(schema.memories.namespace, this.activeNamespace));
       if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
       if (global) conditions.push(isNull(schema.memories.namespace));
     }
