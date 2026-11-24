@@ -1,12 +1,43 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { UnsafeWebhookUrlError } from '@engram-ai-memory/core';
 import { registerTools } from '@engram-ai-memory/mcp/dist/tools.js';
 import { brain, notifySyncWrite, VERSION } from '../index.js';
-import { runExclusive } from '../lib/exclusive.js';
+import { OperationInProgressError, runExclusive } from '../lib/exclusive.js';
+import { isMemoryNotFound } from '../lib/notFound.js';
+
+function isCallerError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return isMemoryNotFound(err) || err instanceof OperationInProgressError || err instanceof UnsafeWebhookUrlError
+    || err.message.startsWith('Invalid decay policy:') || /^Memory .* has no embedding$/s.test(err.message)
+    || [
+      'Memory not found', 'Contradiction candidate not found', 'Pending session not found in your scope',
+      'strategy requires verdict contradiction', 'namespace override is not allowed in isolated mode',
+      'cross-namespace access is not allowed in isolated mode',
+      'Fact was not retained separately from the raw session; session remains pending',
+    ].includes(err.message);
+}
 
 async function handleMcpRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const server = new McpServer({ name: 'engram', version: VERSION });
+  // The SDK turns thrown messages into tool results before Fastify sees them.
+  // Every tool() overload takes the callback last, after its schema and metadata.
+  const register = server.tool;
+  server.tool = (name: string, ...args: unknown[]): RegisteredTool => {
+    const handler = args.pop() as (...input: unknown[]) => Promise<CallToolResult>;
+    const guarded = async (...input: unknown[]): Promise<CallToolResult> => {
+      try {
+        return await handler(...input);
+      } catch (err) {
+        if (isCallerError(err)) throw err;
+        req.log.error({ err, tool: name }, 'MCP tool failed');
+        throw new Error('Tool failed. See the server log for details.');
+      }
+    };
+    return Reflect.apply(register, server, [name, ...args, guarded]);
+  };
   // buildApp's caller initializes this brain, exactly as for REST routes.
   registerTools(server, brain, async () => {}, { notifyWrite: notifySyncWrite }, {
     runDecaySweep: (dryRun) => runExclusive('consolidate', () => brain.runDecaySweep(dryRun)),

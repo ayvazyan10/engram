@@ -150,7 +150,7 @@ const SYNC_URL = readEnvString(process.env, 'ENGRAM_SYNC_URL');
  * own Postgres. Both are startup errors now.
  */
 const SYNC_MODE = readEnvEnum(process.env, 'ENGRAM_SYNC_MODE', ['auto', 'manual', 'off'] as const) ?? 'auto';
-const SYNC_INTERVAL = readEnvNumber(process.env, 'ENGRAM_SYNC_INTERVAL', { min: 1 });
+const SYNC_INTERVAL = readEnvNumber(process.env, 'ENGRAM_SYNC_INTERVAL', { min: 1, max: 2_147_483_647 });
 
 /**
  * Passphrase for E2E encryption of synced rows.
@@ -460,6 +460,8 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
   return app;
 }
 
+let app: ReturnType<typeof Fastify> | undefined;
+
 async function start() {
   // Initialize brain
   console.info('Initializing Engram brain...');
@@ -491,7 +493,7 @@ async function start() {
     }
   }
 
-  const app = await buildApp();
+  app = await buildApp();
 
   // Start Fastify — it creates and owns the HTTP server
   await app.listen({ port: PORT, host: HOST });
@@ -511,6 +513,16 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.info(`Received ${signal}, shutting down...`);
   try {
+    if (app) {
+      const { server } = app;
+      const deadline = setTimeout(() => server.closeAllConnections(), 30_000);
+      try {
+        io?.engine.close();
+        await app.close();
+      } finally {
+        clearTimeout(deadline);
+      }
+    }
     if (syncEngine) {
       await syncEngine.dispose();
       syncEngine = null;

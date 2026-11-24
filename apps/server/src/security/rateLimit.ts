@@ -49,9 +49,9 @@ const DEFAULTS = {
 } as const;
 
 function intFromEnv(raw: string | undefined, fallback: number): number {
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  if (raw === undefined || !/^[+-]?\d+$/.test(raw.trim())) return fallback;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 export function readRateLimitConfig(env: NodeJS.ProcessEnv = process.env): RateLimitConfig {

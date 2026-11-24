@@ -46,9 +46,9 @@ function resolveInterval(raw: string | undefined): number | undefined {
   // Not parseInt: it reads "10abc" as 10 and "soon" as NaN, and both used to
   // reach setInterval unchallenged.
   const parsed = Number(value.trim());
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
     throw new Error(
-      `ENGRAM_SYNC_INTERVAL must be a positive whole number of milliseconds (got ${JSON.stringify(value)})`,
+      `ENGRAM_SYNC_INTERVAL must be a positive whole number of milliseconds up to 2147483647 (got ${JSON.stringify(value)})`,
     );
   }
   return parsed;

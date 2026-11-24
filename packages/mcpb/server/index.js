@@ -142,19 +142,26 @@ function installedVersion(installDir) {
 
 function ensureInstalled(version, installDir) {
   const marker = path.join(installDir, `.installed-${version}`);
-  if (existsSync(marker) && installedVersion(installDir) === version) return;
+  const entrypoint = serverInvocation(installDir).args[0];
+  const hasEntrypoint = existsSync(entrypoint);
+  if (hasEntrypoint && existsSync(marker) && installedVersion(installDir) === version) return;
 
   log(`Installing ${PACKAGE}@${version} to ${installDir} ...`);
 
-  const { mkdirSync, writeFileSync } = require('fs');
+  const { mkdirSync, rmSync, writeFileSync } = require('fs');
   mkdirSync(installDir, { recursive: true });
 
   const invocation = npmInvocation(installArgs(installDir, version));
   try {
+    // npm can consider the matching package.json up to date despite missing files.
+    if (!hasEntrypoint) {
+      rmSync(path.join(installDir, 'node_modules', PACKAGE), { recursive: true, force: true });
+    }
     execFileSync(invocation.file, invocation.argv, {
       stdio: ['ignore', 'ignore', 'pipe'],
       shell: invocation.shell,
     });
+    if (!existsSync(entrypoint)) throw new Error(`Missing server entrypoint: ${entrypoint}`);
   } catch (err) {
     const msg = err.stderr ? err.stderr.toString() : String(err);
     log(`Installation failed: ${msg}`);

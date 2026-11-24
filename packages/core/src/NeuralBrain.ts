@@ -1887,19 +1887,18 @@ export class NeuralBrain {
       dryRun,
       this.activeNamespace
     );
+    if (dryRun) return result;
 
     // Auto-consolidation
-    if (!dryRun) {
-      const newIds = await this.decayEngine.autoConsolidate(
-        async (minClusterSize, threshold, olderThanIso) => {
-          const consolidated = await this.consolidate(minClusterSize, threshold, olderThanIso);
-          return consolidated.map((m) => ({ id: m.id }));
-        },
-        this.activeNamespace
-      );
-      result.consolidatedCount = newIds.length;
-      result.newSemanticIds = newIds;
-    }
+    const newIds = await this.decayEngine.autoConsolidate(
+      async (minClusterSize, threshold, olderThanIso) => {
+        const consolidated = await this.consolidate(minClusterSize, threshold, olderThanIso);
+        return consolidated.map((m) => ({ id: m.id }));
+      },
+      this.activeNamespace
+    );
+    result.consolidatedCount = newIds.length;
+    result.newSemanticIds = newIds;
 
     if (result.archivedCount > 0 || result.consolidatedCount > 0) {
       this.webhookManager.fire('decayed', {
@@ -1921,9 +1920,7 @@ export class NeuralBrain {
 
     // Mark reflection due after a decay sweep if configured; the connected AI
     // picks it up via getReflectionTasks() (request_reflection).
-    if (!dryRun) {
-      this.reflectionEngine.notifyDecay();
-    }
+    this.reflectionEngine.notifyDecay();
 
     return result;
   }

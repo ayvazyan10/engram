@@ -167,7 +167,7 @@ function registerRecallContext({ server, brain, ensureInitialized, clientSource 
       crossNamespace: z.boolean().optional().default(false).describe('Search every project in filter mode; rejected in isolated mode'),
       progressive: z.boolean().optional().default(false).describe('Use streaming recall to assemble the context text'),
     },
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async ({ query, maxTokens, types, sources, since, until, tags, crossNamespace, progressive }) => {
       await ensureInitialized();
       const options = { maxTokens, types, sources, since, until, tags, source: clientSource(), crossNamespace };
