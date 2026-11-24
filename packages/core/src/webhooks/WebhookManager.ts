@@ -202,8 +202,8 @@ export class WebhookManager {
    */
   async unsubscribe(id: string): Promise<boolean> {
     const db = getDb();
-    await db.delete(schema.webhooks).where(eq(schema.webhooks.id, id));
-    return true;
+    const result = await db.delete(schema.webhooks).where(eq(schema.webhooks.id, id));
+    return result.changes > 0;
   }
 
   /**
@@ -348,6 +348,7 @@ export class WebhookManager {
 
     let lastError: string | undefined;
     let statusCode: number | undefined;
+    let attempts = 0;
 
     // Re-validate at delivery time, not just at subscribe time: DNS can be
     // repointed at a private address after the subscription was created.
@@ -363,21 +364,12 @@ export class WebhookManager {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         target ??= await assertSafeWebhookTarget(wh.url, this.guardOptions());
+        attempts++;
         const res = await postJson(target, body, headers, timeoutMs);
 
         statusCode = res.status;
 
-        if (res.status >= 200 && res.status < 300) {
-          // Success — reset fail count
-          await this.recordSuccess(wh.id);
-          return {
-            webhookId: wh.id,
-            url: wh.url,
-            success: true,
-            statusCode,
-            attempts: attempt,
-          };
-        }
+        if (res.status >= 200 && res.status < 300) break;
 
         lastError = `HTTP ${res.status}: ${res.statusText}`;
 
@@ -387,10 +379,7 @@ export class WebhookManager {
         if (!retryable) break;
       } catch (err: unknown) {
         lastError = err instanceof Error ? err.message : String(err);
-        if (err instanceof UnsafeWebhookUrlError && !err.retryable) {
-          await this.recordFailure(wh.id);
-          return { webhookId: wh.id, url: wh.url, success: false, error: lastError, attempts: attempt - 1 };
-        }
+        if (err instanceof UnsafeWebhookUrlError && !err.retryable) break;
       }
 
       // Exponential backoff before retry
@@ -399,7 +388,15 @@ export class WebhookManager {
       }
     }
 
-    // All retries exhausted — record failure
+    if (statusCode !== undefined && statusCode >= 200 && statusCode < 300) {
+      try {
+        await this.recordSuccess(wh.id);
+      } catch (err) {
+        console.error(`[engram] webhook ${wh.id} delivered but success bookkeeping failed:`, err);
+      }
+      return { webhookId: wh.id, url: wh.url, success: true, statusCode, attempts };
+    }
+
     await this.recordFailure(wh.id);
 
     return {
@@ -408,7 +405,7 @@ export class WebhookManager {
       success: false,
       statusCode,
       error: lastError,
-      attempts: MAX_RETRIES,
+      attempts,
     };
   }
 

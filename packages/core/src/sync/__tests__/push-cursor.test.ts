@@ -200,8 +200,9 @@ describe('connection push conflicts', () => {
     const row: MemoryConnection = { id: 'duplicate', sourceId: 'a', targetId: 'b',
       relationship: 'relates_to', strength: 1, bidirectional: false, metadata: '{}',
       createdAt: '2026-01-01', updatedAt: '2026-01-02', deletedAt: null, deviceId: OUR_DEVICE };
-    expect(await client.pushConnections([row, { ...row, id: 'fresh', targetId: 'c' }])).toBe(1);
-    expect(query).toHaveBeenCalledTimes(3);
+    expect(await client.pushConnections([row, { ...row, id: 'fresh', targetId: 'c' }],
+      (edge) => client.pushConnections([{ ...edge, id: 'persisted' }]))).toBe(2);
+    expect(query).toHaveBeenCalledTimes(4);
     expect(query.mock.calls[2]![0]).toContain('ON CONFLICT (id) DO UPDATE');
     expect(await client.pushConnections([{ ...row, id: 'next-cycle' }])).toBe(1);
   });

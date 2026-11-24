@@ -2,10 +2,11 @@
  * Applying one pulled Postgres row to the local SQLite database: insert if
  * no local row exists, or resolve the conflict (`../sync/conflict.ts`) and
  * write the merged result if the remote side wins. Returns whether the row
- * was applied and whether it was a genuine conflict (a local row already
- * existed), so `SyncEngine` can aggregate `SyncResult.pulled` / `.conflicts`.
+ * was applied and whether local and remote differed, so `SyncEngine` can
+ * aggregate `SyncResult.pulled` / `.conflicts`.
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { deleteAssembliesForMemories } from '../db/index.js';
 import { recordAppliedEdge, recordAppliedMemory } from '../retrieval/indexBaseline.js';
 import { and, eq, lt, or, sql } from 'drizzle-orm';
@@ -73,10 +74,12 @@ export function applyPulledMemory(db: SyncDb, remote: PgMemory): ApplyOutcome {
       .where(eq(schema.memories.id, remote.id))
       .get();
 
+    const incoming = pgMemoryToNewMemory(remote);
     if (!local) {
-      const inserted = tx.insert(schema.memories).values(pgMemoryToNewMemory(remote)).onConflictDoNothing().run();
+      const inserted = tx.insert(schema.memories).values(incoming).onConflictDoNothing().run();
       return { applied: inserted.changes > 0, conflict: false };
     }
+    if (isDeepStrictEqual(local, incoming)) return { applied: false, conflict: false };
 
     const result = resolveMemoryConflict(local, remote);
     if (result.winner !== 'remote') {
@@ -109,32 +112,41 @@ export function applyMergedAccessCounters(db: SyncDb, row: MergedAccessCounters)
     .run();
 }
 
-export function applyPulledConnection(db: SyncDb, remote: PgMemoryConnection): ApplyOutcome {
+export function applyPulledConnection(
+  db: SyncDb, remote: PgMemoryConnection, syncId: string
+): ApplyOutcome & { pendingPush?: MemoryConnection | undefined } {
   return db.transaction((tx) => {
-    const local: MemoryConnection | undefined = tx
-      .select()
-      .from(schema.memoryConnections)
-      .where(eq(schema.memoryConnections.id, remote.id))
-      .get();
+    const edges = schema.memoryConnections;
+    const local = tx.select().from(edges).where(eq(edges.id, remote.id)).get()
+      ?? tx.select().from(edges).where(and(
+        eq(edges.sourceId, remote.sourceId), eq(edges.targetId, remote.targetId), eq(edges.relationship, remote.relationship)
+      )).get();
 
+    const incoming = pgConnectionToNewConnection(remote);
     if (!local) {
-      const inserted = tx.insert(schema.memoryConnections)
-        .values(pgConnectionToNewConnection(remote))
-        .onConflictDoNothing()
-        .run();
-      if (inserted.changes > 0) recordAppliedEdge(tx, remote.sourceId);
-      return { applied: inserted.changes > 0, conflict: false };
+      tx.insert(edges).values(incoming).run();
+      recordAppliedEdge(tx, remote.sourceId);
+      return { applied: true, conflict: false };
     }
+    if (isDeepStrictEqual(local, incoming)) return { applied: false, conflict: false };
 
     const result = resolveConnectionConflict(local, remote);
-    if (result.winner !== 'remote') return { applied: false, conflict: true };
-
-    tx.update(schema.memoryConnections)
-      .set(result.merged)
-      .where(eq(schema.memoryConnections.id, remote.id))
-      .run();
+    if (result.winner === 'local' && local.id === remote.id) {
+      return { applied: false, conflict: true, pendingPush: local };
+    }
+    // On a pair collision Postgres keeps its ID and wins an exact version tie.
+    const pendingPush = result.winner === 'local' && result.reason !== 'lww:tie'
+      ? { ...local, id: remote.id } : undefined;
+    tx.update(edges).set(pendingPush ?? incoming).where(eq(edges.id, local.id)).run();
     recordAppliedEdge(tx, remote.sourceId, local.sourceId);
-    return { applied: true, conflict: true };
+    if (pendingPush) {
+      // Keep the original LWW version eligible even if an older client already
+      // checkpointed the failed push, or this process exits before retrying it.
+      const value = `retry:${local.id}`;
+      tx.insert(schema.localMeta).values({ key: `sync_connection_pairs:${syncId}`, value })
+        .onConflictDoUpdate({ target: schema.localMeta.key, set: { value } }).run();
+    }
+    return { applied: true, conflict: true, pendingPush };
   }, { behavior: 'immediate' });
 }
 
@@ -146,10 +158,12 @@ export function applyPulledSession(db: SyncDb, remote: PgSession): ApplyOutcome 
       .where(eq(schema.sessions.id, remote.id))
       .get();
 
+    const incoming = pgSessionToNewSession(remote);
     if (!local) {
-      const inserted = tx.insert(schema.sessions).values(pgSessionToNewSession(remote)).onConflictDoNothing().run();
+      const inserted = tx.insert(schema.sessions).values(incoming).onConflictDoNothing().run();
       return { applied: inserted.changes > 0, conflict: false };
     }
+    if (isDeepStrictEqual(local, incoming)) return { applied: false, conflict: false };
 
     const result = resolveSessionConflict(local, remote);
     if (result.winner !== 'remote') return { applied: false, conflict: true };

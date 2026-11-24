@@ -5,7 +5,7 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { NeuralBrain } from '../src/index.js';
+import { getDeviceId, NeuralBrain } from '../src/index.js';
 import { getDb } from '../src/db/index.js';
 import { memoryConnections } from '../src/db/schema.js';
 import { randomUUID } from 'crypto';
@@ -21,6 +21,7 @@ async function store(input: Parameters<typeof brain.store>[0]) {
 }
 
 async function connect(sourceId: string, targetId: string, relationship: string, strength = 0.8) {
+  const now = new Date().toISOString();
   await getDb().insert(memoryConnections).values({
     id: randomUUID(),
     sourceId,
@@ -28,6 +29,9 @@ async function connect(sourceId: string, targetId: string, relationship: string,
     relationship,
     strength,
     bidirectional: 0,
+    createdAt: now,
+    updatedAt: now,
+    deviceId: getDeviceId(),
   }).onConflictDoNothing();
 }
 
@@ -159,7 +163,7 @@ async function run() {
     importance: 0.95, tags: ['recall', 'context', 'pipeline'],
   });
 
-  const debugPattern = await store({
+  await store({
     type: 'procedural',
     triggerPattern: 'Port already in use error',
     actionPattern: 'fuser -k PORT/tcp then restart',
@@ -167,7 +171,7 @@ async function run() {
     importance: 0.65, tags: ['debugging', 'devops'],
   });
 
-  const buildPattern = await store({
+  await store({
     type: 'procedural',
     triggerPattern: 'Build packages in monorepo',
     actionPattern: 'pnpm turbo run build — respects dependency order automatically',
@@ -205,7 +209,7 @@ async function run() {
     tags: ['typescript', 'bug-fix', 'build'],
   });
 
-  const socketFix = await store({
+  await store({
     type: 'episodic',
     content: 'Fixed Socket.io initialization bug: new SocketIOServer({ namespace: "/neural" }) is invalid. Correct pattern is io.of("/neural") to create a named namespace after server creation.',
     source: 'claude-code', importance: 0.75,

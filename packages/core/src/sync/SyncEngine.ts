@@ -126,7 +126,7 @@ export class SyncEngine {
   };
 
   constructor(config: SyncConfig) {
-    this.config = config;
+    this.config = { ...config, mode: config.mode ?? 'auto' };
     this.syncUrl = config.syncUrl;
     this.syncId = computeSyncId(config.syncUrl);
     this.deviceId = getDeviceId();
@@ -278,6 +278,7 @@ export class SyncEngine {
         lastSyncAt: new Date().toISOString(),
         lastError: null,
       });
+      this.currentPhase = null;
       this.config.onSyncStatus?.(this.status());
       return result;
     } catch (err) {
@@ -285,8 +286,6 @@ export class SyncEngine {
       this.handleSyncError(err);
       this.config.onSyncStatus?.(this.status());
       throw err;
-    } finally {
-      this.currentPhase = null;
     }
   }
 
@@ -443,14 +442,35 @@ export class SyncEngine {
       startCursor,
       LOCAL_BATCH_SIZE
     );
+    // Older clients checkpointed skipped pair collisions. Revisit those edges
+    // once per target, even when both ordinary cursors have moved past them.
+    const pairsKey = `sync_connection_pairs:${this.syncId}`;
+    const pairScan = this.db.select({ value: schema.localMeta.value }).from(schema.localMeta)
+      .where(eq(schema.localMeta.key, pairsKey)).get();
+    let appliedEdge = false;
     const connections = await drainPushBatches(
       (c) => selectConnectionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
-      (rows) => client.pushConnections(encryptConnectionsForPush(this.encryptionManager, rows)),
+      (rows) => client.pushConnections(encryptConnectionsForPush(this.encryptionManager, rows), async (row) => {
+        const stored = await client.getConnectionByPair(row);
+        const metadata = this.encryptionManager?.decryptConnection(stored).metadata ?? stored.metadata;
+        const { applied, pendingPush } = applyPulledConnection(this.db, { ...stored, metadata }, this.syncId);
+        appliedEdge ||= applied;
+        return pendingPush ? client.pushConnections(encryptConnectionsForPush(this.encryptionManager, [pendingPush])) : 0;
+      }),
       (row) => row.updatedAt,
       (row) => row.id,
-      startCursor,
+      pairScan?.value === 'done' ? startCursor : null,
       LOCAL_BATCH_SIZE
     );
+    if (pairScan?.value !== 'done') {
+      // A concurrent pull can rekey another edge while this scan is in flight.
+      // Acknowledge only the scan we started, so that edge stays eligible.
+      this.db.insert(schema.localMeta).values({ key: pairsKey, value: 'done' }).onConflictDoUpdate({
+        target: schema.localMeta.key, set: { value: 'done' },
+        setWhere: eq(schema.localMeta.value, pairScan?.value ?? 'done'),
+      }).run();
+    }
+    if (appliedEdge) await this.config.onIndexRebuildNeeded?.();
     const sessions = await drainPushBatches(
       (c) => selectSessionsBatch(this.db, c, LOCAL_BATCH_SIZE, this.deviceId, overlapMs),
       (rows) => client.pushSessions(encryptSessionsForPush(this.encryptionManager, rows)),
@@ -522,7 +542,7 @@ export class SyncEngine {
       (ts, id) => client.pullConnections(ts, id, this.deviceId).then((b) =>
         decryptPulledConnections(manager, { ...b, rows: b.connections })),
       (row) => shouldApply(row.deviceId),
-      (row) => applyPulledConnection(this.db, row),
+      (row) => applyPulledConnection(this.db, row, this.syncId),
       baseCursor
     );
     const sessions = await drainPullBatches<PgSession>(

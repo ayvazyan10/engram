@@ -29,6 +29,8 @@ import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js
 import type { Memory, MemoryConnection, Session } from '../db/schema.js';
 import { embed, getEmbeddingModelId, memoryEmbeddingText, packFP16 } from '../embedding/Embedder.js';
 import { EncryptionManager } from './encryption.js';
+import { resolveConnectionConflict } from './conflict.js';
+import { isEncrypted } from './crypto.js';
 
 const DEFAULT_BATCH_SIZE = 500;
 
@@ -467,8 +469,21 @@ export class PgSyncClient {
     return result.rowCount ?? 0;
   }
 
-  /** Push local `memory_connections` rows with an LWW upsert. Returns the count actually applied. */
-  async pushConnections(rows: MemoryConnection[]): Promise<number> {
+  /** Read the persisted edge after a uniqueness conflict, independent of pull cursors and device filters. */
+  async getConnectionByPair(row: MemoryConnection): Promise<PgMemoryConnection> {
+    const { sourceId, targetId, relationship } = pgMemoryConnections;
+    const [stored] = await this.db.select().from(pgMemoryConnections).where(and(
+      eq(sourceId, row.sourceId), eq(targetId, row.targetId), eq(relationship, row.relationship)
+    )).limit(1);
+    if (this.requireUnencrypted) await this.assertUnencrypted();
+    if (!stored) throw new Error(`Connection pair changed during sync of ${row.id}. Retry sync.`);
+    return stored;
+  }
+
+  /** Push connections with LWW. The sync engine also reconciles pair collisions with SQLite. */
+  async pushConnections(
+    rows: MemoryConnection[], onPairConflict?: (row: MemoryConnection) => Promise<number>
+  ): Promise<number> {
     if (rows.length === 0) return 0;
 
     const valueRows = rows.map((c) => [
@@ -488,11 +503,18 @@ export class PgSyncClient {
       if (typeof error !== 'object' || error === null
         || !('code' in error) || error.code !== '23505'
         || !('constraint' in error) || error.constraint !== 'idx_pg_connections_unique_pair') throw error;
-      // The failed statement is atomic. Retry its rows separately so only the
-      // duplicate pair is skipped and id-based updates retain LWW semantics.
-      if (rows.length === 1) return 0;
+      // The batch rolled back atomically. Isolate the colliding pair.
+      if (rows.length === 1) {
+        const row = rows[0]!;
+        if (onPairConflict) return onPairConflict(row);
+        const stored = await this.getConnectionByPair(row);
+        const result = resolveConnectionConflict(row, stored);
+        if (result.winner === 'remote' || result.reason === 'lww:tie') return 0;
+        if (isEncrypted(row.metadata)) throw new Error('Encrypted connection metadata must be rebound to the persisted edge ID.');
+        return this.pushConnections([{ ...row, id: stored.id }]);
+      }
       let applied = 0;
-      for (const row of rows) applied += await this.pushConnections([row]);
+      for (const row of rows) applied += await this.pushConnections([row], onPairConflict);
       return applied;
     }
   }

@@ -261,7 +261,7 @@ for (const before of sampleBefore) {
   for (const field of fields) {
     if (before[field] !== after[field]) {
       sampleMismatches++;
-      console.log(`[FAIL]   row ${before.id}.${field} changed: ${JSON.stringify(before[field])} -> ${JSON.stringify(after[field])}`);
+      console.log(`[FAIL]   row ${before.id}.${field} changed`);
     }
   }
   if (hashBlob(before.embedding) !== hashBlob(after.embedding)) {
