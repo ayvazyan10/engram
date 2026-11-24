@@ -3,7 +3,7 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { isMainThread, parentPort, Worker } from 'node:worker_threads';
-import type { SearchHit } from '@engram-ai-memory/core';
+import type { Memory } from '@engram-ai-memory/core';
 import type { NamespaceEnv } from './namespaceEnv.ts';
 import type * as NamespaceModule from './namespaceEnv.ts';
 import type * as StoreModule from './store-session.ts';
@@ -19,11 +19,11 @@ export function buildRecallQuery(cwd: string, branch = ''): string {
   return [path.basename(path.resolve(cwd)), branch.trim()].filter(Boolean).join(' ');
 }
 
-function sessionLines(hits: SearchHit[], source: string, threshold: number): string {
+type SessionMemory = Pick<Memory, 'id' | 'content' | 'summary' | 'type' | 'tags' | 'source' | 'importance' | 'createdAt'>;
+
+function sessionLines(hits: SessionMemory[], source: string): string {
   const transcript = /^\s*(?:user\s*:|assistant\s*:|claude code session [^:\n]+:|session summary\s*:)/im;
   const candidates = hits.flatMap((hit) => {
-    // Hybrid search can return keyword hits below the requested cosine threshold.
-    if (!(hit.score >= threshold)) return [];
     const tags: string[] = JSON.parse(hit.tags);
     if (tags.includes('import:markdown') && tags.some((tag) => tag.toLowerCase() === 'memory.md')) return [];
     // Raw transcripts are noise whatever their type (consolidation stores them as semantic).
@@ -38,7 +38,8 @@ function sessionLines(hits: SearchHit[], source: string, threshold: number): str
     return [{ hit, text, pinned, handover }];
   });
   candidates.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Number(b.handover) - Number(a.handover)
-    || b.hit.importance - a.hit.importance || b.hit.score - a.hit.score);
+    || b.hit.importance - a.hit.importance || b.hit.createdAt.localeCompare(a.hit.createdAt)
+    || a.hit.id.localeCompare(b.hit.id));
 
   const lines: string[] = [];
   const seen = new Set<string>();
@@ -46,7 +47,7 @@ function sessionLines(hits: SearchHit[], source: string, threshold: number): str
     if (seen.has(text)) continue;
     seen.add(text);
     const origin = (hit.source || 'unknown').replace(/[\r\n]+/g, ' ');
-    lines.push(`[${hit.id.slice(0, 8)} · ${hit.createdAt.slice(0, 10)} · sim ${hit.score.toFixed(2)} · ${origin}] ${text.slice(0, 800)}`);
+    lines.push(`[${hit.id.slice(0, 8)} · ${hit.createdAt.slice(0, 10)} · ${origin}] ${text.slice(0, 800)}`);
     if (lines.length === 3) break;
   }
   return lines.join('\n');
@@ -56,22 +57,18 @@ async function recallContext(cwd: string, env: NamespaceEnv): Promise<string> {
   const { resolveNamespaceSettings }: typeof NamespaceModule = await import(namespaceModulePath);
   const { namespaceMode, namespace } = resolveNamespaceSettings(env, cwd);
   if (!namespace || namespaceMode === 'none') return '';
-  const { NeuralBrain, resolveDbPath, readEnvNumber } = await import('@engram-ai-memory/core');
-  const threshold = readEnvNumber(env, 'ENGRAM_RECALL_MIN_SIM', { min: 0, max: 1, integer: false }) ?? 0.5;
+  const { getDb, closeDb, resolveDbPath } = await import('@engram-ai-memory/core');
   const dbPath = resolveDbPath(env['ENGRAM_DB_PATH']);
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const source = env['ENGRAM_SOURCE'] || 'mcp-client';
-  const brain = new NeuralBrain({
-    dbPath, defaultSource: source, namespaceMode, namespace,
-  });
   try {
-    await brain.initialize();
-    const hits = await brain.search(`${buildRecallQuery(namespace)} project handover, current decisions and next steps`, {
-      namespace, threshold, topK: 50,
+    const memories = await getDb(dbPath).query.memories.findMany({
+      columns: { id: true, content: true, summary: true, type: true, tags: true, source: true, importance: true, createdAt: true },
+      where: (m, { sql }) => sql`${m.namespace} = ${namespace} AND ${m.archivedAt} IS NULL`,
     });
-    return sessionLines(hits, source, threshold);
+    return sessionLines(memories, source);
   } finally {
-    brain.shutdown();
+    closeDb();
   }
 }
 

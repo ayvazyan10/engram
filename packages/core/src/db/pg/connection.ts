@@ -23,8 +23,6 @@ export interface PgSyncConnection {
   close(): Promise<void>;
 }
 
-const SSL_MODE_PATTERN = /[?&]sslmode=/i;
-
 /**
  * Redacts the password portion of a Postgres connection string so it is
  * safe to include in logs and error messages. Falls back to a generic
@@ -37,6 +35,7 @@ export function redactSyncUrl(url: string): string {
     if (parsed.password) {
       parsed.password = '***';
     }
+    if (parsed.searchParams.has('password')) parsed.searchParams.set('password', '***');
     return parsed.toString();
   } catch {
     return '<unparseable-connection-string>';
@@ -77,7 +76,7 @@ export function validateSyncUrl(url: string): void {
     return;
   }
 
-  if (parsed.searchParams.get('sslmode') !== 'require') {
+  if (parsed.searchParams.getAll('sslmode').at(-1) !== 'require') {
     throw new Error(
       [
         'ENGRAM_SYNC_URL must require TLS (add "?sslmode=require") — cloud sync sends memory',
@@ -96,14 +95,13 @@ export function validateSyncUrl(url: string): void {
  * sslmode" case from failing validation outright.
  */
 function withDefaultSslMode(url: string): string {
-  if (!url || process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] === 'true') {
+  if (process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] === 'true' || !URL.canParse(url)) {
     return url;
   }
-  if (SSL_MODE_PATTERN.test(url)) {
-    return url;
-  }
-  const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}sslmode=require`;
+  const parsed = new URL(url);
+  if (parsed.searchParams.has('sslmode')) return url;
+  parsed.searchParams.set('sslmode', 'require');
+  return parsed.toString();
 }
 
 /**

@@ -131,13 +131,13 @@ describe('lib/api request helper (F2)', () => {
       expect(useAuthStore.getState().locked).toBe(false);
     });
 
-    it('clears a stale lock on a successful response', async () => {
+    it('keeps a stale lock on a successful public health response', async () => {
       useAuthStore.setState({ locked: true, hadKey: true });
       vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(200, { status: 'ok', uptime: 1 }));
 
       await api.health();
 
-      expect(useAuthStore.getState().locked).toBe(false);
+      expect(useAuthStore.getState().locked).toBe(true);
     });
   });
 });

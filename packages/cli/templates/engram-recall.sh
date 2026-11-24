@@ -8,9 +8,10 @@
 # Fail-open: any error (server down, slow, bad JSON) injects nothing and never
 # blocks the prompt. Relevance-gated so unrelated prompts stay clean.
 #
-# Tunables: ENGRAM_API, ENGRAM_RECALL_MIN_SIM, ENGRAM_SOURCE.
+# Tunables: ENGRAM_API, ENGRAM_API_KEY, ENGRAM_RECALL_MIN_SIM, ENGRAM_SOURCE.
 
-ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
+DEFAULT_API='__API_BASE__'
+ENGRAM_API="${ENGRAM_API:-$DEFAULT_API}"
 MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.5}"
 SOURCE="${ENGRAM_SOURCE:-claude-code}"
 NAMESPACE_MODE=__NAMESPACE_MODE__
@@ -58,9 +59,11 @@ PROMPT=$(printf '%s' "$INPUT" | jq -er '.prompt | if type == "string" then . els
 case "$PROMPT" in /*|!*) exit 0 ;; esac
 # Messages from other sessions, subagents and background tasks are not the
 # user's prompt; their wrapper (sender names, paths) skews similarity too.
-# The host may put a line of its own before the tag, so look at the head.
-WRAPPER='<(cross-session-message|agent-message|task-notification)[[:space:]>]'
-[[ "${PROMPT:0:300}" =~ $WRAPPER ]] && exit 0
+# The host may put a preamble line before the opening tag on its own line.
+WRAPPER='<(cross-session-message|agent-message|task-notification)([[:blank:]][^>]*)?>'
+[[ "$PROMPT" =~ ^[[:space:]]*$WRAPPER ]] && exit 0
+AFTER_PREAMBLE="${PROMPT#*$'\n'}"
+[[ "${AFTER_PREAMBLE%%$'\n'*}" =~ ^[[:space:]]*$WRAPPER[[:space:]]*$ ]] && exit 0
 
 # Search returns the stored tags and raw cosine score. Recall drops the tags.
 BODY=$(jq -cn --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE" --argjson min "$MIN_SIM" '
@@ -69,13 +72,13 @@ BODY=$(jq -cn --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE"
   + if $ns != "" then {namespace:$ns} elif $mode == "none" then {}
     elif $mode == "isolated" then error("missing namespace") else {global:true} end') || exit 0
 RES=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/search" \
-  -H "Content-Type: application/json" -d "$BODY") || exit 0
+  -H "Content-Type: application/json" -H @- -d "$BODY" <<<"${ENGRAM_API_KEY:+Authorization: Bearer $ENGRAM_API_KEY}") || exit 0
 [ -z "$RES" ] && exit 0
 if [ -n "$PROJECT" ] && [ "$NAMESPACE_MODE" != isolated ]; then
   # Shared knowledge can apply across projects. Episodes belong to their project.
   BODY=$(jq -c 'del(.namespace) + {global:true, types:["semantic","procedural"]}' <<<"$BODY") || exit 0
   GLOBAL=$(curl -fsS --max-time 3 -X POST "${ENGRAM_API}/api/search" \
-    -H "Content-Type: application/json" -d "$BODY") || exit 0
+    -H "Content-Type: application/json" -H @- -d "$BODY" <<<"${ENGRAM_API_KEY:+Authorization: Bearer $ENGRAM_API_KEY}") || exit 0
   RES=$(printf '%s\n%s\n' "$RES" "$GLOBAL" | jq -esc '
     if length != 2 then error("missing search response") else . end
     | map(.results | if type == "array" then . else error("invalid results") end) | {results:add}

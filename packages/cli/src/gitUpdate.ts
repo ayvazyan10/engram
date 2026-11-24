@@ -53,16 +53,15 @@ export function gitIn(cwd: string): GitRunner {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return {
-      status: r.status ?? 1,
+      status: r.error ? 1 : (r.status ?? 1),
       stdout: r.stdout ?? '',
-      stderr: r.stderr ?? (r.error ? r.error.message : ''),
+      stderr: r.stderr || r.error?.message || '',
     };
   };
 }
 
 /**
- * Tracked files our own install step rewrites. Local modifications to these are
- * build residue, not user work, so the updater may discard them silently.
+ * Tracked files our install step can rewrite. They can also hold user edits.
  */
 export const REGENERATED_FILES: readonly string[] = [
   'pnpm-lock.yaml',
@@ -99,18 +98,17 @@ export function parseStatus(out: string): StatusEntry[] {
 
 export interface WorkingTree {
   clean: boolean;
-  /** Modified tracked files the CLI itself regenerates — safe to discard. */
+  /** Modified tracked files the install step can regenerate. */
   regenerated: string[];
   /** Modified tracked files that represent real user changes. */
   modified: string[];
   untracked: string[];
 }
 
-/** Snapshot the working tree. An unreadable repo reads as clean — the pull that
- * follows will surface the real error rather than a misleading dirty-tree one. */
+/** Snapshot the working tree before deciding whether local edits need a stash. */
 export function inspectWorkingTree(git: GitRunner): WorkingTree {
   const res = git(['status', '--porcelain', '-z', '--untracked-files=all']);
-  if (res.status !== 0) return { clean: true, regenerated: [], modified: [], untracked: [] };
+  if (res.status !== 0) throw new Error(`Could not inspect the working tree: ${gitErrorSummary(res.stderr)}`);
 
   const regenerated: string[] = [];
   const modified: string[] = [];
@@ -257,10 +255,8 @@ function stamp(): string {
 /**
  * Bring the Engram checkout up to the latest upstream commit.
  *
- * `pnpm install` rewrites pnpm-lock.yaml on every setup and update, so the
- * checkout is routinely dirty through no fault of the user — those files are
- * restored before the fast-forward instead of aborting it. Anything else that
- * blocks the update is reported by name rather than as a bare "pull failed".
+ * Try the fast-forward with local edits in place. Git names the paths that
+ * would be overwritten, including lockfiles.
  *
  * With `force`, local work is set aside first — always stashed (untracked files
  * included, since `git reset --hard` would overwrite those without a trace) and,
@@ -295,12 +291,6 @@ export function syncRepo(
   if (behind && behind !== '0') log.step(`${behind} new commit(s) available`);
 
   log.step('Pulling latest changes...');
-
-  // Lockfile churn from our own `pnpm install` — build residue, not user work.
-  const tree = inspectWorkingTree(git);
-  if (tree.regenerated.length > 0 && restoreFiles(git, tree.regenerated)) {
-    log.step(`Reset locally regenerated ${tree.regenerated.join(', ')}`);
-  }
 
   let result = fastForward(git);
   if (result.ok) return { status: 'updated' };

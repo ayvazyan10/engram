@@ -86,9 +86,9 @@ describe('inspectWorkingTree', () => {
     expect(tree.untracked).toEqual(['pnpm-lock.yaml']);
   });
 
-  it('treats a failed status call as a clean tree', () => {
+  it('reports a failed status call', () => {
     const git = fakeGit({ status: { status: 128, stderr: 'not a git repository' } });
-    expect(inspectWorkingTree(git).clean).toBe(true);
+    expect(() => inspectWorkingTree(git)).toThrow(/could not inspect the working tree/i);
   });
 });
 
@@ -372,10 +372,10 @@ describe('syncRepo (real git)', () => {
     expect(syncRepo(clone)).toEqual({ status: 'up-to-date' });
   });
 
-  it('recovers on its own from lockfile churn left by pnpm install', () => {
+  it('preserves a locally edited lockfile when it blocks the update', () => {
     fs.writeFileSync(path.join(clone, 'pnpm-lock.yaml'), 'rewritten by pnpm\n');
-    expect(syncRepo(clone).status).toBe('updated');
-    expect(fs.readFileSync(path.join(clone, 'pnpm-lock.yaml'), 'utf8')).toBe('lock v2\n');
+    expect(syncRepo(clone)).toMatchObject({ status: 'blocked', blocked: ['pnpm-lock.yaml'] });
+    expect(fs.readFileSync(path.join(clone, 'pnpm-lock.yaml'), 'utf8')).toBe('rewritten by pnpm\n');
   });
 
   it('blocks — naming the files — when untracked files clash, without --force', () => {

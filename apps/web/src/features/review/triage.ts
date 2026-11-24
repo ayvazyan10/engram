@@ -65,16 +65,21 @@ export async function settle(queue: ReviewQueue, item: ReviewItem, action: Actio
     }
     case 'redact': {
       const { redacted } = await api.redactMemory(id);
-      // No text comes back: the list's copy is replaced by the redacted row,
-      // so the old text is not shown again. Failing that, it is until a reload.
-      api
-        .getGraph(id)
-        .then((g) => {
-          const fresh = asMemoryRecord(g.node);
-          if (fresh) useMemoryStore.getState().updateRecord(fresh);
-        })
-        .catch(() => {});
-      return { message: `Redacted ${redacted} ${redacted === 1 ? 'value' : 'values'}. The memory stays.` };
+      const { records, searchResults, weakerResults, updateRecord } = useMemoryStore.getState();
+      const cached = records.find((r) => r.id === id)
+        ?? searchResults.find((r) => r.id === id)
+        ?? weakerResults.find((r) => r.id === id);
+      if (cached) updateRecord({ ...cached, content: '[REDACTED]', concept: null, summary: null });
+
+      const message = `Redacted ${redacted} ${redacted === 1 ? 'value' : 'values'}.`;
+      try {
+        const fresh = asMemoryRecord((await api.getGraph(id)).node);
+        if (fresh?.id !== id) throw new Error('Invalid memory response');
+        updateRecord(fresh);
+        return { message: `${message} The memory stays.` };
+      } catch {
+        return { message: `${message} Could not reload the redacted memory.` };
+      }
     }
     case 'archive':
       return { archiveIds: [id], message: 'Archived.' };
@@ -112,17 +117,27 @@ export async function settleMany(
   tag = ''
 ): Promise<Settlement & { removed: string[] }> {
   const unit = items[0]?.kind === 'pair' ? ['pair', 'pairs'] : ['memory', 'memories'];
-  if (action === 'tag') {
-    const ids = memoryIds(items);
-    await api.bulkTag(ids, tag);
-    tagLoaded(ids, tag);
-    return { removed: [], message: `Tagged ${plural(ids.length, 'memory', 'memories')} “${tag}”.` };
-  }
-  if (action === 'pin') {
-    const ids = memoryIds(items);
-    await api.bulkTag(ids, PIN_TAG);
-    tagLoaded(ids, PIN_TAG);
-    return { removed: items.map(keyOf), message: `Pinned ${plural(items.length, 'memory', 'memories')}.` };
+  if (action === 'tag' || action === 'pin') {
+    const ids = [...new Set(memoryIds(items))];
+    const appliedTag = action === 'pin' ? PIN_TAG : tag;
+    const tagged = new Set<string>();
+    let failure = '';
+    for (let i = 0; i < ids.length; i += 1000) {
+      const chunk = ids.slice(i, i + 1000);
+      try {
+        await api.bulkTag(chunk, appliedTag);
+      } catch (err) {
+        if (!tagged.size) throw err;
+        failure = ` ${ids.length - tagged.size} could not be changed: ${err instanceof Error ? err.message : 'Could not reach Engram'}`;
+        break;
+      }
+      tagLoaded(chunk, appliedTag);
+      for (const id of chunk) tagged.add(id);
+    }
+    const count = plural(tagged.size, 'memory', 'memories');
+    if (action === 'tag') return { removed: [], message: `Tagged ${count} “${tag}”.${failure}` };
+    const removed = items.filter((item) => memoryIds([item]).every((id) => tagged.has(id))).map(keyOf);
+    return { removed, message: `Pinned ${count}.${failure}` };
   }
   if (action === 'archive') {
     const pairs = items.filter((i): i is ReviewPair => i.kind === 'pair');

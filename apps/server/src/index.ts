@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import {
-  NeuralBrain, SyncEngine, redactSyncUrl,
+  NeuralBrain, SyncEngine, redactSyncUrl, resolveDbPath,
   readEnvString, readEnvNumber, readEnvNumberOr, readEnvEnum, requireConfiguredEnv,
 } from '@engram-ai-memory/core';
 import type { NamespaceMode } from '@engram-ai-memory/core';
@@ -56,6 +56,7 @@ import { mcpRoutes } from './routes/mcp.js';
  */
 const PORT = readEnvNumber(process.env, 'PORT', { min: 0, max: 65535 }) ?? 4901;
 const HOST = readEnvString(process.env, 'HOST') ?? '127.0.0.1';
+const URL_AUTHORITY = `${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`;
 
 /**
  * Browser origins allowed to call the API.
@@ -173,8 +174,9 @@ const SYNC_ENCRYPTION_KEY = requireConfiguredEnv(
 );
 
 // Shared brain instance (initialized once)
+const dbPath = readEnvString(process.env, 'ENGRAM_DB_PATH');
 export const brain = new NeuralBrain({
-  dbPath: readEnvString(process.env, 'ENGRAM_DB_PATH'),
+  dbPath: dbPath && resolveDbPath(dbPath),
   defaultSource: 'rest-api',
   namespaceMode,
   namespace: NAMESPACE,
@@ -454,7 +456,7 @@ export async function buildApp(): Promise<ReturnType<typeof Fastify>> {
       }
     });
 
-    console.info(`Dashboard: http://${HOST}:${PORT}`);
+    console.info(`Dashboard: http://${URL_AUTHORITY}`);
   }
 
   return app;
@@ -497,13 +499,13 @@ async function start() {
 
   // Start Fastify — it creates and owns the HTTP server
   await app.listen({ port: PORT, host: HOST });
-  console.info(`Engram running at http://${HOST}:${PORT}`);
-  console.info(`  API:       http://${HOST}:${PORT}/api`);
-  console.info(`  Swagger:   http://${HOST}:${PORT}/docs`);
+  console.info(`Engram running at http://${URL_AUTHORITY}`);
+  console.info(`  API:       http://${URL_AUTHORITY}/api`);
+  console.info(`  Swagger:   http://${URL_AUTHORITY}/docs`);
 
   // Attach Socket.io to Fastify's underlying HTTP server
   setupRealtime(app.server);
-  console.info(`WebSocket: ws://${HOST}:${PORT}/neural`);
+  console.info(`WebSocket: ws://${URL_AUTHORITY}/neural`);
 }
 
 // Graceful shutdown

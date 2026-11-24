@@ -69,10 +69,10 @@ export default function SearchBar({ onCommands }: { onCommands: () => void }) {
         if (id !== latest.current) return;
         // Committed together, and only on success, so a failed search never
         // relabels the last good results with its own words.
-        useMemoryStore.setState({ searchScope: scope });
-        setSearchQuery(query);
-        setSearchResults(strong, weaker);
-        setHighlightedIds(new Set([...strong, ...weaker].map((r) => r.id)));
+        useMemoryStore.setState({
+          searchScope: scope, searchQuery: query, searchResults: strong, weakerResults: weaker,
+          highlightedIds: new Set([...strong, ...weaker].map((r) => r.id)),
+        });
       } catch (err) {
         if (id !== latest.current) return;
         setError(
@@ -87,7 +87,7 @@ export default function SearchBar({ onCommands }: { onCommands: () => void }) {
         }
       }
     },
-    [setSearchQuery, setSearchResults, setSearching, setHighlightedIds]
+    [setSearching]
   );
 
   const clear = useCallback(() => {
@@ -126,7 +126,15 @@ export default function SearchBar({ onCommands }: { onCommands: () => void }) {
     if (query) void run(query);
   }, [projectFilter, run]);
 
-  useEffect(() => clearPause, []);
+  useEffect(() => () => {
+    clearPause();
+    ++latest.current;
+    if (asked.current !== null) {
+      asked.current = null;
+      setSearching(false);
+    }
+    scopeRef.current = useMemoryStore.getState().searchScope;
+  }, [setSearching]);
 
   return (
     <div className="mp-field" role="search">

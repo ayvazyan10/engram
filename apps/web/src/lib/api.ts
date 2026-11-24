@@ -43,48 +43,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  let res: Response;
+  let res: Response | undefined;
+  let body: unknown;
   try {
     res = await fetch(`${BASE}${path}`, { ...init, headers, signal: controller.signal });
+    if (res.status === 401) {
+      useAuthStore.getState().lock(Boolean(apiKey));
+    } else if (res.ok && path !== '/health') {
+      useAuthStore.getState().unlock();
+    }
+    if (res.status === 204) return undefined as T;
+
+    body = await res.json();
   } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') {
+    if (controller.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
       throw new ApiError(0, `Request timed out after ${REQUEST_TIMEOUT_MS}ms: ${path}`);
+    }
+    if (res) {
+      throw new ApiError(res.status, res.ok ? `Invalid JSON response: ${path}` : `API ${res.status}: ${path}`);
     }
     const message = err instanceof Error ? err.message : 'Network error';
     throw new ApiError(0, `${message}: ${path}`);
   } finally {
     clearTimeout(timeoutId);
   }
-
-  if (!res.ok) {
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      // No JSON body (or not valid JSON) — fall back to the generic message below.
-    }
-    // A 401 means the key is missing or wrong — surface the unlock gate
-    // (F2) instead of leaving every view to interpret this on its own.
-    // `hadKey` is what a stored-but-wrong key looks like vs never having
-    // entered one, and drives the gate's "enter a key" vs "wrong key" copy.
-    if (res.status === 401) {
-      useAuthStore.getState().lock(Boolean(apiKey));
-    }
-    const message = errorMessageFromBody(body) ?? `API ${res.status}: ${path}`;
-    throw new ApiError(res.status, message, body);
-  }
-
-  // A genuine 2xx proves whatever key is in play (or no key, if none is
-  // required) works — clear a stale gate if one was showing.
-  useAuthStore.getState().unlock();
-
-  if (res.status === 204) return undefined as T;
-
-  try {
-    return (await res.json()) as T;
-  } catch {
-    throw new ApiError(res.status, `Invalid JSON response: ${path}`);
-  }
+  if (!res.ok) throw new ApiError(res.status, errorMessageFromBody(body) ?? `API ${res.status}: ${path}`, body);
+  return body as T;
 }
 
 /** One memory on the map, as `GET /api/map` places it. `x` and `y` lie in
@@ -278,7 +262,14 @@ export const api = {
     tags?: string[];
     importance?: number;
     concept?: string;
-  }) => request<{ memory: { id: string; type: string; content: string; importance: number; source: string | null; concept: string | null; tags: string; createdAt: string; summary: string | null } }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
+  }) => request<{
+    memory: {
+      id: string; type: string; content: string; importance: number; source: string | null;
+      concept: string | null; tags: string; createdAt: string; summary: string | null;
+      namespace?: string | null; archivedAt?: string | null;
+    };
+    discarded?: boolean;
+  }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
 
   /** `keepalive` lets the call outlive the page: a deferred archive still
    *  waiting out its undo window is sent this way when the tab closes. */
@@ -443,7 +434,7 @@ export const api = {
 
   // Inline edit
   updateMemory: (id: string, body: { content?: string; importance?: number; tags?: string[]; concept?: string }) =>
-    request<{ id: string; content: string; importance: number; tags: string; concept: string | null; updatedAt: string }>(
+    request<{ id: string; content: string; importance: number; tags: string; concept: string | null; summary?: string | null; updatedAt: string }>(
       `/memory/${id}`,
       { method: 'PATCH', body: JSON.stringify(body) }
     ),

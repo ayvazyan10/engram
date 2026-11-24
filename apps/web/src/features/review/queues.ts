@@ -52,7 +52,7 @@ interface ReviewState {
    *  `retry` asks for it again. */
   loadQueue: (queue: ReviewQueue, scope: ProjectFilter, options?: { more?: boolean; retry?: boolean }) => Promise<void>;
   /** Takes settled items out of a queue and its count; returns their Undo. */
-  remove: (queue: ReviewQueue, keys: string[]) => () => void;
+  remove: (queue: ReviewQueue, keys: string[]) => (archived?: ReadonlySet<string>) => void;
 }
 
 function messageOf(err: unknown): string {
@@ -141,7 +141,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
         summary: summary ? { ...summary, [queue]: Math.max(0, summary[queue] - removed) } : summary,
         cleared: s.cleared + removed,
       }));
-      return () => {
+      return (archived) => {
         if (get().scope !== scope) return;
         set((s) => {
           const current = s.queues[queue];
@@ -149,6 +149,7 @@ export const useReviewStore = create<ReviewState>((set, get) => {
           const restored = [...current.items];
           let count = 0;
           state.items.forEach((item, index) => {
+            if (item.kind === 'pair' ? archived?.has(item.a.id) || archived?.has(item.b.id) : archived?.has(item.memory.id)) return;
             if (drop.has(itemKey(item)) && !restored.some((other) => itemKey(other) === itemKey(item))) {
               restored.splice(index, 0, item);
               count++;

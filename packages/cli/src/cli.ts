@@ -9,13 +9,14 @@
  * Data:       engram store | search | recall | stats | forget | export | import
  */
 
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import { fileURLToPath } from 'node:url';
 import { execSync, spawn, spawnSync } from 'child_process';
-import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, connectHost, staleServerPids } from './serverControl.js';
-import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, configObject, readJson, claudeHookCommands } from './claudeSetup.js';
+import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, serverUrl, staleServerPids } from './serverControl.js';
+import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, atomicWriteConfig, configObject, readJson, claudeHookCommands } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
 import {
@@ -28,8 +29,8 @@ import {
   mcpServerConfig,
 } from './mcpClients.js';
 import {
-  shortHead, checkPrerequisites, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
-  CLAUDE_PATHS, hasMcpClientConfig,
+  shortHead, checkPrerequisites, requireEngramWorkspace, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
+  CLAUDE_PATHS, hasMcpClientConfig, claudePluginEnabled, restHookDependencyIssue,
 } from './setupSteps.js';
 import {
   choosePassphraseSource, passphraseWarning, readHiddenLine, encryptionInstructions, PASSPHRASE_ENV,
@@ -70,13 +71,14 @@ let configProblemsReported = false;
  * Anything the file cannot justify falls back to the default AND is reported —
  * on stderr, so `engram export` and `--json` output stay machine-readable.
  */
-function loadConfig(): EngramConfig {
-  if (!fs.existsSync(CONFIG_PATH)) return DEFAULT_CONFIG;
-
+function loadConfig(forWrite = false): EngramConfig {
   let stored: unknown;
   try {
     stored = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    if (forWrite) configObject(stored, CONFIG_PATH);
   } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...DEFAULT_CONFIG };
+    if (forWrite) throw new Error(`Cannot update ${CONFIG_PATH}. Check that it contains a readable JSON object.`);
     if (!configProblemsReported) {
       configProblemsReported = true;
       console.error(`  ! ${CONFIG_PATH} is not valid JSON (${err instanceof Error ? err.message : String(err)}) — using defaults`);
@@ -94,32 +96,42 @@ function loadConfig(): EngramConfig {
 
 function saveConfig(config: EngramConfig): void {
   fs.mkdirSync(ENGRAM_HOME, { recursive: true });
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
-  // Cloud sync stores a Postgres connection string (with password) in this
-  // file — it must never be world- or group-readable.
-  fs.chmodSync(CONFIG_PATH, 0o600);
+  atomicWriteConfig(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 0o600);
 }
 
-function getApiBase(): string {
-  const config = loadConfig();
-  const host = connectHost(config.host);
-  return `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
+function getApiBase(config = loadConfig()): string {
+  return serverUrl(config.host, config.port);
+}
+
+function disablesSyncTls(url?: string): boolean {
+  // node-postgres uses the last value of a repeated connection parameter.
+  return !!url && URL.canParse(url) && new URL(url).searchParams.getAll('sslmode').at(-1) === 'disable';
 }
 
 /** Delete the pidfile only when it still contains the given pid. */
-function releasePidFileIfOwnedBy(pid: number | undefined): void {
+function releasePidFileIfOwnedBy(pid: number | string | undefined): void {
   if (pid === undefined) return;
   try {
-    const current = parseInt(fs.readFileSync(PID_PATH, 'utf8').trim(), 10);
-    if (current === pid) fs.unlinkSync(PID_PATH);
+    const current = fs.readFileSync(PID_PATH, 'utf8').trim();
+    if (current === String(pid)) fs.unlinkSync(PID_PATH);
   } catch { /* no pidfile, or already replaced */ }
 }
 
-function isServerRunning(): { running: boolean; pid?: number } {
-  if (!fs.existsSync(PID_PATH)) return { running: false };
-  const pid = parseInt(fs.readFileSync(PID_PATH, 'utf8').trim(), 10);
-  if (pidAlive(pid)) return { running: true, pid };
-  try { fs.unlinkSync(PID_PATH); } catch {}
+function isServerRunning(config: EngramConfig): { running: boolean; pid?: number } {
+  let recorded: string;
+  try {
+    recorded = fs.readFileSync(PID_PATH, 'utf8').trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { running: false };
+    throw err;
+  }
+  const pid = Number(recorded);
+  const script = path.join(config.repoPath, 'apps', 'server', 'dist', 'index.js');
+  const server = verifyServer(pid, config.port, script);
+  if (server.state === 'running') return { running: true, pid };
+  if (server.state === 'unknown') throw new Error(`Cannot verify PID ${pid} or determine who owns port :${config.port}.`);
+  if (server.state === 'port_mismatch') throw new Error(`PID ${server.ownerPid} owns port :${config.port}. Check the configured port for PID ${pid}.`);
+  releasePidFileIfOwnedBy(recorded);
   return { running: false };
 }
 
@@ -127,10 +139,14 @@ function isServerRunning(): { running: boolean; pid?: number } {
 
 async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const base = getApiBase();
+  const key = process.env['ENGRAM_API_KEY'];
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    headers: {
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
   if (res.status === 204) return undefined as T;
@@ -187,7 +203,7 @@ program
     fs.mkdirSync(path.join(ENGRAM_HOME, 'logs'), { recursive: true });
     ok(`State directory: ${ENGRAM_HOME}`);
 
-    const config = loadConfig();
+    const config = loadConfig(true);
     if (!fs.existsSync(CONFIG_PATH)) {
       saveConfig(config);
       ok('Config created: ~/.engram/config.json');
@@ -198,6 +214,7 @@ program
     if (!opts.npx) {
       step(`Cloning Engram into ${config.repoPath}...`);
       if (fs.existsSync(path.join(config.repoPath, '.git'))) {
+        requireEngramWorkspace(config.repoPath);
         step('Repository exists — pulling latest...');
         const sync = syncRepo(config.repoPath, { log: { step, warn } });
         if (sync.status === 'updated') ok('Repository updated');
@@ -235,6 +252,7 @@ program
         }
       }
 
+      requireEngramWorkspace(config.repoPath);
       const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
 
       step('Installing dependencies...');
@@ -310,8 +328,8 @@ program
       console.log(`  Start the server:     ${D}engram start${X}`);
       console.log(`  Check health:         ${D}engram doctor${X}`);
       console.log(`  Store a memory:       ${D}engram store "hello world"${X}`);
-      console.log(`  Open dashboard:       ${C}http://localhost:${config.port}${X}`);
-      console.log(`  Swagger docs:         ${C}http://localhost:${config.port}/docs${X}`);
+      console.log(`  Open dashboard:       ${C}${getApiBase(config)}${X}`);
+      console.log(`  Swagger docs:         ${C}${getApiBase(config)}/docs${X}`);
     }
     console.log();
   });
@@ -332,10 +350,10 @@ program
       process.exit(1);
     }
 
-    const { running, pid } = isServerRunning();
+    const { running, pid } = isServerRunning(config);
     if (running) {
       warn(`Server already running (PID ${pid})`);
-      console.log(`  Dashboard: http://${config.host}:${config.port}`);
+      console.log(`  Dashboard: ${getApiBase(config)}`);
       return;
     }
 
@@ -360,7 +378,7 @@ program
       ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
       ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
       ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
-      ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
+      ...(disablesSyncTls(config.syncUrl) ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
       ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
     };
 
@@ -382,10 +400,9 @@ program
       }
       const release = (): void => releasePidFileIfOwnedBy(child.pid);
       child.on('exit', (code) => { release(); process.exit(code ?? 0); });
-      // Ctrl-C reaches the child too; clean up rather than leaving a pidfile
-      // pointing at a PID the system is free to hand to somebody else.
+      // A supervisor can signal just the wrapper. Keep the pidfile until the child exits.
       for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-        process.on(signal, () => { release(); process.exit(0); });
+        process.on(signal, () => child.kill(signal));
       }
       return;
     }
@@ -415,9 +432,9 @@ program
 
     if (result.healthy) {
       ok(`Engram running (PID ${child.pid})`);
-      console.log(`  Dashboard: ${C}http://${config.host}:${config.port}${X}`);
-      console.log(`  API:       ${C}http://${config.host}:${config.port}/api${X}`);
-      console.log(`  Swagger:   ${C}http://${config.host}:${config.port}/docs${X}`);
+      console.log(`  Dashboard: ${C}${getApiBase(config)}${X}`);
+      console.log(`  API:       ${C}${getApiBase(config)}/api${X}`);
+      console.log(`  Swagger:   ${C}${getApiBase(config)}/docs${X}`);
       console.log(`  Logs:      ${D}${LOG_PATH}${X}`);
     } else {
       // Remove the pidfile only if it still points at OUR child, so we cannot
@@ -460,7 +477,7 @@ program
   .description('Stop the running Engram server')
   .action(async () => {
     const config = loadConfig();
-    const { running, pid } = isServerRunning();
+    const { running, pid } = isServerRunning(config);
     if (!running) { warn('Server is not running.'); return; }
 
     // Exit code follows reality: the old command printed "Server stopped" and
@@ -481,43 +498,68 @@ program
     if (parseInt(nodeVer.split('.')[0]!, 10) >= 22) { ok(`Node.js ${nodeVer}`); }
     else { fail(`Node.js ${nodeVer} — requires 22+`); issues++; }
 
-    try { ok(`pnpm ${execSync('pnpm --version', { encoding: 'utf8' }).trim()}`); }
-    catch { fail('pnpm not found'); issues++; }
-
-    if (fs.existsSync(CONFIG_PATH)) { ok(`Config: ${CONFIG_PATH}`); }
-    else { fail('Config not found — run: engram setup'); issues++; }
+    let pluginEnabled = false;
+    if (fs.existsSync(CLAUDE_DIR)) {
+      try {
+        const settings = readJson(CLAUDE_SETTINGS);
+        pluginEnabled = claudePluginEnabled(settings);
+        if (pluginEnabled) {
+          ok('Claude Code MCP and hooks provided by the enabled Engram plugin.');
+        } else {
+          for (const h of CLAUDE_HOOKS) {
+            const registeredPath = claudeHookCommands(settings, h.event).find((command) => path.basename(command) === h.file);
+            if (registeredPath && fs.existsSync(registeredPath)) ok(`Claude Code hook: ${h.event} (${h.file})`);
+            else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
+          }
+          const issue = restHookDependencyIssue();
+          if (issue) { warn(issue); issues++; }
+        }
+      } catch (err) {
+        warn(`Claude Code hooks: ${err instanceof Error ? err.message : String(err)}`);
+        issues++;
+      }
+    }
 
     const config = loadConfig();
-    const build = currentBuildStatus(config.repoPath, BUILD_STAMP_PATH);
-    if (build.current) { ok(`Build current: ${config.repoPath}`); }
-    else {
-      // A repository that is up to date but not built is exactly what used to
-      // read as "Already up to date." from `engram update`.
-      fail('The checkout is not built, or was built from a different revision:');
-      detail(build.reasons);
-      console.log(`  Fix: ${C}engram update${X} ${D}(or ${C}engram setup${X}${D} if the repository is missing)${X}`);
-      issues++;
+    const hasConfig = fs.existsSync(CONFIG_PATH);
+    const pluginOnly = pluginEnabled && !hasConfig && !fs.existsSync(config.repoPath);
+    const tool = pluginOnly ? 'npx' : 'pnpm';
+    try { ok(`${tool} ${execSync(`${tool} --version`, { encoding: 'utf8' }).trim()}`); }
+    catch { fail(`${tool} not found`); issues++; }
+
+    if (!pluginOnly) {
+      if (hasConfig) { ok(`Config: ${CONFIG_PATH}`); }
+      else { fail('Config not found — run: engram setup'); issues++; }
+
+      const build = currentBuildStatus(config.repoPath, BUILD_STAMP_PATH);
+      if (build.current) { ok(`Build current: ${config.repoPath}`); }
+      else {
+        fail('The checkout is not built, or was built from a different revision:');
+        detail(build.reasons);
+        console.log(`  Fix: ${C}engram update${X} ${D}(or ${C}engram setup${X}${D} if the repository is missing)${X}`);
+        issues++;
+      }
     }
 
     if (fs.existsSync(config.dbPath)) {
       ok(`Database: ${config.dbPath} (${(fs.statSync(config.dbPath).size / 1024).toFixed(0)} KB)`);
     } else { warn('Database not created yet (auto-creates on first start)'); }
 
-    const { running, pid } = isServerRunning();
+    const { running, pid } = isServerRunning(config);
     if (running) {
       ok(`Server running (PID ${pid})`);
       try {
-        const res = await fetch(`http://${config.host}:${config.port}/api/health`);
+        const res = await fetch(`${getApiBase(config)}/api/health`);
         const data = await res.json() as { status: string; uptime: number };
         ok(`API healthy: ${data.status} (uptime: ${Math.round(data.uptime)}s)`);
       } catch { fail(`Server running but API not responding on :${config.port}`); issues++; }
-    } else { warn('Server not running — start with: engram start'); }
+    } else if (!pluginOnly) { warn('Server not running — start with: engram start'); }
 
     // Report the client config files that are actually loaded. ~/.mcp.json was
     // reported as "MCP: configured" for a year and is read by nothing — Claude
     // Code loads `.mcp.json` per PROJECT and user-scope servers from
     // ~/.claude.json, and other clients have their own files.
-    let anyClientConfigured = false;
+    let anyClientConfigured = pluginEnabled;
     for (const id of KNOWN_CLIENT_IDS) {
       const target = resolveMcpClient(id, os.homedir());
       if (target.kind !== 'file' || !fs.existsSync(target.path)) continue;
@@ -530,10 +572,6 @@ program
         warn(`MCP: could not inspect ${target.path}: ${err instanceof Error ? err.message : String(err)}`);
         issues++;
       }
-    }
-    if (!anyClientConfigured) {
-      warn(`MCP: not registered for any client Engram knows (${supportedClientList()}) — run: engram setup --source <client>`);
-      issues++;
     }
 
     const legacyGlobalMcp = path.join(os.homedir(), LEGACY_GLOBAL_MCP_FILE);
@@ -550,22 +588,10 @@ program
       }
     }
 
-    // Claude Code auto-memory: the three hooks (its user-scope MCP entry is
-    // covered by the client loop above, which reads the same ~/.claude.json).
-    if (fs.existsSync(CLAUDE_DIR)) {
-      try {
-        const settings = readJson(CLAUDE_SETTINGS);
-        for (const h of CLAUDE_HOOKS) {
-          const registeredPath = claudeHookCommands(settings, h.event).find((command) => path.basename(command) === h.file);
-          if (registeredPath && fs.existsSync(registeredPath)) ok(`Claude Code hook: ${h.event} (${h.file})`);
-          else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
-        }
-      } catch (err) {
-        warn(`Claude Code hooks: ${err instanceof Error ? err.message : String(err)}`);
-        issues++;
-      }
+    if (!anyClientConfigured) {
+      warn(`MCP: not registered for any client Engram knows (${supportedClientList()}) — run: engram setup --source <client>`);
+      issues++;
     }
-
     console.log();
     console.log(issues === 0 ? `${G}  All checks passed.${X}\n` : `${Y}  ${issues} issue(s) found.${X}\n`);
     // The exit code has to agree with the report: doctor exited 0 no matter
@@ -582,24 +608,15 @@ program
     const config = loadConfig();
     console.log(`\n${B}  Engram Status${X}\n`);
 
-    const { running, pid } = isServerRunning();
+    const { running, pid } = isServerRunning(config);
     if (!running) {
       console.log(`  Server:  ${R}stopped${X}`);
       console.log(`  Start:   ${D}engram start${X}\n`);
       return;
     }
 
-    // The PID is alive — confirm it actually owns the port before claiming
-    // "running" (a stale pidfile can point at a reused, unrelated PID).
-    const liveness = verifyServer(pid!, config.port);
-    if (liveness.state === 'port_mismatch') {
-      console.log(`  Server:  ${Y}unknown${X} (PID ${pid} alive, but :${config.port} is owned by PID ${liveness.ownerPid})`);
-      console.log(`  ${D}Stale pidfile? Try: engram stop && engram start${X}\n`);
-      return;
-    }
-
     console.log(`  Server:  ${G}running${X} (PID ${pid})`);
-    console.log(`  URL:     http://${config.host}:${config.port}`);
+    console.log(`  URL:     ${getApiBase(config)}`);
 
     try {
       const health = await api<{ uptime: number }>('GET', '/api/health');
@@ -618,12 +635,17 @@ program
 // ─── configure ───────────────────────────────────────────────────────────────
 
 const configCmd = program.command('configure').description('View or update Engram configuration');
-configCmd.command('show').description('Show current config').action(() => {
+async function showConfig(): Promise<void> {
   const config = loadConfig();
+  if (config.syncUrl) {
+    const { redactSyncUrl } = await import('@engram-ai-memory/core');
+    config.syncUrl = redactSyncUrl(config.syncUrl);
+  }
   console.log(JSON.stringify(config, null, 2));
-});
-configCmd.command('set <key> <value>').description('Set a config value').action((key: string, value: string) => {
-  const config = loadConfig();
+}
+configCmd.command('show').description('Show current config').action(showConfig);
+configCmd.command('set <key> <value>').description('Set a config value').action(async (key: string, value: string) => {
+  const config = loadConfig(true);
   // An explicit key list, not `key in config`: `in` walks the prototype chain,
   // so `engram configure set constructor x` used to pass and get written to the
   // file — and it answered false for optional keys the config did not yet have,
@@ -637,13 +659,13 @@ configCmd.command('set <key> <value>').description('Set a config value').action(
   if (!parsed.ok) { fail(parsed.error); process.exit(1); }
 
   saveConfig({ ...config, [key]: parsed.value });
-  ok(`${key} = ${parsed.value}`);
+  const display = key === 'syncUrl' && typeof parsed.value === 'string'
+    ? (await import('@engram-ai-memory/core')).redactSyncUrl(parsed.value)
+    : parsed.value;
+  ok(`${key} = ${display}`);
 });
 configCmd.command('path').description('Print config file path').action(() => console.log(CONFIG_PATH));
-configCmd.action(() => {
-  const config = loadConfig();
-  console.log(JSON.stringify(config, null, 2));
-});
+configCmd.action(showConfig);
 
 // ─── cloud ───────────────────────────────────────────────────────────────────
 
@@ -656,7 +678,7 @@ cloudCmd
     const { validateSyncUrl, redactSyncUrl } = await import('@engram-ai-memory/core');
     try {
       // Allow unencrypted for local dev if user explicitly passes sslmode=disable
-      if (url.includes('sslmode=disable')) {
+      if (disablesSyncTls(url)) {
         process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
       }
       validateSyncUrl(url);
@@ -664,7 +686,7 @@ cloudCmd
       console.error(`❌ ${(err as Error).message}`);
       process.exit(1);
     }
-    const config = loadConfig();
+    const config = loadConfig(true);
     config.syncUrl = url;
     saveConfig(config);
     console.log(`✅ Cloud sync configured: ${redactSyncUrl(url)}`);
@@ -675,7 +697,7 @@ cloudCmd
   .command('disconnect')
   .description('Disconnect from cloud sync (local data is preserved)')
   .action(() => {
-    const config = loadConfig();
+    const config = loadConfig(true);
     delete config.syncUrl;
     delete config.syncInterval;
     delete config.syncMode;
@@ -702,7 +724,7 @@ cloudCmd
     // Never `= config.dbPath || undefined`: assigning undefined to process.env
     // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
     applyDbPathEnv(process.env, config.dbPath);
-    if (config.syncUrl.includes('sslmode=disable')) {
+    if (disablesSyncTls(config.syncUrl)) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
@@ -744,7 +766,7 @@ cloudCmd
     // Never `= config.dbPath || undefined`: assigning undefined to process.env
     // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
     applyDbPathEnv(process.env, config.dbPath);
-    if (config.syncUrl.includes('sslmode=disable')) {
+    if (disablesSyncTls(config.syncUrl)) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
@@ -803,7 +825,7 @@ cloudCmd
       process.exit(1);
     }
 
-    if (config.syncUrl.includes('sslmode=disable')) {
+    if (disablesSyncTls(config.syncUrl)) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
@@ -818,8 +840,8 @@ cloudCmd
     const passphrase = source.kind === 'prompt'
       ? await readHiddenLine('Passphrase: ', process.stdin, process.stdout)
       : source.value;
-    if (passphrase.length === 0) {
-      console.error('An empty passphrase would encrypt nothing. Aborted.');
+    if (passphrase.trim().length === 0) {
+      console.error('The passphrase must contain a non-whitespace character. Aborted.');
       process.exit(1);
     }
 
@@ -902,6 +924,19 @@ program
 
 // ─── update ─────────────────────────────────────────────────────────────────
 
+function updateGlobalCli(repoPath: string, prefix: string | null, degraded: string[]): void {
+  step('Updating CLI...');
+  try {
+    execSync(globalInstallCommand(prefix), {
+      cwd: path.join(repoPath, 'packages', 'cli'), stdio: 'pipe', env: { ...process.env, NODE_NO_WARNINGS: '1' },
+    });
+    ok('CLI updated globally');
+  } catch (err) {
+    reportGlobalInstallFailure(err, prefix, 'update');
+    degraded.push('the global engram command was not updated — it still runs the previous version');
+  }
+}
+
 program
   .command('update')
   .description('Update Engram to the latest version — pull, rebuild, and restart')
@@ -919,6 +954,7 @@ program
       process.exit(1);
     }
 
+    requireEngramWorkspace(repoPath);
     const sync = syncRepo(repoPath, { force: opts.force === true, log: { step, warn } });
     let repositoryMoved = true;
 
@@ -935,9 +971,14 @@ program
         // the update that brought them in ran the previous CLI. Refresh anyway.
         const degraded: string[] = [];
         refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, degraded);
+        // A completed build can still have an older, separately installed CLI on PATH.
+        const prefix = currentGlobalPrefix();
+        if (prefix && fs.realpathSync(path.join(repoPath, 'packages', 'cli', 'dist', 'cli.js')) !== fileURLToPath(import.meta.url)) {
+          updateGlobalCli(repoPath, prefix, degraded);
+        }
         if (degraded.length === 0) ok('Already up to date.');
         else {
-          warn(`Already built, with ${degraded.length} integration refresh step(s) skipped.`);
+          warn(`Already built, with ${degraded.length} update step(s) incomplete.`);
           process.exitCode = 1;
         }
         console.log();
@@ -952,6 +993,7 @@ program
       console.log();
       process.exit(1);
     } else {
+      requireEngramWorkspace(repoPath);
       ok('Repository updated');
     }
 
@@ -987,19 +1029,11 @@ program
     const degraded: string[] = [];
     refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, degraded);
 
-    step('Updating CLI...');
-    const prefix = currentGlobalPrefix();
-    try {
-      execSync(globalInstallCommand(prefix), { cwd: path.join(repoPath, 'packages', 'cli'), stdio: 'pipe', env: execEnv });
-      ok('CLI updated globally');
-    } catch (err) {
-      reportGlobalInstallFailure(err, prefix, 'update');
-      degraded.push('the global engram command was not updated — it still runs the previous version');
-    }
+    updateGlobalCli(repoPath, currentGlobalPrefix(), degraded);
 
     let restartedPid: number | undefined;
     if (opts.restart !== false) {
-      const { running, pid } = isServerRunning();
+      const { running, pid } = isServerRunning(config);
       if (running) {
         step('Restarting server...');
         // Same verified, waited stop the `stop` command uses: the old code sent
@@ -1026,7 +1060,7 @@ program
           ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
           ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
           ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
-          ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
+          ...(disablesSyncTls(config.syncUrl) ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
           ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
         };
         if (stopped) {
@@ -1125,10 +1159,18 @@ program
 
 // ─── search ──────────────────────────────────────────────────────────────────
 
+function positiveInteger(value: string, max: number): number {
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || parsed < 1 || parsed > max) {
+    throw new InvalidArgumentError(`Expected an integer between 1 and ${max}.`);
+  }
+  return parsed;
+}
+
 program
   .command('search <query>')
   .description('Semantic vector search')
-  .option('-k, --top <n>', 'Number of results', parseInt, 10)
+  .option('-k, --top <n>', 'Number of results', (value) => positiveInteger(value, 50), 10)
   .option('--threshold <n>', 'Minimum similarity', parseFloat, 0.3)
   .option('-t, --type <type>', 'Filter by type')
   .option('--json', 'Output as JSON')
@@ -1150,7 +1192,7 @@ program
 program
   .command('recall <query>')
   .description('Assemble working memory context')
-  .option('-m, --max-tokens <n>', 'Max tokens', parseInt, 2000)
+  .option('-m, --max-tokens <n>', 'Max tokens', (value) => positiveInteger(value, 32000), 2000)
   .option('--json', 'Output as JSON')
   .option('--raw', 'Output raw context only')
   .action(async (query: string, opts) => {
@@ -1374,7 +1416,8 @@ async function readImport(format: string | undefined, file: string | undefined):
 }
 
 async function postImport(memories: ImportMemory[], batch: boolean) {
-  let imported = 0;
+  let processed = 0;
+  let merged = 0;
   let skipped = 0;
   let firstError: string | undefined;
   const size = batch ? 1000 : 1; // The batch route accepts at most 1000 records.
@@ -1383,33 +1426,39 @@ async function postImport(memories: ImportMemory[], batch: boolean) {
     try {
       const records = group.map((m) => ({
         content: m.content, type: m.type ?? 'episodic', source: m.source ?? 'import',
-        importance: m.importance, concept: m.concept,
+        importance: m.importance, concept: m.concept ?? undefined,
+        triggerPattern: m.triggerPattern ?? undefined, actionPattern: m.actionPattern ?? undefined,
         tags: typeof m.tags === 'string' ? JSON.parse(m.tags) : m.tags,
         metadata: typeof m.metadata === 'string' ? JSON.parse(m.metadata) : m.metadata,
-        sessionId: m.sessionId, namespace: m.namespace,
+        sessionId: m.sessionId ?? undefined, namespace: m.namespace,
       }));
       // Stdin exports retain the single-record route: batch drops metadata/sessionId.
-      await api('POST', batch ? '/api/memory/batch' : '/api/memory',
-        batch ? { memories: records } : records[0]);
-      imported += group.length;
+      if (batch) {
+        const { count } = await api<{ count: number }>('POST', '/api/memory/batch', { memories: records });
+        processed += count;
+      } else {
+        const { deduplicated } = await api<{ deduplicated?: boolean }>('POST', '/api/memory', records[0]);
+        processed++;
+        if (deduplicated) merged++;
+      }
     } catch (err) {
       skipped += group.length;
       const message = err instanceof Error ? err.message : String(err);
       if (!firstError) {
         firstError = message;
-        if (imported === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
+        if (processed === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
           fail(`Cannot reach the Engram API at ${getApiBase()} — is the server running? (engram start)`);
           process.exit(1);
         }
       }
     }
   }
-  return { imported, skipped, firstError };
+  return { processed, merged, skipped, firstError };
 }
 
 program
   .command('import [path]')
-  .description('Import stdin JSON/NDJSON or memory files. Creates NEW records — ids and timestamps are not preserved, so re-running duplicates.')
+  .description('Import stdin JSON/NDJSON or memory files. Engram may merge matching memories. Import ignores source IDs and timestamps.')
   .option('--from <format>', 'File format: markdown, chatgpt, or claude')
   .option('--dry-run', 'Preview only')
   .action(async (file: string | undefined, opts: { from?: string; dryRun?: boolean }) => {
@@ -1429,8 +1478,9 @@ program
       console.log('Dry run — no changes.');
       return;
     }
-    const { imported, skipped, firstError } = await postImport(memories, Boolean(opts.from));
-    console.log(`Imported: ${imported}  Skipped: ${skipped + parseFailures}`);
+    const { processed, merged, skipped, firstError } = await postImport(memories, Boolean(opts.from));
+    const counts = opts.from ? `Processed: ${processed}` : `Imported: ${processed - merged}`;
+    console.log(`${counts}${merged ? `  Merged: ${merged}` : ''}  Skipped: ${skipped + parseFailures}`);
     if (firstError) fail(`First failure: ${firstError}`);
     if (firstError || parseFailures > 0) process.exitCode = 1;
   });

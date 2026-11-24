@@ -45,16 +45,8 @@ export class ConfigParseError extends Error {
  * Claude Code rewrites it constantly, so a single torn read was enough to log
  * the user out and untrust every project, with no backup written anywhere.
  */
-export function readJson(file: string): Record<string, unknown> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(file, 'utf8');
-  } catch (err) {
-    // Only "not there" is safe to treat as empty. EACCES, EISDIR and friends
-    // are real problems the caller must not paper over with a fresh file.
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw err;
-  }
+export function readJson(file: string, raw = readConfigText(file)): Record<string, unknown> {
+  if (raw === null) return {};
 
   // A leading UTF-8 BOM is not JSON but carries none of the user's data, and
   // an editor that added one should not cost anybody their config.
@@ -71,6 +63,15 @@ export function readJson(file: string): Record<string, unknown> {
     throw new ConfigParseError(file, 'top-level value is not a JSON object');
   }
   return parsed as Record<string, unknown>;
+}
+
+export function readConfigText(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
 }
 
 /** Validate nested config objects before merging, preserving unrelated keys. */
@@ -117,27 +118,33 @@ export function backupPathFor(file: string, now: Date, taken: (candidate: string
  *
  * Returns the backup path, or null when the file is new or unchanged.
  */
-export function writeConfigFile(file: string, contents: string, now: Date = new Date()): string | null {
-  try {
-    if (fs.readFileSync(file, 'utf8') === contents) return null;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-  }
+export function writeConfigFile(file: string, contents: string, now: Date = new Date(), original = readConfigText(file)): string | null {
+  if (contents === original) return null;
+  // Claude Code coordinates user-config writers with a sibling .lock directory.
+  const lock = path.basename(file) === '.claude.json' ? `${file}.lock` : null;
+  if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) file = fs.realpathSync(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-
-  let backup: string | null = null;
-  let mode = 0o600; // a fresh config may hold credentials — keep it private
-  try {
-    mode = fs.statSync(file).mode & 0o777;
-    backup = backupPathFor(file, now, fs.existsSync);
-    fs.copyFileSync(file, backup);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  if (lock) {
+    try { fs.mkdirSync(lock); } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      throw new Error(`Claude config is locked at ${lock}. Re-run setup when the writer finishes.`);
+    }
   }
-
-  const temp = `${file}.engram-${process.pid}-${Date.now()}.tmp`;
   try {
-    const fd = fs.openSync(temp, 'wx', mode);
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    const backup = stat ? backupPathFor(file, now, fs.existsSync) : null;
+    if (backup) fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL);
+    atomicWriteConfig(file, contents, stat ? stat.mode & 0o777 : 0o600, original);
+    return backup;
+  } finally {
+    if (lock) fs.rmdirSync(lock);
+  }
+}
+
+export function atomicWriteConfig(file: string, contents: string, mode: number, original?: string | null): void {
+  const temp = `${file}.engram-${process.pid}-${Date.now()}.tmp`;
+  const fd = fs.openSync(temp, 'wx', mode);
+  try {
     try {
       fs.writeFileSync(fd, contents);
       // Rename is only as durable as the bytes behind it.
@@ -146,6 +153,9 @@ export function writeConfigFile(file: string, contents: string, now: Date = new 
       fs.closeSync(fd);
     }
     fs.chmodSync(temp, mode);
+    if (original !== undefined && readConfigText(file) !== original) {
+      throw new Error(`${file} changed during setup. Re-run setup to merge the latest edits.`);
+    }
     fs.renameSync(temp, file);
   } catch (err) {
     try { fs.unlinkSync(temp); } catch (cleanupError) {
@@ -153,13 +163,10 @@ export function writeConfigFile(file: string, contents: string, now: Date = new 
     }
     throw err;
   }
-
-  return backup;
 }
 
 export function writeJsonConfig(file: string, data: Record<string, unknown>, now: Date = new Date()): string | null {
-  if (fs.existsSync(file) && isDeepStrictEqual(readJson(file), data)) return null;
-  return writeConfigFile(file, JSON.stringify(data, null, 2) + '\n', now);
+  return updateJsonConfig(file, () => data, now);
 }
 
 /**
@@ -170,8 +177,21 @@ export function writeJsonConfig(file: string, data: Record<string, unknown>, now
 export function updateJsonConfig(
   file: string,
   update: (current: Record<string, unknown>) => Record<string, unknown>,
+  now: Date = new Date(),
 ): string | null {
-  return writeJsonConfig(file, update(readJson(file)));
+  const original = readConfigText(file);
+  const current = readJson(file, original);
+  const next = update(current);
+  if (original !== null && isDeepStrictEqual(current, next)) return null;
+  return writeConfigFile(file, JSON.stringify(next, null, 2) + '\n', now, original);
+}
+
+function escapeBashSingleQuotes(value: string): string {
+  return value.replace(/'/g, `'\\''`);
+}
+
+function bashLiteral(value: string): string {
+  return `'${escapeBashSingleQuotes(value)}'`;
 }
 
 /** Render hook paths, API base and the same environment as its MCP entry. */
@@ -180,13 +200,14 @@ export function renderHook(
   mcpEnv: Readonly<Record<string, string>> = { ENGRAM_DB_PATH: dbPath, ENGRAM_SOURCE: 'claude-code' },
 ): string {
   return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__|__MCP_ENV__|__NAMESPACE_MODE__|__NAMESPACE__/g, (placeholder) => {
-    if (placeholder === '__API_BASE__') return apiBase;
-    if (placeholder === '__NAMESPACE_MODE__') return quoteHookCommand(mcpEnv['ENGRAM_NAMESPACE_MODE'] || 'project');
-    if (placeholder === '__NAMESPACE__') return quoteHookCommand(mcpEnv['ENGRAM_NAMESPACE'] || '');
+    // The templates enclose the default URL in single quotes.
+    if (placeholder === '__API_BASE__') return escapeBashSingleQuotes(apiBase);
+    if (placeholder === '__NAMESPACE_MODE__') return bashLiteral(mcpEnv['ENGRAM_NAMESPACE_MODE'] || 'project');
+    if (placeholder === '__NAMESPACE__') return bashLiteral(mcpEnv['ENGRAM_NAMESPACE'] || '');
     if (placeholder === '__MCP_ENV__') {
-      return Object.entries(mcpEnv).map(([key, value]) => quoteHookCommand(`${key}=${value}`)).join(' ');
+      return Object.entries(mcpEnv).map(([key, value]) => bashLiteral(`${key}=${value}`)).join(' ');
     }
-    return quoteHookCommand(placeholder === '__REPO_PATH__' ? repoPath : dbPath);
+    return bashLiteral(placeholder === '__REPO_PATH__' ? repoPath : dbPath);
   });
 }
 
@@ -206,7 +227,7 @@ export function installHookScript(
 /** Quote a hook script path so a home directory containing spaces still runs. */
 export function quoteHookCommand(command: string, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') return `"${command}"`;
-  return `'${command.replace(/'/g, `'\\''`)}'`;
+  return bashLiteral(command);
 }
 
 /** Undo quoteHookCommand for basename comparison, including older quoted entries. */

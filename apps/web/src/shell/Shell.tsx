@@ -121,16 +121,15 @@ export default function Shell() {
     if (storeChanges > 0) void refreshServerStats();
   }, [storeChanges]);
 
-  // An MCP client writes to the database directly, so its memory reaches the
-  // census (GET /stats) with no socket event: a census that grows while
-  // `storeChanges` stood still means a write this tab was not told about.
+  // Direct MCP writes and archives from another tab can change the census
+  // (GET /stats) without a socket event.
   const total = useServerStats()?.total;
   const seen = useRef<{ total: number; changes: number } | null>(null);
   useEffect(() => {
     const before = seen.current;
     if (total === undefined || total === before?.total) return;
     seen.current = { total, changes: storeChanges };
-    if (before && total > before.total && storeChanges === before.changes) {
+    if (before && storeChanges === before.changes) {
       loadMemories();
       void loadMap(projectFilter);
     }

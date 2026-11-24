@@ -195,11 +195,10 @@ describe('verifyServer', () => {
     expect(verifyServer(2 ** 30, 4901)).toEqual({ state: 'stopped' });
   });
 
-  it('is running when our pid owns the port (or lsof cannot tell)', async () => {
+  it('is running when our pid owns the port and unknown when lsof cannot tell', async () => {
     const { port, close } = await listenTcp();
     const result = verifyServer(process.pid, port);
-    // lsof present → 'running' (owner === process.pid); lsof absent → owner null → 'running'
-    expect(result.state).toBe('running');
+    expect(result.state).toBe(portListenerPid(port) === process.pid ? 'running' : 'unknown');
     await close();
   });
 
@@ -213,8 +212,7 @@ describe('verifyServer', () => {
       // lsof works here — the alive child does not own the port
       expect(result).toEqual({ state: 'port_mismatch', pid: other.pid, ownerPid: process.pid });
     } else {
-      // lsof unavailable — falls back to liveness
-      expect(result.state).toBe('running');
+      expect(result.state).toBe('unknown');
     }
     await close();
   });

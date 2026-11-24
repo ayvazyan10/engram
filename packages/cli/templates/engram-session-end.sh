@@ -6,9 +6,10 @@
 #
 # Fail-open: report errors on stderr without blocking session teardown.
 #
-# Tunables: ENGRAM_API.
+# Tunables: ENGRAM_API, ENGRAM_API_KEY.
 
-ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
+DEFAULT_API='__API_BASE__'
+ENGRAM_API="${ENGRAM_API:-$DEFAULT_API}"
 NAMESPACE_MODE=__NAMESPACE_MODE__
 PROJECT=__NAMESPACE__
 # An older `engram update` leaves these two unrendered: behave as project mode.
@@ -70,5 +71,5 @@ BODY=$(jq -n --arg c "Claude Code session ${SESSION_ID:-unknown}: ${SUMMARY}" --
    tags:["session","session-summary","auto-stored","pending-distill"]}
   + if $ns == "" then {} else {namespace:$ns} end') || exit 0
 curl -fsS --max-time 5 -X POST "${ENGRAM_API}/api/memory" \
-  -H "Content-Type: application/json" -d "$BODY" >/dev/null || true
+  -H "Content-Type: application/json" -H @- -d "$BODY" <<<"${ENGRAM_API_KEY:+Authorization: Bearer $ENGRAM_API_KEY}" >/dev/null || true
 exit 0

@@ -18,7 +18,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       metadata?: Record<string, unknown>;
       importance?: number;
       concept?: string;
-      namespace?: string;
+      triggerPattern?: string;
+      actionPattern?: string;
+      namespace?: string | null;
     };
   }>('/memory', {
     schema: {
@@ -38,7 +40,10 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
           metadata: { type: 'object' },
           importance: { type: 'number', minimum: 0, maximum: 1 },
           concept: { type: 'string' },
-          namespace: { type: 'string' },
+          triggerPattern: { type: 'string' },
+          actionPattern: { type: 'string' },
+          // A backup's explicit null means global even on a filtered server.
+          namespace: { type: 'string', nullable: true },
         },
       },
     },
@@ -46,9 +51,9 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       if (brain.getNamespaceMode() === 'isolated' && req.body.namespace !== undefined && req.body.namespace !== brain.getNamespace()) {
         return reply.code(400).send({ error: 'namespace override is not allowed in isolated mode' });
       }
-      const { content, type, source, sessionId, tags, metadata, importance, concept, namespace } = req.body;
+      const { content, type, source, sessionId, tags, metadata, importance, concept, triggerPattern, actionPattern, namespace } = req.body;
       const result = await brain.store({
-        content, type, source, sessionId, tags, metadata, importance, concept, namespace,
+        content, type, source, sessionId, tags, metadata, importance, concept, triggerPattern, actionPattern, namespace,
       });
       notifySyncWrite();
       const { embedding: _embedding, ...memory } = result.memory;

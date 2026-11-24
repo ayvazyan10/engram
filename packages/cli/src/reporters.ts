@@ -26,13 +26,14 @@ export function reportFetchFailure(failure: FetchFailure, repoPath: string): voi
       console.log('  Engram is a public repository — this checkout needs no credentials.');
       console.log('  A stale entry in a git credential helper is the usual cause.');
       console.log(`  Fix: ${C}git credential reject <<< $'protocol=https\\nhost=github.com\\n'${X}`);
-      console.log(`  Then check: ${D}grep github.com ~/.git-credentials${X} and ${D}git config --get-all credential.helper${X}`);
+      console.log(`  Check the configured helpers with ${D}git config --get-all credential.helper${X}.`);
+      console.log('  Use your credential manager to check whether a github.com entry remains.');
       console.log(`  Verify the remote is HTTPS and public: ${D}cd ${repoPath} && git remote -v${X}`);
       return;
     case 'not-found':
       fail('The remote repository does not exist — the URL is wrong or the repository moved.');
-      console.log(`  Check the remote: ${D}cd ${repoPath} && git remote -v${X}`);
-      console.log(`  Or start over: ${D}rm -rf ${repoPath}${X} and run ${C}engram setup${X}`);
+      console.log(`  Run ${D}git remote -v${X} in ${repoPath} and verify the remote URL.`);
+      console.log(`  If you need a fresh checkout, move the existing directory aside and run ${C}engram setup${X}.`);
       return;
     case 'network':
       fail('Could not reach the remote repository. Check your connection.');

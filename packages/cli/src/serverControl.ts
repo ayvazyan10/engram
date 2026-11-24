@@ -42,6 +42,11 @@ export function connectHost(host: string): string {
   return host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 }
 
+export function serverUrl(host: string, port: number): string {
+  const address = connectHost(host);
+  return `http://${address.includes(':') ? `[${address}]` : address}:${port}`;
+}
+
 /** True if the given PID is alive (signal-0 probe). */
 export function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -77,9 +82,11 @@ export function isValidPort(port: unknown): port is number {
   return Number.isInteger(port) && (port as number) >= 1 && (port as number) <= 65535;
 }
 
+const processLookupOptions = { encoding: 'utf8', timeout: 3000, stdio: 'pipe' } as const;
+
 /**
  * PID of the process listening on a TCP port, or null when it can't be
- * determined (nothing listening, or `lsof` unavailable). macOS + Linux.
+ * determined (nothing listening, or the OS lookup is unavailable).
  *
  * `execFileSync` with an argv array, never `execSync` with a command string.
  * The port arrives from ~/.engram/config.json, and a config holding
@@ -90,10 +97,10 @@ export function isValidPort(port: unknown): port is number {
 export function portListenerPid(port: number): number | null {
   if (!isValidPort(port)) return null;
   try {
-    const out = execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const out = process.platform === 'win32'
+      ? execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `(Get-NetTCPConnection -LocalPort ${port} -State Listen).OwningProcess`], processLookupOptions)
+      : execFileSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], processLookupOptions);
     const first = out.split(/\s+/).filter(Boolean)[0];
     if (!first) return null;
     const pid = parseInt(first, 10);
@@ -123,7 +130,7 @@ export async function awaitServerHealthy(
 ): Promise<StartupResult> {
   const attempts = opts.attempts ?? 30;
   const intervalMs = opts.intervalMs ?? 500;
-  const url = `http://${connectHost(host)}:${port}/api/health`;
+  const url = `${serverUrl(host, port)}/api/health`;
 
   const hasExited = (): boolean => child.exitCode !== null || child.signalCode !== null;
 
@@ -145,18 +152,28 @@ export async function awaitServerHealthy(
 export type ServerLiveness =
   | { state: 'stopped' }
   | { state: 'running'; pid: number }
+  | { state: 'unknown'; pid: number }
   | { state: 'port_mismatch'; pid: number; ownerPid: number };
 
-/**
- * Verify a pidfile PID is not just alive but actually owns the port. When lsof
- * can't determine the owner (returns null), liveness is trusted — the caller
- * can still probe the API to confirm.
- */
-export function verifyServer(pid: number, port: number): ServerLiveness {
+/** A managed child can still be starting, before it owns a listening socket. */
+export function verifyServer(pid: number, port: number, serverScript?: string): ServerLiveness {
   if (!pidAlive(pid)) return { state: 'stopped' };
   const owner = portListenerPid(port);
-  if (owner !== null && owner !== pid) {
-    return { state: 'port_mismatch', pid, ownerPid: owner };
+  if (serverScript) {
+    try {
+      const args = process.platform === 'win32'
+        ? execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`], processLookupOptions)
+        : execFileSync('ps', ['-ww', '-p', String(pid), '-o', 'args='], processLookupOptions);
+      if (args.trim()) {
+        const command = /^(?:"([^"]+)"|(\S+))\s+(.+)$/.exec(args.trim());
+        const executable = path.basename(command?.[1] ?? command?.[2] ?? '');
+        const script = command?.[3]?.replace(/^"(.*)"$/, '$1');
+        if (!/^node(?:js)?(?:\.exe)?$/i.test(executable) || script !== serverScript) return { state: 'stopped' };
+        if (owner === null) return { state: 'running', pid };
+      }
+    } catch { /* Process arguments unavailable. Use the listener's owner. */ }
   }
-  return { state: 'running', pid };
+  if (owner !== null && owner !== pid) return { state: 'port_mismatch', pid, ownerPid: owner };
+  return owner === pid ? { state: 'running', pid } : { state: 'unknown', pid };
 }

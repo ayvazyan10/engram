@@ -100,9 +100,10 @@ engram export > backup.json
 engram import < backup.json
 ```
 
-`import` creates **new** records — ids and timestamps are not preserved, so
-re-running it duplicates. Use `--dry-run` to preview the memory count without
-sending requests. Without `--from`, stdin JSON/NDJSON imports are unchanged.
+`import` ignores the source IDs and timestamps. Engram can merge a matching
+memory with an existing record of the same type in the same namespace. Stdin
+JSON/NDJSON imports report merges separately. File imports report the number
+processed per run. Use `--dry-run` to preview the memory count.
 
 ```bash
 engram import --from markdown ./CLAUDE.md
@@ -165,7 +166,7 @@ Config file: `~/.engram/config.json` (mode `0600` — it can hold a Postgres pas
 
 | Key | Default | Description |
 |---|---|---|
-| `dbPath` | `~/.engram/engram.db` | SQLite database path |
+| `dbPath` | `~/.engram/engram.db` | SQLite database path. Relative paths start in the user's home directory. |
 | `port` | `4901` | API server port |
 | `host` | `127.0.0.1` | Bind address |
 | `namespace` | `null` | Memory namespace |

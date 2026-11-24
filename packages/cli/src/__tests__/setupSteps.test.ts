@@ -337,7 +337,7 @@ describe('setupClaudeCode', () => {
       expect(fs.existsSync(hooksDir)).toBe(false);
       expect(JSON.parse(fs.readFileSync(paths.settings, 'utf8'))).toEqual(settings);
     }
-    expect(fs.existsSync(paths.userJson)).toBe(registered);
+    expect(fs.existsSync(paths.userJson)).toBe(false);
   });
 
   it.each([true, false])('leaves MCP and hooks untouched for an enabled plugin (withHooks=%s)', (withHooks) => {
