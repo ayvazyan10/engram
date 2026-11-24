@@ -149,6 +149,15 @@ describe('Contradiction Resolution', () => {
   let brain: NeuralBrain;
   let dbPath: string;
 
+  async function confirmPair(sourceId: string, targetId: string): Promise<void> {
+    // Supply a candidate if these example texts did not trigger the detector.
+    getDb().insert(schema.memoryConnections).values({
+      id: 'resolution-candidate', sourceId, targetId, relationship: 'contradicts',
+      metadata: JSON.stringify({ status: 'candidate' }),
+    }).onConflictDoNothing().run();
+    await brain.completeContradictionCheck(sourceId, targetId, 'contradiction');
+  }
+
   beforeEach(async () => {
     dbPath = createTestDb();
     brain = new NeuralBrain({
@@ -168,6 +177,7 @@ describe('Contradiction Resolution', () => {
   it('resolveContradiction with keep_newest archives old memory', async () => {
     const first = await brain.store({ content: 'Server runs on port 3000' });
     const second = await brain.store({ content: 'Server now runs on port 8080, not 3000' });
+    await confirmPair(second.memory.id, first.memory.id);
 
     const result = await brain.resolveContradiction(
       first.memory.id,
@@ -175,10 +185,10 @@ describe('Contradiction Resolution', () => {
       'keep_newest',
     );
 
-    expect(result.resolved).toBe(false);
+    expect(result.resolved).toBe(true);
     // The older memory should be archived
-    expect(result.archivedId).toBeUndefined();
-    expect(result.keptId).toBeUndefined();
+    expect(result.archivedId).toBe(first.memory.id);
+    expect(result.keptId).toBe(second.memory.id);
 
     // Verify archived
     const db = getDb();
@@ -187,12 +197,13 @@ describe('Contradiction Resolution', () => {
       .from(schema.memories)
       .where(eq(schema.memories.id, first.memory.id))
       .limit(1);
-    expect(archived!.archivedAt).toBeNull();
+    expect(archived!.archivedAt).not.toBeNull();
   });
 
   it('resolveContradiction with keep_important archives lower importance', async () => {
     const first = await brain.store({ content: 'Important fact about API', importance: 0.9 });
     const second = await brain.store({ content: 'Less important contradicting fact', importance: 0.3 });
+    await confirmPair(second.memory.id, first.memory.id);
 
     const result = await brain.resolveContradiction(
       first.memory.id,
@@ -200,14 +211,16 @@ describe('Contradiction Resolution', () => {
       'keep_important',
     );
 
-    expect(result.resolved).toBe(false);
-    expect(result.keptId).toBeUndefined();
-    expect(result.archivedId).toBeUndefined();
+    expect(result.resolved).toBe(true);
+    expect(result.keptId).toBe(first.memory.id);
+    expect(result.archivedId).toBe(second.memory.id);
   });
 
-  it('resolveContradiction with keep_both keeps everything', async () => {
+  it('keep_both requires a confirmed edge and keeps both memories', async () => {
     const first = await brain.store({ content: 'Config A is active' });
     const second = await brain.store({ content: 'Config B is active instead' });
+    expect(await brain.resolveContradiction(first.memory.id, second.memory.id, 'keep_both')).toEqual({ resolved: false });
+    await confirmPair(second.memory.id, first.memory.id);
 
     const result = await brain.resolveContradiction(
       first.memory.id,
@@ -215,7 +228,7 @@ describe('Contradiction Resolution', () => {
       'keep_both',
     );
 
-    expect(result.resolved).toBe(false);
+    expect(result.resolved).toBe(true);
     expect(result.archivedId).toBeUndefined();
   });
 

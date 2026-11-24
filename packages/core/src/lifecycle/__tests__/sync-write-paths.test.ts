@@ -133,14 +133,15 @@ describe('Phase 0 — updated_at, timestamps, device_id on write paths', () => {
     const b = await brain.store({ content: 'The API listens on port 3001', type: 'semantic' });
     const beforeUpdatedAt = b.memory.updatedAt;
 
+    await brain.completeContradictionCheck(b.memory.id, a.memory.id, 'contradiction');
     await tick();
     const result = await brain.resolveContradiction(b.memory.id, a.memory.id, 'keep_oldest');
-    expect(result).toEqual({ resolved: false });
+    expect(result.archivedId).toBe(b.memory.id);
 
     const db = getDb();
     const [loser] = await db.select().from(schema.memories).where(eq(schema.memories.id, b.memory.id));
-    expect(loser!.updatedAt).toBe(beforeUpdatedAt);
-    expect(loser!.archivedAt).toBeNull();
+    expect(loser!.updatedAt > beforeUpdatedAt).toBe(true);
+    expect(loser!.updatedAt).toBe(loser!.archivedAt);
   });
 
   it('recall() does NOT change updated_at, but access_count still increments (inverse guard)', async () => {

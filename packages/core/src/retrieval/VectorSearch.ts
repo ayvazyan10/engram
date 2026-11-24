@@ -205,6 +205,9 @@ export class VectorSearch {
     crossNamespace?: boolean,
     includeGlobal = false
   ): SearchResult[] {
+    if (query.length !== this.dim) {
+      throw new Error(`Vector dimension mismatch: index holds ${this.dim}-dim vectors, got a ${query.length}-dim query.`);
+    }
     // A non-positive or non-finite topK asks for nothing, so nothing comes
     // back. `scores.slice(0, topK)` read a negative value as an offset from the
     // END of the list, so topK = -1 returned every hit except the single worst

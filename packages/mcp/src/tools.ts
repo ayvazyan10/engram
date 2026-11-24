@@ -460,7 +460,7 @@ function registerReEmbed({ server, brain, ensureInitialized, syncEngine }: ToolC
     're_embed',
     'Re-embed memories with the current embedding model. Use after switching models to update stale vectors. Can be slow for large stores.',
     {
-      onlyStale: z.boolean().optional().default(true).describe('If true, only re-embed memories with a different or missing model ID. Default: true.'),
+      onlyStale: z.boolean().optional().default(true).describe('If true, only repair embeddings whose model ID or dimension differs from the active model. Default: true.'),
       batchSize: z.number().min(1).max(100).optional().default(32).describe('Batch size for processing. Default: 32.'),
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },

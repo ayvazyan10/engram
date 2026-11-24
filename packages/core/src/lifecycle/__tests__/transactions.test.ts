@@ -325,18 +325,18 @@ describe('resolveContradiction() atomicity', () => {
       relationship: 'contradicts',
       strength: 0.9,
       bidirectional: true,
-      metadata: '{}',
+      metadata: JSON.stringify({ status: 'confirmed' }),
       createdAt: new Date().toISOString(),
     });
 
     const result = await brain.resolveContradiction(b.memory.id, a.memory.id, 'keep_oldest');
-    expect(result.resolved).toBe(false);
-    expect(result.archivedId).toBeUndefined();
-    expect(result.keptId).toBeUndefined();
+    expect(result.resolved).toBe(true);
+    expect(result.archivedId).toBe(b.memory.id);
+    expect(result.keptId).toBe(a.memory.id);
 
     const [loser] = await db.select().from(schema.memories).where(eq(schema.memories.id, b.memory.id));
-    expect(loser!.archivedAt).toBeNull();
-    expect(loser!.updatedAt).toBe(b.memory.updatedAt);
+    expect(loser!.archivedAt).toBeTruthy();
+    expect(loser!.updatedAt).toBe(loser!.archivedAt);
 
     const [winner] = await db.select().from(schema.memories).where(eq(schema.memories.id, a.memory.id));
     expect(winner!.archivedAt).toBeNull();
@@ -351,7 +351,7 @@ describe('resolveContradiction() atomicity', () => {
       .from(schema.memoryConnections)
       .where(eq(schema.memoryConnections.relationship, 'contradicts'));
     expect(remaining).toHaveLength(1);
-    expect(remaining[0]!.deletedAt).toBeNull();
+    expect(remaining[0]!.deletedAt).toBeTruthy();
 
     const live = await db
       .select()
@@ -362,7 +362,7 @@ describe('resolveContradiction() atomicity', () => {
           isNull(schema.memoryConnections.deletedAt)
         )
       );
-    expect(live).toHaveLength(1);
+    expect(live).toHaveLength(0);
   });
 
   it('keep_both leaves both memories and the edge intact', async () => {
@@ -381,12 +381,12 @@ describe('resolveContradiction() atomicity', () => {
       relationship: 'contradicts',
       strength: 0.9,
       bidirectional: false,
-      metadata: '{}',
+      metadata: JSON.stringify({ status: 'confirmed' }),
       createdAt: new Date().toISOString(),
     });
 
     const result = await brain.resolveContradiction(b.memory.id, a.memory.id, 'keep_both');
-    expect(result.resolved).toBe(false);
+    expect(result.resolved).toBe(true);
     expect(result.archivedId).toBeUndefined();
 
     const rows = await db.select().from(schema.memories);

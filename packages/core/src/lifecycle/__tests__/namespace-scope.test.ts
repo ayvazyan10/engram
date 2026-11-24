@@ -159,9 +159,13 @@ describe('mutation scope', () => {
   });
 
   it('permits mutations of global rows', async () => {
+    getDb().insert(schema.memoryConnections).values({
+      id: 'own-global', sourceId: own.id, targetId: global.id, relationship: 'contradicts',
+      metadata: JSON.stringify({ status: 'confirmed' }),
+    }).run();
     expect((await brain.updateMemory(global.id.slice(0, 8), { importance: 0.8 })).importance).toBe(0.8);
     expect(await brain.addTag(global.id, 'changed')).toContain('changed');
-    expect(await brain.resolveContradiction(own.id, global.id, 'keep_both')).toMatchObject({ resolved: false });
+    expect(await brain.resolveContradiction(own.id, global.id, 'keep_both')).toMatchObject({ resolved: true });
     await brain.forget(global.id);
     expect(brain.resolveMemoryId(global.id)).toBeUndefined();
   });
