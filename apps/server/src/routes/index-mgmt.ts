@@ -61,24 +61,12 @@ export const indexRoutes: FastifyPluginAsync = async (app) => {
       tags: ['index'],
       summary: 'Force save the vector index to disk immediately',
     },
-    handler: async (req, reply) => {
-      try {
-        await runExclusive('index-save', () => brain.saveIndexAsync());
-        const status = brain.getIndexStatus();
-        return {
-          ...serializeIndexStatus(status),
-          // The old message interpolated status.indexPath, so the success
-          // response leaked the same absolute path the status route did.
-          message: 'Index saved',
-        };
-      } catch (err: unknown) {
-        // runExclusive's 409 is a caller-visible conflict, not a save failure.
-        if (err instanceof Error && 'statusCode' in err) throw err;
-        // Anything else here is an I/O failure whose message names a path.
-        req.log.error({ err }, 'index save failed');
-        reply.code(400);
-        return { error: 'Index could not be saved. See the server log for details.' };
-      }
+    handler: async () => {
+      await runExclusive('index-save', () => brain.saveIndexAsync());
+      return {
+        ...serializeIndexStatus(brain.getIndexStatus()),
+        message: 'Index saved',
+      };
     },
   });
 };

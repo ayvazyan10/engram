@@ -46,22 +46,26 @@ function resolveInterval(raw: string | undefined): number | undefined {
   // Not parseInt: it reads "10abc" as 10 and "soon" as NaN, and both used to
   // reach setInterval unchallenged.
   const parsed = Number(value.trim());
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
     throw new Error(
-      `ENGRAM_SYNC_INTERVAL must be a positive whole number of milliseconds (got ${JSON.stringify(value)})`,
+      `ENGRAM_SYNC_INTERVAL must be a positive whole number of milliseconds up to 2147483647 (got ${JSON.stringify(value)})`,
     );
   }
   return parsed;
 }
 
 export function readSyncSettings(env: SyncEnv): SyncSettings {
+  const encryptionKey = env['ENGRAM_SYNC_ENCRYPTION_KEY'] || undefined;
+  if (encryptionKey && !encryptionKey.trim()) {
+    throw new Error('ENGRAM_SYNC_ENCRYPTION_KEY must contain a non-whitespace character or be empty to disable encryption');
+  }
   return {
     syncUrl: present(env['ENGRAM_SYNC_URL']),
     mode: resolveMode(env['ENGRAM_SYNC_MODE']),
     intervalMs: resolveInterval(env['ENGRAM_SYNC_INTERVAL']),
     // Passed through byte-for-byte: trimming it would derive a different key
     // and make every previously-encrypted row unreadable.
-    encryptionKey: present(env['ENGRAM_SYNC_ENCRYPTION_KEY']),
+    encryptionKey,
   };
 }
 

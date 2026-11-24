@@ -47,22 +47,25 @@ export function resolveNamespaceSettings(env: NamespaceEnv, cwd = process.cwd())
 
   if (raw === 'project') {
     if (namespace) return { namespaceMode: 'filter', namespace };
+    const git = (...args: string[]) => execFileSync('git', args, {
+      encoding: 'utf8', timeout: 500, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
     try {
-      const commonDir = execFileSync('git', ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {
-        encoding: 'utf8', timeout: 500, stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
-      // Worktrees share the main repository's namespace (common dir <repo>/.git).
-      // Old git echoing --path-format, or a submodule, falls through to the top level.
-      if (path.isAbsolute(commonDir) && path.basename(commonDir) === '.git') {
-        return { namespaceMode: 'filter', namespace: path.dirname(commonDir) };
+      const commonDir = git('-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir');
+      if (path.isAbsolute(commonDir)) {
+        // Query the common repository itself. Its linked checkouts are worktrees even when it is bare.
+        if (git('--git-dir', commonDir, 'rev-parse', '--is-bare-repository') === 'true') {
+          return { namespaceMode: 'filter', namespace: commonDir };
+        }
+        if (path.basename(commonDir) === '.git') {
+          return { namespaceMode: 'filter', namespace: path.dirname(commonDir) };
+        }
       }
     } catch {
       // Older git versions may not support --path-format; try the top level.
     }
     try {
-      const root = execFileSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], {
-        encoding: 'utf8', timeout: 500, stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
+      const root = git('-C', cwd, 'rev-parse', '--show-toplevel');
       if (root) return { namespaceMode: 'filter', namespace: root };
     } catch {
       // Outside a repository (or without git), use the directory unless it is a host launch default.

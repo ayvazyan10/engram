@@ -28,6 +28,7 @@
  */
 
 import http from 'http';
+import { finished } from 'node:stream/promises';
 import { URL } from 'url';
 
 import { extractUserQuery, injectContext, buildRetryBody, validateChatBody } from './messages.js';
@@ -67,6 +68,7 @@ const MAX_BODY_BYTES = config.maxBodyBytes;
 const TOOL_RETRY = config.toolRetry;
 const UPSTREAM_TIMEOUT_MS = config.upstreamTimeoutMs;
 
+if (!URL.canParse(OLLAMA_TARGET)) throw new Error('Invalid upstream URL');
 const target: UpstreamTarget = {
   url: new URL(OLLAMA_TARGET),
   timeoutMs: UPSTREAM_TIMEOUT_MS,
@@ -88,10 +90,11 @@ interface ChatDispatch {
 let engramFailureLogged = false;
 
 /** The first failed call is the one worth reporting; later ones are noise. */
-function logEngramFailure(status: number): void {
+function logEngramFailure(status?: number): void {
   if (engramFailureLogged) return;
   engramFailureLogged = true;
-  console.warn(`[Engram] Engram API returned HTTP ${status} — memory is not working`);
+  const reason = status === undefined ? 'request failed' : `returned HTTP ${status}`;
+  console.warn(`[Engram] Engram API ${reason} — memory is not working`);
 }
 
 function engramHeaders(): Record<string, string> {
@@ -115,6 +118,7 @@ async function recallContext(query: string): Promise<string> {
     const data = await response.json() as { context?: string };
     return data.context ?? '';
   } catch {
+    logEngramFailure();
     return '';
   }
 }
@@ -129,7 +133,7 @@ async function storeMemory(content: string, source: string = 'ollama'): Promise<
     });
     if (!response.ok) logEngramFailure(response.status);
   } catch {
-    // fire-and-forget — never block the response
+    logEngramFailure();
   }
 }
 
@@ -233,12 +237,13 @@ function shouldRetryToolCall(body: Record<string, unknown>): boolean {
 }
 
 /** Buffer the response so a model that answered in prose can be re-asked once. */
-async function handleToolCall(d: ChatDispatch): Promise<void> {
+async function handleToolCall(d: ChatDispatch, signal: AbortSignal): Promise<void> {
   const parse = d.openai ? parseOpenAIResponse : parseOllamaResponse;
   const bodyBuf = Buffer.from(JSON.stringify(d.body));
 
-  const first = await makeBufferedRequest(target, d.url, d.method, d.headers, bodyBuf)
+  const first = await makeBufferedRequest(target, d.url, d.method, d.headers, bodyBuf, signal)
     .catch(() => null);
+  if (signal.aborted) return;
   if (!first) { d.res.writeHead(502); d.res.end('Bad Gateway'); return; }
 
   const parsed = parse(first.body.toString());
@@ -252,29 +257,35 @@ async function handleToolCall(d: ChatDispatch): Promise<void> {
   if (missedToolCall) {
     console.info(`[Engram] Tool call missed — retrying with instruction`);
     const retryBuf = Buffer.from(JSON.stringify(buildRetryBody(d.body, parsed.text)));
-    retry = await makeBufferedRequest(target, d.url, d.method, d.headers, retryBuf)
+    retry = await makeBufferedRequest(target, d.url, d.method, d.headers, retryBuf, signal)
       .catch(() => null);
+    if (signal.aborted) return;
   }
 
   // Store and forward only the response the client actually receives. The
   // synthetic retry instruction is never part of a remembered exchange.
-  const delivered = retry ?? first;
+  const delivered = retry && retry.status >= 200 && retry.status < 300 ? retry : first;
   d.res.writeHead(delivered.status, delivered.headers);
   d.res.end(delivered.body);
+  try {
+    await finished(d.res, { cleanup: true });
+  } catch {
+    return;
+  }
   rememberExchange(
     d.userQuery,
     parse(delivered.body.toString()).text,
-    retry ? 'ollama-retry' : 'ollama'
+    delivered === retry ? 'ollama-retry' : 'ollama'
   );
 }
 
-/** Stream straight through, keeping a copy for auto-store. */
+/** Auto-store only when the whole streamed reply fit in the capture buffer. */
 async function handleStream(d: ChatDispatch): Promise<void> {
   const bodyBuf = Buffer.from(JSON.stringify(d.body));
   const responseBody = await streamRequest(target, d.url, d.method, d.headers, bodyBuf, d.res)
     .catch(() => null);
 
-  if (!responseBody) return; // error already written by streamRequest
+  if (!responseBody?.length) return;
 
   const parse = d.openai ? parseOpenAIResponse : parseOllamaResponse;
   rememberExchange(d.userQuery, parse(responseBody.toString()).text, 'ollama');
@@ -306,13 +317,15 @@ async function handleChatRequest(
 
   // Registered before the recall await: a client that hangs up while recall is
   // pending must not still have a request dispatched to Ollama.
-  let clientGone = false;
-  res.once('close', () => { clientGone = true; });
+  const disconnect = new AbortController();
+  res.once('close', () => {
+    if (!res.writableFinished) disconnect.abort();
+  });
 
   const body = userQuery
     ? await withRecalledContext(validated.body, userQuery, openai)
     : validated.body;
-  if (clientGone) return;
+  if (disconnect.signal.aborted) return;
 
   const dispatch: ChatDispatch = {
     res,
@@ -325,10 +338,15 @@ async function handleChatRequest(
   };
 
   const hasTools = Array.isArray(body['tools']) && (body['tools'] as unknown[]).length > 0;
-  await (hasTools && TOOL_RETRY ? handleToolCall(dispatch) : handleStream(dispatch));
+  await (hasTools && TOOL_RETRY ? handleToolCall(dispatch, disconnect.signal) : handleStream(dispatch));
 }
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!isTrustedRequest(req)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain', Connection: 'close' });
+    res.end('Forbidden');
+    return;
+  }
   const url = req.url ?? '/';
 
   const read = await readLimitedBody(req, MAX_BODY_BYTES);
@@ -346,6 +364,21 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
 
+function isTrustedRequest(req: http.IncomingMessage): boolean {
+  const host = req.headers.host?.toLowerCase();
+  if (!host) return false;
+  // A wildcard bind accepts LAN requests addressed to the receiving interface.
+  const localAddress = req.socket.localAddress?.replace(/^::ffff:(?=\d+\.)/, '');
+  const hosts = ['localhost', '127.0.0.1', '::1', LISTEN_HOST.toLowerCase(), localAddress];
+  const allowed = hosts.some((name) => {
+    if (!name) return false;
+    const hostname = name.includes(':') ? `[${name}]` : name;
+    return host === hostname || host === `${hostname}:${req.socket.localPort}`;
+  });
+  const origin = req.headers.origin;
+  return allowed && (origin === undefined || origin === `http://${host.replace(/:80$/, '')}`);
+}
+
 /** Answer a request whose handler threw, instead of letting the process die. */
 function failRequest(res: http.ServerResponse, err: unknown): void {
   console.error(`[Engram] Request handler failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -353,7 +386,7 @@ function failRequest(res: http.ServerResponse, err: unknown): void {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Internal Proxy Error');
   } else if (!res.writableEnded) {
-    res.end();
+    res.destroy();
   }
 }
 
@@ -393,8 +426,8 @@ proxy.listen(PROXY_PORT, LISTEN_HOST, () => {
   } else {
     console.warn(`  Bind:         ${LISTEN_HOST} — reachable off-host, and this proxy has no auth`);
   }
-  console.info(`  Ollama target: ${OLLAMA_TARGET}`);
-  console.info(`  Engram:   ${ENGRAM_API}`);
+  console.info(`  Ollama target: ${target.url.origin}`);
+  console.info(`  Engram:   ${URL.canParse(ENGRAM_API) ? new URL(ENGRAM_API).origin : '(invalid URL)'}`);
   console.info(`  Max body:     ${MAX_BODY_BYTES} bytes`);
   console.info(`  Tool retry:    ${TOOL_RETRY ? 'enabled' : 'disabled'}`);
   console.info('');

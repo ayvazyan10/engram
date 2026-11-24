@@ -221,8 +221,8 @@ function placeNodes(rows: readonly LoadedRow[]): Omit<LayoutPayload, 'fingerprin
 // ─── Caching ─────────────────────────────────────────────────────────────────
 //
 // A PCA over the whole store must not run per request. Both caches key on a
-// fingerprint of the rows they read — row count plus the newest timestamp —
-// so any store, archive, edit or delete invalidates them and nothing else does.
+// fingerprint of the rows they read. Recalls advance access counts without
+// changing updatedAt, so the layout also tracks the total access count.
 
 let layoutCache: { fingerprint: string; payload: LayoutPayload } | null = null;
 let edgeCache: { fingerprint: string; edges: SceneEdge[]; stored: number } | null = null;
@@ -240,10 +240,11 @@ export async function memoryFingerprint(conditions: SQL[] = memoryScope()): Prom
       total: sql<number>`count(*)`,
       newest: sql<string | null>`max(${schema.memories.updatedAt})`,
       created: sql<string | null>`max(${schema.memories.createdAt})`,
+      accesses: sql<number | null>`sum(${schema.memories.accessCount})`,
     })
     .from(schema.memories)
     .where(and(...conditions));
-  return `m:${row?.total ?? 0}:${row?.newest ?? '-'}:${row?.created ?? '-'}:${brain.getNamespace() ?? '-'}`;
+  return `m:${row?.total ?? 0}:${row?.newest ?? '-'}:${row?.created ?? '-'}:${row?.accesses ?? 0}:${brain.getNamespace() ?? '-'}`;
 }
 
 async function buildLayout(fingerprint: string, conditions: SQL[]): Promise<LayoutPayload> {

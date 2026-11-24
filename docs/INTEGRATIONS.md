@@ -460,7 +460,7 @@ Search for specific memories by semantic similarity.
 Input:
   query      string   required
   topK       integer  optional  — number of results (default: 10)
-  threshold  float    optional  — minimum similarity (default: 0.3)
+  threshold  float    optional  — minimum cosine similarity (default: 0.3). Hybrid keyword matches may score lower.
   types      string[] optional  — filter by memory type
 
 Output:
@@ -547,7 +547,7 @@ Output:
 
 #### `get_contradiction_tasks`
 
-Returns pending unverified pairs visible to the connected namespace. Optional `limit` is an integer from 1–100 (default 20). Each task includes `source` and `target` with `id`, full `content`, `createdAt`, and `source`, plus `confidence`, `signals`, and `suggestedStrategy`. Legacy detector edges are pending candidates too.
+Returns pending unverified pairs visible to the connected namespace. Optional `limit` is an integer from 1–100 (default 20). Each task includes `source` and `target` with `id`, `content`, `truncated`, `createdAt`, and `source`, plus `confidence`, `signals`, and `suggestedStrategy`. Each side contains up to the first 500 UTF-16 code units of its memory in `content`. Its `truncated` flag is true when more text follows. Legacy detector edges are pending candidates too.
 
 #### `complete_contradiction_check`
 

@@ -15,7 +15,7 @@
  * Deliberately does NOT match `Memory <id> has no embedding`: that memory
  * exists, so the answer is not 404.
  */
-const MEMORY_NOT_FOUND = /^Memory (?:.+ not found|not found: .+)$/;
+const MEMORY_NOT_FOUND = /^Memory (?:.* not found|not found: .*)$/s;
 
 export function isMemoryNotFound(err: unknown): boolean {
   return err instanceof Error && MEMORY_NOT_FOUND.test(err.message);

@@ -1,7 +1,7 @@
 import { resolveDbPath } from '@engram-ai-memory/core';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { isMainThread, Worker, workerData } from 'node:worker_threads';
@@ -74,16 +74,22 @@ function newerThan(latest: string, installed: string): boolean {
 
 async function staleServerNotice(installed: string): Promise<string> {
   if (process.platform !== 'linux' && process.platform !== 'darwin') return '';
-  const repo = path.resolve(__dirname, '../../..');
   const { stdout } = await promisify(execFile)('ps', ['-eo', 'pid=,ppid=,etime=,args=', '-ww'], {
     timeout: 1500, maxBuffer: 16 * 1024 * 1024,
   });
   const now = Date.now();
   const lines = stdout.split('\n');
   const parents = new Map<number, number>();
+  const launchers = new Set<number>();
   for (const line of lines) {
-    const row = /^\s*(\d+)\s+(\d+)\s/.exec(line);
-    if (row) parents.set(Number(row[1]), Number(row[2]));
+    const row = /^\s*(\d+)\s+(\d+)\s+\S+\s+(.+)$/.exec(line);
+    if (!row) continue;
+    parents.set(Number(row[1]), Number(row[2]));
+    // npx can leave both "npm exec ... engram-mcp" and "sh -c engram-mcp"
+    // between the server and the client that also launched this hook.
+    if (/^(?:npm exec |npx |(?:\S*\/)?(?:ba|da|z)?sh -c ).*\bengram-mcp\b/.test(row[3]!)) {
+      launchers.add(Number(row[1]));
+    }
   }
   const ancestors = new Set<number>();
   let pid = parents.get(process.pid);
@@ -92,25 +98,30 @@ async function staleServerNotice(installed: string): Promise<string> {
     ancestors.add(pid);
     pid = parents.get(pid);
   }
-  for (const [script, kind] of [['packages/mcp/dist/server.js', 'MCP'], ['apps/server/dist/index.js', 'HTTP']] as const) {
-    const filename = path.join(repo, script);
+  for (const [script, kind] of [['../dist/server.js', 'MCP'], ['../../../apps/server/dist/index.js', 'HTTP']] as const) {
+    const filename = path.resolve(__dirname, script);
     const build = await stat(filename).catch(() => undefined);
     if (!build) continue;
-    const stale = lines.some(line => {
+    for (const line of lines) {
       // ps etime is [[DD-]HH:]MM:SS. Match the node entrypoint, including homes with spaces.
       const row = /^\s*\d+\s+(\d+)\s+(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s+(?:\S*\/)?node(?:js)?\s+(?:--[\w-]+(?:=\S+)?\s+)*(?:--\s+)?(.+)$/.exec(line);
-      if (!row) return false;
+      if (!row) continue;
       const [, ppid, days, hours, minutes, seconds, args] = row;
-      if (kind === 'MCP' && !ancestors.has(Number(ppid))) return false;
-      if (args !== filename && !args?.startsWith(filename + ' ')) return false;
       const totalHours = Number(days ?? 0) * 24 + Number(hours ?? 0);
       const elapsed = (totalHours * 60 + Number(minutes)) * 60 + Number(seconds);
-      return now - elapsed * 1000 < build.mtimeMs;
-    });
-    if (stale) {
+      if (now - elapsed * 1000 >= build.mtimeMs) continue;
+      if (kind === 'MCP') {
+        let parent = Number(ppid);
+        while (launchers.has(parent) && !ancestors.has(parent)) parent = parents.get(parent) ?? 0;
+        if (!ancestors.has(parent)) continue;
+      }
+      if (args !== filename && !args?.startsWith(filename + ' ')) {
+        const bin = kind === 'MCP' && args?.match(/^(\/.+?\/(?:engram-mcp|mcp))(?=\s|$)/)?.[1];
+        if (!bin || await realpath(bin).catch(() => '') !== filename) continue;
+      }
       return kind === 'MCP'
         ? `Engram MCP in this session was started before the installed v${installed} build — restart the client to load it.`
-        : `An Engram HTTP server is running an older build (version unknown), installed v${installed} — run \`engram stop\` then \`engram start\` to load it.`;
+        : 'An Engram HTTP server was started before the installed build. Run `engram stop` then `engram start` to load it.';
     }
   }
   return '';

@@ -24,7 +24,9 @@ function registerStoreMemory({ server, brain, ensureInitialized, syncEngine, cli
       importance: z.number().min(0).max(1).optional().describe('Importance score 0.0–1.0 (default varies by type)'),
       concept: z.string().optional().describe('For semantic memories: the concept name'),
       sessionId: z.string().optional().describe('Session ID to group related episodic memories'),
-      namespace: z.string().optional().describe('Leave unset; the server scopes to the current project.'),
+      namespace: z.string().optional().describe(brain.getNamespace()
+        ? 'Leave unset to store in the current project.'
+        : 'Set the project namespace for a project-specific memory. Omitting it stores the memory globally.'),
       global: z.boolean().optional().describe('true only for facts about the user that hold in every project.'),
     },
     { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -74,6 +76,7 @@ function registerUpdateMemory({ server, brain, ensureInitialized, syncEngine }: 
     },
     { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     async ({ id, ...updates }) => {
+      if (!Object.keys(updates).length) throw new Error('Provide at least one of content, importance, tags, or concept.');
       await ensureInitialized();
       const memory = await brain.updateMemory(id, updates);
       syncEngine?.notifyWrite();
@@ -103,7 +106,7 @@ function registerSearchMemory({ server, brain, ensureInitialized }: ToolContext)
         .max(1)
         .optional()
         .default(0.3)
-        .describe('Minimum similarity threshold (0.0–1.0)'),
+        .describe('Minimum cosine similarity (0.0–1.0). Hybrid search can also return keyword matches below this threshold.'),
       types: z
         .array(z.enum(['episodic', 'semantic', 'procedural']))
         .optional()
@@ -165,7 +168,7 @@ function registerRecallContext({ server, brain, ensureInitialized, clientSource 
       crossNamespace: z.boolean().optional().default(false).describe('Search every project in filter mode; rejected in isolated mode'),
       progressive: z.boolean().optional().default(false).describe('Use streaming recall to assemble the context text'),
     },
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     async ({ query, maxTokens, types, sources, since, until, tags, crossNamespace, progressive }) => {
       await ensureInitialized();
       const options = { maxTokens, types, sources, since, until, tags, source: clientSource(), crossNamespace };

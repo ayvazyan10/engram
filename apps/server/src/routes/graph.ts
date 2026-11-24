@@ -165,7 +165,7 @@ export const graphRoutes: FastifyPluginAsync = async (app) => {
         relationship: req.body.relationship as 'is_a' | 'has_property' | 'causes' | 'relates_to' | 'contradicts' | 'part_of' | 'follows',
         strength: req.body.strength ?? 1.0,
         bidirectional: req.body.bidirectional ?? false,
-        metadata: '{}',
+        metadata: req.body.relationship === 'contradicts' ? JSON.stringify({ status: 'confirmed' }) : '{}',
         createdAt: now,
         updatedAt: now,
         deviceId: getDeviceId(),

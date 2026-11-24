@@ -45,6 +45,7 @@ function callThrough(
       // agent:false — avoid keep-alive sockets keeping the server open in afterEach.
       const req = http.request({ hostname: '127.0.0.1', port, path: '/api/chat', method: 'POST', agent: false }, (res) => {
         const chunks: Buffer[] = [];
+        res.on('error', reject);
         res.on('data', (c: Buffer) => chunks.push(c));
         res.on('end', () =>
           resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString(), headers: res.headers })
@@ -155,13 +156,9 @@ describe('streamRequest', () => {
       });
     });
 
-    const response = await callThrough((_req, res) => {
+    await expect(callThrough((_req, res) => {
       void streamRequest(target, '/api/chat', 'POST', {}, Buffer.from('{}'), res).catch(() => {});
-    });
-
-    // The client must get a terminated response rather than an open socket.
-    expect(response.status).toBe(200);
-    expect(response.body).toContain('partial');
+    })).rejects.toMatchObject({ code: 'ECONNRESET' });
   });
 });
 
@@ -198,12 +195,9 @@ describe('passthrough', () => {
       });
     });
 
-    const response = await callThrough((req, res) => {
+    await expect(callThrough((req, res) => {
       passthrough(target, req, res, Buffer.from(''));
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.body).toContain('"partial"');
+    })).rejects.toMatchObject({ code: 'ECONNRESET' });
   });
 
   it('times out instead of hanging forever on a silent upstream', async () => {
@@ -333,8 +327,8 @@ describe('upstreamPort', () => {
     expect(upstreamPort(new URL('https://ollama.example.com'))).toBe(443);
   });
 
-  it("keeps Ollama's default port for an http target with no port", () => {
-    expect(upstreamPort(new URL('http://localhost'))).toBe(11434);
+  it('uses port 80 for an http target with no port', () => {
+    expect(upstreamPort(new URL('http://localhost'))).toBe(80);
   });
 });
 

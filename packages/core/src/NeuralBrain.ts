@@ -1869,7 +1869,6 @@ export class NeuralBrain {
       dryRun,
       namespace
     );
-
     if (dryRun) return result;
 
     const newIds = await this.decayEngine.autoConsolidate(
@@ -2307,7 +2306,7 @@ export class NeuralBrain {
     // Existing core callers use soft filter-mode visibility (project + shared).
     // REST supplies the global selector, even when false, for exact list scope.
     if (global !== undefined) {
-      if (this.activeNamespace) conditions.push(eq(schema.memories.namespace, this.activeNamespace));
+      if (this.activeNamespace && !global) conditions.push(eq(schema.memories.namespace, this.activeNamespace));
       if (namespace !== undefined) conditions.push(eq(schema.memories.namespace, namespace));
       if (global) conditions.push(isNull(schema.memories.namespace));
     }

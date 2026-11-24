@@ -26,22 +26,18 @@ case "$NAMESPACE_MODE" in
   project)
     if [ -z "$PROJECT" ]; then
       CWD=$(cd -- "${CWD:-.}" 2>/dev/null && pwd -L) || exit 0
-      # Worktrees share the main repository's namespace (common dir <repo>/.git).
-      # Anything else (old git echoing --path-format, submodules) uses the top level.
-      if command -v timeout >/dev/null 2>&1; then
-        if PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
-            [[ ( "$PROJECT" = /* || "$PROJECT" = [A-Za-z]:/* ) && "$PROJECT" = */.git ]]; then
-          PROJECT="${PROJECT%/.git}"
-        else
-          PROJECT=$(timeout 0.5 git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
+      git_cmd=(git)
+      if command -v timeout >/dev/null 2>&1; then git_cmd=(timeout 0.5 git); fi
+      if common_dir=$("${git_cmd[@]}" -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+          [[ "$common_dir" = /* || "$common_dir" = [A-Za-z]:/* ]]; then
+        if [[ $("${git_cmd[@]}" --git-dir "$common_dir" rev-parse --is-bare-repository 2>/dev/null) = true ]]; then
+          PROJECT="$common_dir"
+        elif [[ "$common_dir" = */.git ]]; then
+          PROJECT="${common_dir%/.git}"
         fi
-      else
-        if PROJECT=$(git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
-            [[ ( "$PROJECT" = /* || "$PROJECT" = [A-Za-z]:/* ) && "$PROJECT" = */.git ]]; then
-          PROJECT="${PROJECT%/.git}"
-        else
-          PROJECT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
-        fi
+      fi
+      if [ -z "$PROJECT" ]; then
+        PROJECT=$("${git_cmd[@]}" -C "$CWD" rev-parse --show-toplevel 2>/dev/null) || PROJECT=""
       fi
       if [ -z "$PROJECT" ]; then
         case "$CWD" in /|"$HOME") PROJECT="" ;; *) PROJECT="$CWD" ;; esac
