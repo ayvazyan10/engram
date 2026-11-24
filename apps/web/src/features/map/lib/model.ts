@@ -25,7 +25,12 @@ export interface MapModel {
   bounds: Rect | null;
 }
 
-export function buildModel(payload: Pick<MapPayload, 'nodes' | 'regions'>): MapModel {
+export function buildModel(payload: Pick<MapPayload, 'nodes' | 'regions'>, layout?: MapModel): MapModel {
+  // Labels are cut from the memory's text, Markdown and all; shown plain.
+  const nodes = payload.nodes.map((node) => ({ ...node, label: toPlainText(node.label) }));
+  const regions = [...payload.regions].sort((a, b) => b.count - a.count);
+  if (layout) return { ...layout, nodes, regions };
+
   const n = payload.nodes.length;
   const xs = new Float64Array(n);
   const ys = new Float64Array(n);
@@ -37,15 +42,14 @@ export function buildModel(payload: Pick<MapPayload, 'nodes' | 'regions'>): MapM
     at.set(node.id, i);
   });
   return {
-    // Labels are cut from the memory's text, Markdown and all; shown plain.
-    nodes: payload.nodes.map((node) => ({ ...node, label: toPlainText(node.label) })),
+    nodes,
     at,
     xs,
     ys,
     created,
     index: buildIndex(xs, ys),
     terrain: terrain(xs, ys),
-    regions: [...payload.regions].sort((a, b) => b.count - a.count),
+    regions,
     anchors: new Map(payload.regions.map((r) => [r.id, toLayout(r.x, r.y)])),
     bounds: boundsOf(xs, ys),
   };

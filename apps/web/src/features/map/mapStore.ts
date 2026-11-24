@@ -133,11 +133,15 @@ export async function loadMap(scope: ProjectFilter, sleep: (ms: number) => Promi
     try {
       const payload = await api.getMap(scope);
       if (mine !== generation) return;
-      const prev = useMapStore.getState().payload;
-      // An unchanged map keeps its objects, so the views drawn from them
-      // (Sky, Landscape, River, Pulse) are not torn down and rebuilt.
-      if (prev && prev.fingerprint === payload.fingerprint) {
-        useMapStore.setState({ status: 'ready', error: null });
+      const { payload: prev, model } = useMapStore.getState();
+      // A cached layout still carries fresh decay scores and weekly counts.
+      if (prev && model && prev.fingerprint === payload.fingerprint && prev.generatedAt === payload.generatedAt) {
+        const changed = payload.nodes.some((n, i) => n.retention !== prev.nodes[i]!.retention || n.protected !== prev.nodes[i]!.protected)
+          || payload.regions.some((r, i) => r.newThisWeek !== prev.regions[i]!.newThisWeek);
+        useMapStore.setState({
+          status: 'ready', error: null,
+          ...(changed ? { payload, model: buildModel(payload, model) } : {}),
+        });
         return;
       }
       const arrivals = new Map(useMapStore.getState().arrivals);

@@ -149,10 +149,13 @@ export default function TimelineView() {
     // in the sheet show through, and archived memories leave at once.
     const live = new Map(liveRecords.map((r) => [r.id, r]));
     const newest = rows[0]?.createdAt;
-    const arrivals = !picked && newest ? liveRecords.filter((r) => r.createdAt > newest && !rows.some((x) => x.id === r.id)) : [];
+    const arrivals = !picked && (newest || done) ? liveRecords.filter((r) =>
+      (projectFilter === undefined || (r.namespace ?? null) === projectFilter)
+      && (!newest || r.createdAt > newest) && !rows.some((x) => x.id === r.id)
+    ) : [];
     const shown = [...arrivals, ...rows.map((r) => live.get(r.id) ?? r)].filter((r) => !hiddenIds.has(r.id));
     return groupByDay(shown);
-  }, [rows, liveRecords, hiddenIds, picked]);
+  }, [rows, liveRecords, hiddenIds, picked, done, projectFilter]);
 
   const known = stats?.byNamespace.map((b) => b.namespace) ?? [];
   const showProject = known.some((ns) => ns !== null) && projectFilter === undefined;

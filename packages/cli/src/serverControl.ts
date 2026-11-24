@@ -42,6 +42,11 @@ export function connectHost(host: string): string {
   return host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
 }
 
+export function serverUrl(host: string, port: number): string {
+  const address = connectHost(host);
+  return `http://${address.includes(':') ? `[${address}]` : address}:${port}`;
+}
+
 /** True if the given PID is alive (signal-0 probe). */
 export function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -125,7 +130,7 @@ export async function awaitServerHealthy(
 ): Promise<StartupResult> {
   const attempts = opts.attempts ?? 30;
   const intervalMs = opts.intervalMs ?? 500;
-  const url = `http://${connectHost(host)}:${port}/api/health`;
+  const url = `${serverUrl(host, port)}/api/health`;
 
   const hasExited = (): boolean => child.exitCode !== null || child.signalCode !== null;
 

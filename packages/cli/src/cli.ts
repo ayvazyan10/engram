@@ -15,7 +15,7 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'node:url';
 import { execSync, spawn, spawnSync } from 'child_process';
-import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, connectHost, staleServerPids } from './serverControl.js';
+import { pidAlive, isPortOpen, awaitServerHealthy, verifyServer, portListenerPid, serverUrl, staleServerPids } from './serverControl.js';
 import { CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_HOOKS, atomicWriteConfig, configObject, readJson, claudeHookCommands } from './claudeSetup.js';
 import { syncRepo, nonInteractiveEnv } from './gitUpdate.js';
 import { currentGlobalPrefix, globalInstallCommand } from './globalInstall.js';
@@ -29,7 +29,7 @@ import {
   mcpServerConfig,
 } from './mcpClients.js';
 import {
-  shortHead, checkPrerequisites, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
+  shortHead, checkPrerequisites, requireEngramWorkspace, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
   CLAUDE_PATHS, hasMcpClientConfig, claudePluginEnabled, restHookDependencyIssue,
 } from './setupSteps.js';
 import {
@@ -99,10 +99,13 @@ function saveConfig(config: EngramConfig): void {
   atomicWriteConfig(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 0o600);
 }
 
-function getApiBase(): string {
-  const config = loadConfig();
-  const host = connectHost(config.host);
-  return `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
+function getApiBase(config = loadConfig()): string {
+  return serverUrl(config.host, config.port);
+}
+
+function disablesSyncTls(url?: string): boolean {
+  // node-postgres uses the last value of a repeated connection parameter.
+  return !!url && URL.canParse(url) && new URL(url).searchParams.getAll('sslmode').at(-1) === 'disable';
 }
 
 /** Delete the pidfile only when it still contains the given pid. */
@@ -211,6 +214,7 @@ program
     if (!opts.npx) {
       step(`Cloning Engram into ${config.repoPath}...`);
       if (fs.existsSync(path.join(config.repoPath, '.git'))) {
+        requireEngramWorkspace(config.repoPath);
         step('Repository exists — pulling latest...');
         const sync = syncRepo(config.repoPath, { log: { step, warn } });
         if (sync.status === 'updated') ok('Repository updated');
@@ -248,6 +252,7 @@ program
         }
       }
 
+      requireEngramWorkspace(config.repoPath);
       const execEnv = { ...process.env, NODE_NO_WARNINGS: '1' };
 
       step('Installing dependencies...');
@@ -323,8 +328,8 @@ program
       console.log(`  Start the server:     ${D}engram start${X}`);
       console.log(`  Check health:         ${D}engram doctor${X}`);
       console.log(`  Store a memory:       ${D}engram store "hello world"${X}`);
-      console.log(`  Open dashboard:       ${C}http://localhost:${config.port}${X}`);
-      console.log(`  Swagger docs:         ${C}http://localhost:${config.port}/docs${X}`);
+      console.log(`  Open dashboard:       ${C}${getApiBase(config)}${X}`);
+      console.log(`  Swagger docs:         ${C}${getApiBase(config)}/docs${X}`);
     }
     console.log();
   });
@@ -348,7 +353,7 @@ program
     const { running, pid } = isServerRunning(config);
     if (running) {
       warn(`Server already running (PID ${pid})`);
-      console.log(`  Dashboard: http://${config.host}:${config.port}`);
+      console.log(`  Dashboard: ${getApiBase(config)}`);
       return;
     }
 
@@ -373,7 +378,7 @@ program
       ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
       ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
       ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
-      ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
+      ...(disablesSyncTls(config.syncUrl) ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
       ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
     };
 
@@ -395,10 +400,9 @@ program
       }
       const release = (): void => releasePidFileIfOwnedBy(child.pid);
       child.on('exit', (code) => { release(); process.exit(code ?? 0); });
-      // Ctrl-C reaches the child too; clean up rather than leaving a pidfile
-      // pointing at a PID the system is free to hand to somebody else.
+      // A supervisor can signal just the wrapper. Keep the pidfile until the child exits.
       for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-        process.on(signal, () => { release(); process.exit(0); });
+        process.on(signal, () => child.kill(signal));
       }
       return;
     }
@@ -428,9 +432,9 @@ program
 
     if (result.healthy) {
       ok(`Engram running (PID ${child.pid})`);
-      console.log(`  Dashboard: ${C}http://${config.host}:${config.port}${X}`);
-      console.log(`  API:       ${C}http://${config.host}:${config.port}/api${X}`);
-      console.log(`  Swagger:   ${C}http://${config.host}:${config.port}/docs${X}`);
+      console.log(`  Dashboard: ${C}${getApiBase(config)}${X}`);
+      console.log(`  API:       ${C}${getApiBase(config)}/api${X}`);
+      console.log(`  Swagger:   ${C}${getApiBase(config)}/docs${X}`);
       console.log(`  Logs:      ${D}${LOG_PATH}${X}`);
     } else {
       // Remove the pidfile only if it still points at OUR child, so we cannot
@@ -545,7 +549,7 @@ program
     if (running) {
       ok(`Server running (PID ${pid})`);
       try {
-        const res = await fetch(`http://${config.host}:${config.port}/api/health`);
+        const res = await fetch(`${getApiBase(config)}/api/health`);
         const data = await res.json() as { status: string; uptime: number };
         ok(`API healthy: ${data.status} (uptime: ${Math.round(data.uptime)}s)`);
       } catch { fail(`Server running but API not responding on :${config.port}`); issues++; }
@@ -612,7 +616,7 @@ program
     }
 
     console.log(`  Server:  ${G}running${X} (PID ${pid})`);
-    console.log(`  URL:     http://${config.host}:${config.port}`);
+    console.log(`  URL:     ${getApiBase(config)}`);
 
     try {
       const health = await api<{ uptime: number }>('GET', '/api/health');
@@ -674,7 +678,7 @@ cloudCmd
     const { validateSyncUrl, redactSyncUrl } = await import('@engram-ai-memory/core');
     try {
       // Allow unencrypted for local dev if user explicitly passes sslmode=disable
-      if (url.includes('sslmode=disable')) {
+      if (disablesSyncTls(url)) {
         process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
       }
       validateSyncUrl(url);
@@ -720,7 +724,7 @@ cloudCmd
     // Never `= config.dbPath || undefined`: assigning undefined to process.env
     // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
     applyDbPathEnv(process.env, config.dbPath);
-    if (config.syncUrl.includes('sslmode=disable')) {
+    if (disablesSyncTls(config.syncUrl)) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
@@ -762,7 +766,7 @@ cloudCmd
     // Never `= config.dbPath || undefined`: assigning undefined to process.env
     // stores the STRING "undefined", and better-sqlite3 then opens ./undefined.
     applyDbPathEnv(process.env, config.dbPath);
-    if (config.syncUrl.includes('sslmode=disable')) {
+    if (disablesSyncTls(config.syncUrl)) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
@@ -821,7 +825,7 @@ cloudCmd
       process.exit(1);
     }
 
-    if (config.syncUrl.includes('sslmode=disable')) {
+    if (disablesSyncTls(config.syncUrl)) {
       process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
     }
 
@@ -950,6 +954,7 @@ program
       process.exit(1);
     }
 
+    requireEngramWorkspace(repoPath);
     const sync = syncRepo(repoPath, { force: opts.force === true, log: { step, warn } });
     let repositoryMoved = true;
 
@@ -988,6 +993,7 @@ program
       console.log();
       process.exit(1);
     } else {
+      requireEngramWorkspace(repoPath);
       ok('Repository updated');
     }
 
@@ -1054,7 +1060,7 @@ program
           ...(config.syncUrl ? { ENGRAM_SYNC_URL: config.syncUrl } : {}),
           ...(config.syncInterval ? { ENGRAM_SYNC_INTERVAL: String(config.syncInterval) } : {}),
           ...(config.syncMode ? { ENGRAM_SYNC_MODE: config.syncMode } : {}),
-          ...(config.syncUrl?.includes('sslmode=disable') ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
+          ...(disablesSyncTls(config.syncUrl) ? { ENGRAM_SYNC_ALLOW_UNENCRYPTED: 'true' } : {}),
           ...(process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] ? { ENGRAM_SYNC_ENCRYPTION_KEY: process.env['ENGRAM_SYNC_ENCRYPTION_KEY'] } : {}),
         };
         if (stopped) {

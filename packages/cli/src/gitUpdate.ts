@@ -53,9 +53,9 @@ export function gitIn(cwd: string): GitRunner {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return {
-      status: r.status ?? 1,
+      status: r.error ? 1 : (r.status ?? 1),
       stdout: r.stdout ?? '',
-      stderr: r.stderr ?? (r.error ? r.error.message : ''),
+      stderr: r.stderr || r.error?.message || '',
     };
   };
 }
@@ -105,11 +105,10 @@ export interface WorkingTree {
   untracked: string[];
 }
 
-/** Snapshot the working tree. An unreadable repo reads as clean — the pull that
- * follows will surface the real error rather than a misleading dirty-tree one. */
+/** Snapshot the working tree before deciding whether local edits need a stash. */
 export function inspectWorkingTree(git: GitRunner): WorkingTree {
   const res = git(['status', '--porcelain', '-z', '--untracked-files=all']);
-  if (res.status !== 0) return { clean: true, regenerated: [], modified: [], untracked: [] };
+  if (res.status !== 0) throw new Error(`Could not inspect the working tree: ${gitErrorSummary(res.stderr)}`);
 
   const regenerated: string[] = [];
   const modified: string[] = [];

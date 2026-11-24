@@ -29,8 +29,10 @@ export function changesFrom(memory: MemoryRecord, tags: string[], draft: Draft):
   if (content !== memory.content.trim()) changes.content = content;
   if (concept !== (memory.concept ?? '').trim()) changes.concept = concept;
   if (draft.importance !== Math.round(memory.importance * 100)) changes.importance = draft.importance / 100;
-  const nextTags = parseTagInput(draft.tags);
-  if (JSON.stringify(nextTags) !== JSON.stringify(tags)) changes.tags = nextTags;
+  if (draft.tags !== tags.join(', ')) {
+    const nextTags = parseTagInput(draft.tags);
+    if (JSON.stringify(nextTags) !== JSON.stringify(tags)) changes.tags = nextTags;
+  }
   return changes;
 }
 
@@ -74,8 +76,8 @@ export default function MemoryEdit({
     setSaving(true);
     setError(null);
     try {
-      const res = await api.updateMemory(memory.id, changes);
-      onSaved({ ...memory, content: res.content, importance: res.importance, tags: res.tags, concept: res.concept }, reindexes);
+      const { content, importance, tags, concept, summary = memory.summary } = await api.updateMemory(memory.id, changes);
+      onSaved({ ...memory, content, importance, tags, concept, summary }, reindexes);
     } catch (err) {
       setSaving(false);
       const reason = err instanceof Error ? err.message : '';

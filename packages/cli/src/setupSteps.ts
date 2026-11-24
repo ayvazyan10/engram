@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { buildStatus, serializeBuildStamp } from './buildState.js';
-import { connectHost } from './serverControl.js';
+import { serverUrl } from './serverControl.js';
 import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
   readJson, readConfigText, configObject, updateJsonConfig, writeConfigFile, installHookScript, registerHook, hasClaudeHooks,
@@ -50,6 +50,16 @@ export function shortHead(repoPath: string, opts: { quiet?: boolean } = {}): str
 }
 
 // ─── Preflight ───────────────────────────────────────────────────────────────
+
+/** Verify the configured checkout before updating it or running its install scripts. */
+export function requireEngramWorkspace(repoPath: string): void {
+  const packages = ['packages/core', 'packages/cli', 'packages/mcp', 'apps/server', 'apps/web'];
+  if (!fs.existsSync(path.join(repoPath, 'pnpm-workspace.yaml'))
+    || readJson(path.join(repoPath, 'package.json')).name !== 'engram'
+    || !packages.every(dir => readJson(path.join(repoPath, dir, 'package.json')).name === `@engram-ai-memory/${path.basename(dir)}`)) {
+    throw new Error(`Expected an Engram workspace at ${repoPath}. Check the configured repoPath.`);
+  }
+}
 
 /**
  * Check git, pnpm and Node before setup touches anything. Missing tools used to
@@ -292,8 +302,7 @@ export function installClaudeHooks(
   mcpEnv: Readonly<Record<string, string>> = mcpServerConfig(config, 'claude-code').env,
 ): void {
   try {
-    const host = connectHost(config.host);
-    const apiBase = `http://${host.includes(':') ? `[${host}]` : host}:${config.port}`;
+    const apiBase = serverUrl(config.host, config.port);
     const templateDir = path.join(config.repoPath, 'packages', 'cli', 'templates');
     const installed = CLAUDE_HOOKS.map((h) => ({
       ...h,
@@ -320,8 +329,10 @@ export function refreshClaudeHooks(
     if (!withHooks && !servers.engram) return;
     if (!shouldConfigureClaudeCode(paths.settings, skipped)) return;
     const server = mcpServerConfig(config, 'claude-code');
-    reportBackup(writeJsonMcpConfig(paths.userJson, 'mcpServers', server));
-    ok('Claude Code MCP refreshed (~/.claude.json)');
+    if (servers.engram) {
+      reportBackup(writeJsonMcpConfig(paths.userJson, 'mcpServers', server));
+      ok('Claude Code MCP refreshed (~/.claude.json)');
+    }
     if (withHooks) installClaudeHooks(config, hooksDir, paths, skipped, server.env);
   } catch (err) {
     reportConfigRefusal(err, 'Claude Code MCP refresh', skipped);

@@ -65,16 +65,21 @@ export async function settle(queue: ReviewQueue, item: ReviewItem, action: Actio
     }
     case 'redact': {
       const { redacted } = await api.redactMemory(id);
-      // No text comes back: the list's copy is replaced by the redacted row,
-      // so the old text is not shown again. Failing that, it is until a reload.
-      api
-        .getGraph(id)
-        .then((g) => {
-          const fresh = asMemoryRecord(g.node);
-          if (fresh) useMemoryStore.getState().updateRecord(fresh);
-        })
-        .catch(() => {});
-      return { message: `Redacted ${redacted} ${redacted === 1 ? 'value' : 'values'}. The memory stays.` };
+      const { records, searchResults, weakerResults, updateRecord } = useMemoryStore.getState();
+      const cached = records.find((r) => r.id === id)
+        ?? searchResults.find((r) => r.id === id)
+        ?? weakerResults.find((r) => r.id === id);
+      if (cached) updateRecord({ ...cached, content: '[REDACTED]', concept: null, summary: null });
+
+      const message = `Redacted ${redacted} ${redacted === 1 ? 'value' : 'values'}.`;
+      try {
+        const fresh = asMemoryRecord((await api.getGraph(id)).node);
+        if (fresh?.id !== id) throw new Error('Invalid memory response');
+        updateRecord(fresh);
+        return { message: `${message} The memory stays.` };
+      } catch {
+        return { message: `${message} Could not reload the redacted memory.` };
+      }
     }
     case 'archive':
       return { archiveIds: [id], message: 'Archived.' };

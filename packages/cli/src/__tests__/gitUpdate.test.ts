@@ -86,9 +86,9 @@ describe('inspectWorkingTree', () => {
     expect(tree.untracked).toEqual(['pnpm-lock.yaml']);
   });
 
-  it('treats a failed status call as a clean tree', () => {
+  it('reports a failed status call', () => {
     const git = fakeGit({ status: { status: 128, stderr: 'not a git repository' } });
-    expect(inspectWorkingTree(git).clean).toBe(true);
+    expect(() => inspectWorkingTree(git)).toThrow(/could not inspect the working tree/i);
   });
 });
 

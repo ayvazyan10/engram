@@ -24,14 +24,13 @@ export interface BuildArtifact {
   readonly path: string;
 }
 
-/**
- * The built entry points the CLI itself depends on: the server it starts, the
- * MCP server it registers with AI clients, and the CLI it installs globally.
- */
+/** Runtime entry points produced by a complete local build. */
 export function buildArtifactPaths(repoPath: string): readonly BuildArtifact[] {
   return [
     { label: 'API server', path: path.join(repoPath, 'apps', 'server', 'dist', 'index.js') },
+    { label: 'Dashboard', path: path.join(repoPath, 'apps', 'web', 'dist', 'index.html') },
     { label: 'MCP server', path: path.join(repoPath, 'packages', 'mcp', 'dist', 'server.js') },
+    { label: 'SessionStart hook', path: path.join(repoPath, 'packages', 'mcp', 'dist', 'session-start.js') },
     { label: 'CLI', path: path.join(repoPath, 'packages', 'cli', 'dist', 'cli.js') },
   ];
 }
