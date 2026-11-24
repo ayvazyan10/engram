@@ -74,8 +74,8 @@ export function applyPulledMemory(db: SyncDb, remote: PgMemory): ApplyOutcome {
       .get();
 
     if (!local) {
-      tx.insert(schema.memories).values(pgMemoryToNewMemory(remote)).onConflictDoNothing().run();
-      return { applied: true, conflict: false };
+      const inserted = tx.insert(schema.memories).values(pgMemoryToNewMemory(remote)).onConflictDoNothing().run();
+      return { applied: inserted.changes > 0, conflict: false };
     }
 
     const result = resolveMemoryConflict(local, remote);
@@ -139,20 +139,22 @@ export function applyPulledConnection(db: SyncDb, remote: PgMemoryConnection): A
 }
 
 export function applyPulledSession(db: SyncDb, remote: PgSession): ApplyOutcome {
-  const local: Session | undefined = db
-    .select()
-    .from(schema.sessions)
-    .where(eq(schema.sessions.id, remote.id))
-    .get();
+  return db.transaction((tx) => {
+    const local: Session | undefined = tx
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, remote.id))
+      .get();
 
-  if (!local) {
-    db.insert(schema.sessions).values(pgSessionToNewSession(remote)).onConflictDoNothing().run();
-    return { applied: true, conflict: false };
-  }
+    if (!local) {
+      const inserted = tx.insert(schema.sessions).values(pgSessionToNewSession(remote)).onConflictDoNothing().run();
+      return { applied: inserted.changes > 0, conflict: false };
+    }
 
-  const result = resolveSessionConflict(local, remote);
-  if (result.winner !== 'remote') return { applied: false, conflict: true };
+    const result = resolveSessionConflict(local, remote);
+    if (result.winner !== 'remote') return { applied: false, conflict: true };
 
-  db.update(schema.sessions).set(result.merged).where(eq(schema.sessions.id, remote.id)).run();
-  return { applied: true, conflict: true };
+    tx.update(schema.sessions).set(result.merged).where(eq(schema.sessions.id, remote.id)).run();
+    return { applied: true, conflict: true };
+  }, { behavior: 'immediate' });
 }

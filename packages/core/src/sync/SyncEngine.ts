@@ -99,13 +99,6 @@ const EMPTY_COUNTS = (): { memories: number; connections: number; sessions: numb
   memories: 0, connections: 0, sessions: 0,
 });
 
-const EMPTY_RESULT: SyncResult = {
-  pushed: EMPTY_COUNTS(),
-  pulled: EMPTY_COUNTS(),
-  conflicts: 0,
-  durationMs: 0,
-};
-
 export class SyncEngine {
   private readonly config: SyncConfig;
   private readonly syncUrl: string;
@@ -123,9 +116,9 @@ export class SyncEngine {
   private debounceTimer: NodeJS.Timeout | null = null;
 
   private inFlight: Promise<SyncResult> | null = null;
-  private lastResult: SyncResult = EMPTY_RESULT;
   private currentPhase: 'push' | 'pull' | null = null;
   private backoffMs = BACKOFF_INITIAL_MS;
+  private nextRetryAt = 0;
 
   private disposed = false;
   private readonly onBeforeExit = (): void => {
@@ -138,10 +131,7 @@ export class SyncEngine {
     this.syncId = computeSyncId(config.syncUrl);
     this.deviceId = getDeviceId();
     this.db = getDb();
-    // `computeSyncId` stopped hashing the password (see cursor.ts), which
-    // re-keys the row. Carry an existing one across before anything reads
-    // it, or the first cycle mistakes "never synced" for a fresh target and
-    // re-pushes/re-pulls the whole database.
+    // Retire ambiguous target keys before any scan reads a checkpoint.
     migrateLegacySyncState(this.db, config.syncUrl);
     process.once('beforeExit', this.onBeforeExit);
   }
@@ -198,14 +188,15 @@ export class SyncEngine {
     if (this.intervalTimer || this.config.mode !== 'auto') return;
 
     const intervalMs = this.config.intervalMs ?? DEFAULT_INTERVAL_MS;
-    this.intervalTimer = setInterval(() => {
-      // sync() already records failures to cursor.lastError and reports
-      // them via onSyncError (see runGuarded) — this catch exists only to
-      // stop a rejected promise from becoming an unhandled rejection.
-      this.sync().catch(() => {});
-    }, intervalMs);
+    this.intervalTimer = setInterval(() => this.syncAutomatically(), intervalMs);
     this.intervalTimer.unref?.();
 
+    this.syncAutomatically();
+  }
+
+  private syncAutomatically(): void {
+    if (this.inFlight || Date.now() < this.nextRetryAt) return;
+    // runGuarded records the error and reports it through onSyncError.
     this.sync().catch(() => {});
   }
 
@@ -217,8 +208,8 @@ export class SyncEngine {
     const debounceMs = this.config.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      this.sync().catch(() => {});
-    }, debounceMs);
+      this.syncAutomatically();
+    }, Math.max(debounceMs, this.nextRetryAt - Date.now()));
     this.debounceTimer.unref?.();
   }
 
@@ -254,15 +245,16 @@ export class SyncEngine {
   // ─── concurrency guard + error/backoff bookkeeping ───────────────────────
 
   /**
-   * Runs `fn` with the "only one sync at a time" guard: if a sync is
-   * already in flight, immediately returns the last completed result rather
-   * than queuing behind it. On success, records `lastSyncAt` and resets
+   * Runs `fn` with the "only one sync at a time" guard. A concurrent
+   * request gets a busy error. On success, records `lastSyncAt` and resets
    * backoff; on failure, records `lastError` (redacted), grows backoff, and
    * rethrows so callers (including the scheduler, and its no-op catch
    * above) see the failure.
    */
   private async runGuarded(fn: () => Promise<Omit<SyncResult, 'durationMs'>>): Promise<SyncResult> {
-    if (this.inFlight) return this.lastResult;
+    if (this.inFlight) {
+      throw Object.assign(new Error('A sync operation is already in progress.'), { statusCode: 409 });
+    }
 
     const run = this.executeGuarded(fn);
     this.inFlight = run;
@@ -278,8 +270,8 @@ export class SyncEngine {
     try {
       const partial = await fn();
       const result: SyncResult = { ...partial, durationMs: Date.now() - start };
-      this.lastResult = result;
       this.backoffMs = BACKOFF_INITIAL_MS;
+      this.nextRetryAt = 0;
       writeCursor(this.db, this.syncId, {
         lastSyncAt: new Date().toISOString(),
         lastError: null,
@@ -298,6 +290,7 @@ export class SyncEngine {
   private handleSyncError(error: unknown): void {
     const message = this.redactMessage(error instanceof Error ? error.message : String(error));
     writeCursor(this.db, this.syncId, { lastError: message });
+    this.nextRetryAt = Date.now() + this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, BACKOFF_MAX_MS);
     this.config.onSyncError?.(error instanceof Error ? error : new Error(message));
   }
@@ -389,7 +382,8 @@ export class SyncEngine {
     if (remoteModel !== null && remoteModel !== localModel) {
       throw new Error(
         `Embedding model mismatch: local uses "${localModel}" but the sync database uses "${remoteModel}". ` +
-          'Mixing models would corrupt vector search. Run "engram cloud sync --re-embed" to re-generate embeddings.'
+          'Local re-embedding only updates SQLite. Use the remote model, or stop sync across the fleet ' +
+          'and run "engram cloud migrate-model <source> <target>" to convert the shared database.'
       );
     }
 

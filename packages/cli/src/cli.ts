@@ -770,6 +770,29 @@ cloudCmd
   });
 
 cloudCmd
+  .command('migrate-model <source> <target>')
+  .description('Re-embed the shared Postgres database after stopping sync on every device')
+  .action(async (source: string, target: string) => {
+    const { syncUrl } = loadConfig();
+    if (!syncUrl) throw new Error('Run engram cloud connect <postgres-url> first.');
+    if (new URL(syncUrl).searchParams.get('sslmode') === 'disable') {
+      process.env['ENGRAM_SYNC_ALLOW_UNENCRYPTED'] = 'true';
+    }
+    const { createPgSyncConnection, PgSyncClient, switchEmbeddingModel } = await import('@engram-ai-memory/core');
+    const { syncEncryptionKey } = await import('./syncOptions.js');
+    const key = syncEncryptionKey();
+    switchEmbeddingModel(target);
+    const conn = await createPgSyncConnection(syncUrl);
+    try {
+      const client = new PgSyncClient(conn);
+      const migrated = await client.migrateEmbeddingModel(source, key);
+      console.log(`Migrated ${migrated} remote memories from "${source}" to "${target}".`);
+    } finally {
+      await conn.close();
+    }
+  });
+
+cloudCmd
   .command('devices')
   .description('Show known devices (from local sync state)')
   .action(async () => {

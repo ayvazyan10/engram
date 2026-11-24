@@ -11,9 +11,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema.js';
+import { parseSyncUrl } from '../db/pg/connection.js';
 import { getDeviceId } from './deviceId.js';
 
 /** Pull overlap window — see `pullCursorWithOverlap`. */
@@ -27,21 +28,23 @@ function sha256Hex(value: string): string {
  * Everything in a connection URL that identifies *which* database this is,
  * with the password left out on purpose.
  *
- * Scheme and host are lowercased (both are case-insensitive by spec). The
- * username and database name are NOT: Postgres compares those
- * case-sensitively, so `/DB` and `/db` are genuinely different databases and
- * must not collapse onto one cursor row. Query parameters are dropped —
- * `?sslmode=require` vs `?sslmode=disable` is the same sync target reached
- * two ways, not two targets.
+ * pg-connection-string takes the last query value and falls back to the
+ * authority for empty overrides. Only DNS names are case-insensitive.
  */
 function syncIdentity(url: string): string {
-  const parsed = new URL(url.trim());
-  const scheme = parsed.protocol.toLowerCase();
-  const host = parsed.hostname.toLowerCase();
-  const port = parsed.port;
-  const user = decodeURIComponent(parsed.username);
-  const database = decodeURIComponent(parsed.pathname);
-  return `${scheme}//${user}@${host}:${port}${database}`;
+  const parsed = parseSyncUrl(url);
+  const params = parsed.searchParams;
+  const queryHost = params.getAll('host').at(-1);
+  const host = queryHost || decodeURIComponent(parsed.hostname) || process.env['PGHOST'] || 'localhost';
+  const port = params.getAll('port').at(-1) || parsed.port || process.env['PGPORT'] || '5432';
+  const user = params.getAll('user').at(-1) || decodeURIComponent(parsed.username) ||
+    process.env['PGUSER'] || process.env[process.platform === 'win32' ? 'USERNAME' : 'USER'];
+  if (queryHost && /^%2f/i.test(parsed.hostname)) {
+    parsed.pathname = parsed.hostname + parsed.pathname;
+  }
+  const database = decodeURI(parsed.pathname.slice(1)) || process.env['PGDATABASE'] || user;
+  const hostname = host.startsWith('/') ? host : host.toLowerCase();
+  return JSON.stringify([parsed.protocol, user, hostname, Number.parseInt(port, 10), database]);
 }
 
 /** `url` with the password removed, for URLs `new URL()` cannot parse. */
@@ -66,8 +69,8 @@ function stripPassword(url: string): string {
  * Two URLs that differ only by password now share one id. That is correct:
  * they address the same database, so they should share one cursor row.
  *
- * Existing rows keyed by the old scheme are moved across by
- * `migrateLegacySyncState`, so no device silently loses its cursor.
+ * The tuple encoding also distinguishes these keys from older ones that
+ * omitted query overrides and could describe a different target.
  */
 export function computeSyncId(url: string): string {
   try {
@@ -76,7 +79,7 @@ export function computeSyncId(url: string): string {
     // Not a parseable URL. Still never hash the password — a malformed
     // connection string is exactly the case where a naive fallback would
     // reintroduce the offline oracle this function exists to remove.
-    return sha256Hex(stripPassword(url.trim()));
+    return sha256Hex(stripPassword(url.trim().replace(/[?#].*$/s, '')));
   }
 }
 
@@ -128,18 +131,10 @@ export function readCursor(
 }
 
 /**
- * Re-key a `sync_state` row written before `computeSyncId` stopped hashing
- * the password (see there for why it stopped).
- *
- * Without this the row simply stops being found: `readCursor` returns null,
- * which reads as "never synced" and silently triggers a full re-push and
- * re-pull of the entire database on the next cycle. Correct, thanks to the
- * idempotent LWW upserts, but expensive and alarming — and it would also
- * throw away `last_error` and the embedding-model guard.
- *
- * Idempotent and safe to call on every `SyncEngine` construction: it is one
- * primary-key lookup once the migration has happened, and it never
- * overwrites a row that already exists under the new id.
+ * An authority-only checkpoint has no record of whether a query redirected
+ * the driver. Retire it and its access queue; the next scan seeds both.
+ * The older, lowercased full-URL key is reusable only when the target is
+ * explicit and folding its case could not have changed it.
  */
 export function migrateLegacySyncState(
   db: BetterSQLite3Database<typeof schema>,
@@ -147,20 +142,37 @@ export function migrateLegacySyncState(
 ): void {
   const newId = computeSyncId(url);
   const oldId = legacySyncId(url);
-  if (newId === oldId) return;
+  let parsed: URL;
+  let authorityId: string;
+  try {
+    parsed = new URL(url.trim());
+    const user = decodeURIComponent(parsed.username);
+    const database = decodeURIComponent(parsed.pathname);
+    authorityId = sha256Hex(`${parsed.protocol}//${user}@${parsed.hostname.toLowerCase()}:${parsed.port}${database}`);
+  } catch {
+    return;
+  }
 
   db.transaction((tx) => {
+    if (tx.delete(schema.syncState).where(eq(schema.syncState.id, authorityId)).run().changes > 0) {
+      const key = schema.localMeta.key;
+      tx.delete(schema.localMeta).where(or(eq(key, `sync_access_seeded:${authorityId}`),
+        sql`${key} GLOB ${'sync_access:' + authorityId + ':*'}`)).run();
+    }
     const legacy = selectRawRow(tx, oldId);
     if (!legacy) return;
 
     // A row under the new id wins — it is the live one. The legacy row is
     // then just a leftover and gets dropped either way.
     const current = selectRawRow(tx, newId);
-    if (!current) {
+    const hasOverride = [...parsed.searchParams.keys()].some((key) => /^(host|port|user)$/i.test(key));
+    const explicitTarget = parsed.username && parsed.hostname && parsed.port && parsed.pathname.length > 1;
+    if (!current && explicitTarget && !hasOverride &&
+        syncIdentity(url.toLowerCase()) === syncIdentity(url.toUpperCase())) {
       tx.insert(schema.syncState).values({ ...legacy, id: newId }).onConflictDoNothing().run();
     }
     tx.delete(schema.syncState).where(eq(schema.syncState.id, oldId)).run();
-  });
+  }, { behavior: 'immediate' });
 }
 
 /**

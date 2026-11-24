@@ -20,13 +20,15 @@
 
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
-import { and, asc, eq, getTableColumns, gt, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, getTableColumns, gt, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import * as pgSchema from '../db/pg/schema.js';
 import { pgMemories, pgMemoryConnections, pgSessions } from '../db/pg/schema.js';
 import type { PgMemory, PgMemoryConnection, PgSession } from '../db/pg/schema.js';
 import type { Memory, MemoryConnection, Session } from '../db/schema.js';
+import { embed, getEmbeddingModelId, memoryEmbeddingText, packFP16 } from '../embedding/Embedder.js';
+import { EncryptionManager } from './encryption.js';
 
 const DEFAULT_BATCH_SIZE = 500;
 
@@ -83,7 +85,7 @@ export interface PgSyncClientOptions {
 
 // ─── LWW upsert SQL builder ────────────────────────────────────────────────
 // All three synced tables use `id` as their primary key and the same
-// last-write-wins shape: newer `updated_at` wins; a tie is broken by the
+// last-write-wins shape: newer edit or tombstone wins; a tie is broken by the
 // lexicographically greater `device_id`. `access_count` / `last_accessed_at`
 // on `memories` are the one exception — those are MAX'd instead of LWW'd
 // (see plan section 4, "Разрешение конфликтов").
@@ -98,12 +100,15 @@ interface UpsertSpec {
   returning?: string[];
 }
 
-/** Last-write-wins: NULL timestamps lose, newer wins, then greater `device_id`. */
+/** Match conflict.ts: NULL sorts first, even below an empty non-NULL string. */
 function lastWriteWins(table: string): string {
-  return `(${table}.updated_at IS NULL
-           OR EXCLUDED.updated_at > ${table}.updated_at
-           OR (EXCLUDED.updated_at = ${table}.updated_at
-               AND EXCLUDED.device_id > ${table}.device_id))`;
+  const tombstone = table === 'memories' ? 'archived_at' : 'deleted_at';
+  const version = (row: string): string => {
+    const time = `GREATEST(${row}.updated_at COLLATE "C", ${row}.${tombstone})`;
+    return `(${time} IS NOT NULL, COALESCE(${time}, ''),
+             ${row}.device_id IS NOT NULL, COALESCE(${row}.device_id, '') COLLATE "C")`;
+  };
+  return `(${version('EXCLUDED')} > ${version(table)})`;
 }
 
 /** NULL-safe "the incoming value is strictly greater than the stored one". */
@@ -594,6 +599,64 @@ export class PgSyncClient {
        LIMIT 1`
     );
     return result.rows[0]?.embedding_model ?? null;
+  }
+
+  /** Offline fleet migration. Regenerate the remote vectors on this device in one transaction. */
+  async migrateEmbeddingModel(sourceModel: string, encryptionKey?: string): Promise<number> {
+    const targetModel = getEmbeddingModelId();
+    if (sourceModel === targetModel) throw new Error('Choose a different target embedding model.');
+
+    let manager: EncryptionManager | null = null;
+    if (encryptionKey && await this.hasEncryptionMetadata()) {
+      manager = new EncryptionManager(this);
+      await manager.initialize(encryptionKey);
+    }
+
+    return this.db.transaction(async (tx) => {
+      // Serialize with encryption bootstrap and writers until coverage is verified.
+      await tx.execute(sql`LOCK TABLE sync_metadata IN SHARE MODE`);
+      if (!manager) {
+        const { key } = pgSchema.pgSyncMetadata;
+        const [encrypted] = await tx.select({ key }).from(pgSchema.pgSyncMetadata)
+          .where(inArray(key, ENCRYPTION_META_KEYS)).limit(1);
+        if (encrypted) throw new Error('Set ENGRAM_SYNC_ENCRYPTION_KEY to migrate this encrypted database.');
+      }
+      await tx.execute(sql`LOCK TABLE memories IN SHARE ROW EXCLUSIVE MODE`);
+      const { embedding, embeddingModel, id } = pgMemories;
+      const models = await tx.select({ model: embeddingModel, total: count() }).from(pgMemories)
+        .where(or(isNotNull(embedding), isNotNull(embeddingModel))).groupBy(embeddingModel);
+      const source = models[0];
+      if (models.length !== 1 || source?.model !== sourceModel) {
+        throw new Error(`Expected every remote embedding to use "${sourceModel}". Check the source model.`);
+      }
+
+      let afterId: string | undefined;
+      let migrated = 0;
+      for (;;) {
+        const rows: PgMemory[] = await tx.select().from(pgMemories)
+          .where(and(eq(embeddingModel, sourceModel), afterId === undefined ? undefined : gt(id, afterId)))
+          .orderBy(id).limit(this.batchSize);
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          const plain = manager ? manager.decryptRow(row) : row;
+          const vector = await embed(memoryEmbeddingText({ ...plain, type: row.type }), targetModel);
+          if (!vector.length) throw new Error(`Empty embedding for memory ${row.id}.`);
+          const replacement = { ...plain, embedding: packFP16(vector) };
+          const stored = manager ? manager.encryptRow(replacement) : replacement;
+          // Every replica must pull this revision, including the original writer.
+          const updatedAt = new Date(Math.max(Date.now(), Date.parse(row.updatedAt) + 1,
+            Date.parse(row.archivedAt ?? row.updatedAt) + 1)).toISOString();
+          const result = await tx.update(pgMemories).set({
+            content: stored.content, embedding: stored.embedding, embeddingDim: vector.length,
+            embeddingModel: targetModel, updatedAt, deviceId: null,
+          }).where(eq(id, row.id));
+          migrated += result.rowCount ?? 0;
+          afterId = row.id;
+        }
+      }
+      if (migrated !== source.total) throw new Error('Incomplete remote embedding coverage. Migration aborted.');
+      return migrated;
+    }, { isolationLevel: 'read committed' });
   }
 
   // ─── sync metadata (E2E encryption, Phase 6) ─────────────────────────────
