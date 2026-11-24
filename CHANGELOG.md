@@ -9,6 +9,71 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-11-25
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.14.0, and the Claude Desktop extension bundle 0.14.0. Private workspace versions unchanged.
+
+This release fixes 165 defects found by a full audit of sync, the core engine, the server/MCP/adapters and the CLI/web dashboard.
+
+### Added
+
+- **`engram cloud sync --re-embed` brings the cloud up to date from one device that switched embedding models.** Run it on the device with the latest edits. It re-embeds stale local memories, pushes pending changes including archives and decay, converts the remaining shared Postgres vectors to this device’s model, then syncs again to verify the model and pull the converted rows.
+- **`engram cloud migrate-model <source> <target>` switches a fleet to a new embedding model.** Once every device has synced and stopped, run it once with the full model IDs and the usual key for encrypted sync. It checks the source model and converts all remaining Postgres vectors, including those of archived memories, in one transaction for devices to pull after switching to the target model.
+
+### Changed
+
+- **SessionStart ranks project memories without a similarity search.** It shows up to three distinct entries from the exact project, ordered by pinned status, handover status, importance and then creation time, newest first.
+- **The Ollama proxy returns 403 for an untrusted Host or Origin.** With no explicit port, `ENGRAM_UPSTREAM` uses 80 for HTTP and 443 for HTTPS. The legacy `OLLAMA_TARGET` still defaults to 11434 for HTTP.
+- **`engram start` and `engram status` report an error when they cannot verify the recorded server PID.** `engram stop` requires a positive match between the PID and the owner of the listening port before it signals the process.
+- **A connection foreign-key error or a pull blocked by decryption fails the sync cycle.** The pull keeps its previous checkpoint so it can retry once the missing memory or the correct encryption key is available.
+- **Overlapping sync requests share one cycle.** A second request to the same sync engine waits for the active cycle and receives its counts or its error.
+- **Postgres records the shared embedding model in sync metadata.** Devices connecting to a new target concurrently must agree on the model, and normal sync rejects a legacy target containing multiple model labels.
+- **Encrypted sync accepts only the legacy and current scrypt key-derivation profiles.** Clients reject other stored parameter combinations before deriving a key.
+- **Engram rejects NUL characters in text fields that sync to Postgres.** If an older SQLite row blocks a push, the error names the table, row ID and column to repair.
+- **Resolving a contradiction requires a confirmed `contradicts` edge.** Both memories must be distinct, live and visible to the caller. A candidate alone cannot authorize archiving either memory.
+- **`engram update` preserves staged and unstaged lockfile edits.** Git reports a conflict if the update would overwrite them, and forced recovery includes them in the stash.
+- **Setup and update respect the `.claude.json` lock.** If Claude holds the lock or another writer changes the file during setup, Engram reports that the operation needs a retry.
+- **A relative `dbPath` in CLI settings resolves from the user’s home directory.** The CLI, REST server, MCP clients and installed hooks can open the same database from different working directories.
+- **`engram import` distinguishes processed records from new memories.** File imports with `--from` print the server’s `Processed` count. JSON and NDJSON imports from stdin report new records under `Imported` and show `Merged` when matches were deduplicated.
+
+### Fixed
+
+- **Sync picks up edits made during a long push or pull.** Each scan saves progress only through its start time, and backdated decay changes stay eligible for upload. Idle devices eventually stop resending the same rows.
+- **Sync checkpoints follow the actual Postgres target and device identity.** Changing the effective host, port, user or database selects the corresponding checkpoint. A running sync detects a device ID reset before saving its progress.
+- **Sync propagates recalls of another device’s memories.** Devices merge the highest access count and latest access time without taking ownership of the content. A reply arriving after a local recall preserves the newer counters.
+- **Sync reconciles graph links created independently on two devices.** Both copies adopt the Postgres link ID and keep the winning edit or deletion, including for encrypted links.
+- **Automatic sync backs off after failures.** Scheduled and write-triggered syncs observe the same retry delay, while a manual sync can retry immediately. SDK clients that omit the sync mode now get automatic sync as documented.
+- **Database setup handles a fresh home directory and simultaneous cloud upgrades.** The SDK creates the directory for its default SQLite database on first use. Devices sharing Postgres take turns applying schema migrations, and the migration and its journal entry commit together.
+- **Global-only memory statistics and reflections stay in scope.** In filter mode with no project selected, tag counts, statistics and reflections use only global memories. A collection counts a memory once even when several of its tags share the collection prefix.
+- **Filtered memory searches can find matches farther down the ranking.** Exact-project and global searches rank within the requested scope. Source, date and tag filters keep looking until they have enough matches or exhaust the results.
+- **Memory and graph indexes pick up changes made by another process.** Searches refresh edited vectors even if a different memory has a newer timestamp. Recall also sees added, confirmed or deleted links after a sync that changed only connections.
+- **Re-embedding repairs vectors with the wrong dimension.** The default pass checks the stored vector length even when the model label matches. If a memory is edited during embedding, the batch skips the obsolete vector.
+- **Concurrent memory edits preserve tags and searchable text.** Adding or removing a tag keeps changes from other writers. If another edit changes the content or concept during embedding, Engram retries against the current memory.
+- **Recall history respects archives across devices and during streaming.** A remote archive removes local recall history entries that referenced the memory. A stream finishing after an archive rechecks which memories are live and visible before returning its final context or recording access.
+- **Contradiction checks preserve the first verdict on a candidate.** A competing verdict cannot revive a dismissed link, and a manually created contradiction stays confirmed after a graph reload. Repeating an identical statement with words like “now” no longer creates a candidate.
+- **Decay protects sessions awaiting distillation and respects edits made during a sweep.** A sweep skips a memory recalled, edited or newly protected since it was examined. In filter mode without a project, the sweep and its history cleanup apply only to global records.
+- **A decay preview returns counts without running consolidation or sending notifications.** The REST endpoint also rejects misspelled options and non-boolean `dryRun` values before a live sweep can start.
+- **Consolidation keeps summaries in the project that owns the episodes.** Automatic runs honor protection rules and leave episodes live if a source changed or the summary would be empty. An interrupted run can finish archiving the matching episodes on retry.
+- **The REST server checks the whole batch for project mismatches before storing memories.** An isolated server rejects a conflicting namespace before writing the first item. In filter mode, Review can list global contradictions and dismiss visible global items.
+- **Stopping a foreground server shuts down its child process.** The CLI forwards interrupt and termination signals to the REST server, which gives open HTTP connections up to 30 seconds to drain before closing them.
+- **HTTP MCP coordinates maintenance with the REST server and scheduler.** If a re-embed or decay sweep is already running, another request for the same operation reports that it is in progress.
+- **MCP distillation keeps facts in the source session’s project.** A fact explicitly marked global still goes to the shared namespace. For ordinary writes, `store_memory` now tells unscoped clients that omitting the namespace stores a global memory.
+- **Claude Desktop repairs an incomplete MCP installation on launch.** If the installed server entrypoint is missing, the extension reinstalls it. SessionStart also recognizes stale MCP servers launched through npm.
+- **The Ollama adapter preserves the original answer when a tool retry fails.** It cancels a pending generation when the client disconnects, and an interrupted upstream stream now reaches the client as a broken connection. Streamed replies over 1 MiB reach the client in full and skip automatic storage.
+- **The CLI and REST hooks can authenticate to a keyed server.** CLI requests, prompt recall and session-end capture use `ENGRAM_API_KEY`. The CLI also sends `engram forget` without a JSON content type so a bodyless request reaches the archive handler.
+- **Claude’s SessionEnd plugin can store summaries on Windows.** It skips malformed transcript lines and passes the summary to the storage process over standard input, keeping session text out of process listings.
+- **CLI backup restores preserve global memories and procedural patterns.** JSON and NDJSON imports retain an explicit global namespace and the procedure’s trigger and action.
+- **CLI updates recover from incomplete installs.** Update rebuilds when the dashboard or SessionStart script is missing and retries a failed global CLI install even when the checkout is current. Setup and update verify that the configured checkout belongs to Engram before changing it.
+- **CLI setup and update preserve client configuration.** Hooks-only Claude installs stay hooks-only, clearing a managed namespace restores project discovery, and updating a symlinked config preserves the link. Codex setup preserves single-quoted environment values.
+- **The web dashboard keeps map searches in the selected project.** Switching projects clears the previous project’s matches and highlights from view. A late reply from a search closed during navigation cannot replace the current search.
+- **The dashboard reflects archives and new arrivals from other clients.** The list and map refresh when the active-memory count drops, and an initially empty Timeline shows its first live memory in the selected scope.
+- **The memory sheet keeps edits with the selected memory.** A late tag response applies to the original record. Editing importance preserves untouched tags containing commas, and editing content clears the old summary when the server does.
+- **Review handles bulk actions that succeed only in part.** Tag and Pin send at most 1,000 distinct memory IDs per request and report how many succeeded. If a later archive batch fails, Review restores only the items still eligible.
+- **Secret redaction covers overlapping matches.** Review masks the full matching span in both the preview and the saved memory. After a successful redaction, cached list and search results stay masked even if refreshing the memory fails.
+- **Cloud sync keeps plaintext writes out of an encrypted database.** An already-connected client checks for newly enabled encryption before each plaintext push batch. Encryption setup and MCP sync also reject whitespace-only passphrases.
+- **Postgres connection settings keep credentials private and honor the requested TLS mode.** CLI configuration output and sync logs mask the password and drop URL query parameters, which can carry one too. Duplicate `sslmode` settings are rejected, and unrelated URL text cannot turn off TLS.
+- **Webhooks stop retrying once the receiver accepts a delivery.** A local error recording a successful response cannot send the event twice. Temporary DNS failures are retried, and delivery results count actual POST attempts.
+
 ## [0.13.1] — 2026-11-21
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.13.1 (core and mcp republished unchanged to keep the release line together), and the Claude Desktop extension bundle 0.13.1. Private workspace versions unchanged.
