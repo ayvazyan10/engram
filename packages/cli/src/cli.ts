@@ -840,8 +840,8 @@ cloudCmd
     const passphrase = source.kind === 'prompt'
       ? await readHiddenLine('Passphrase: ', process.stdin, process.stdout)
       : source.value;
-    if (passphrase.length === 0) {
-      console.error('An empty passphrase would encrypt nothing. Aborted.');
+    if (passphrase.trim().length === 0) {
+      console.error('The passphrase must contain a non-whitespace character. Aborted.');
       process.exit(1);
     }
 
@@ -1416,7 +1416,8 @@ async function readImport(format: string | undefined, file: string | undefined):
 }
 
 async function postImport(memories: ImportMemory[], batch: boolean) {
-  let imported = 0;
+  let processed = 0;
+  let merged = 0;
   let skipped = 0;
   let firstError: string | undefined;
   const size = batch ? 1000 : 1; // The batch route accepts at most 1000 records.
@@ -1432,27 +1433,32 @@ async function postImport(memories: ImportMemory[], batch: boolean) {
         sessionId: m.sessionId ?? undefined, namespace: m.namespace,
       }));
       // Stdin exports retain the single-record route: batch drops metadata/sessionId.
-      await api('POST', batch ? '/api/memory/batch' : '/api/memory',
-        batch ? { memories: records } : records[0]);
-      imported += group.length;
+      if (batch) {
+        const { count } = await api<{ count: number }>('POST', '/api/memory/batch', { memories: records });
+        processed += count;
+      } else {
+        const { deduplicated } = await api<{ deduplicated?: boolean }>('POST', '/api/memory', records[0]);
+        processed++;
+        if (deduplicated) merged++;
+      }
     } catch (err) {
       skipped += group.length;
       const message = err instanceof Error ? err.message : String(err);
       if (!firstError) {
         firstError = message;
-        if (imported === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
+        if (processed === 0 && /fetch failed|ECONNREFUSED|ENOTFOUND/i.test(message)) {
           fail(`Cannot reach the Engram API at ${getApiBase()} — is the server running? (engram start)`);
           process.exit(1);
         }
       }
     }
   }
-  return { imported, skipped, firstError };
+  return { processed, merged, skipped, firstError };
 }
 
 program
   .command('import [path]')
-  .description('Import stdin JSON/NDJSON or memory files. Creates NEW records — ids and timestamps are not preserved, so re-running duplicates.')
+  .description('Import stdin JSON/NDJSON or memory files. Engram may merge matching memories. Import ignores source IDs and timestamps.')
   .option('--from <format>', 'File format: markdown, chatgpt, or claude')
   .option('--dry-run', 'Preview only')
   .action(async (file: string | undefined, opts: { from?: string; dryRun?: boolean }) => {
@@ -1472,8 +1478,9 @@ program
       console.log('Dry run — no changes.');
       return;
     }
-    const { imported, skipped, firstError } = await postImport(memories, Boolean(opts.from));
-    console.log(`Imported: ${imported}  Skipped: ${skipped + parseFailures}`);
+    const { processed, merged, skipped, firstError } = await postImport(memories, Boolean(opts.from));
+    const counts = opts.from ? `Processed: ${processed}` : `Imported: ${processed - merged}`;
+    console.log(`${counts}${merged ? `  Merged: ${merged}` : ''}  Skipped: ${skipped + parseFailures}`);
     if (firstError) fail(`First failure: ${firstError}`);
     if (firstError || parseFailures > 0) process.exitCode = 1;
   });

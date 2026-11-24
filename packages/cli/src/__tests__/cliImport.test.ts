@@ -158,7 +158,7 @@ describe('import --from', () => {
       { content: 'Use pnpm', type: 'semantic', source: 'import', tags: ['import:markdown', 'CLAUDE.md'] },
     ]);
     expect(requests).toEqual([{ method: 'POST', url: '/api/memory/batch', size: 2 }]);
-    expect(result.stdout).toContain('Imported: 2  Skipped: 0');
+    expect(result.stdout).toContain('Processed: 2  Skipped: 0');
   });
 
   it('uses markdown headings as concepts and keeps each section together', async () => {
@@ -198,7 +198,7 @@ describe('import --from', () => {
     expect(received.map((record) => record.tags)).toEqual([
       ['import:markdown', 'workflow.md'], ['import:markdown', 'preferences.md'],
     ]);
-    expect(result.stdout).toContain('Imported: 2  Skipped: 0');
+    expect(result.stdout).toContain('Processed: 2  Skipped: 0');
   });
 
   it('skips a standalone MEMORY.md index without contacting the API', async () => {
@@ -251,7 +251,7 @@ describe('import --from', () => {
 
     expect(result.status).toBe(0);
     expect(requests.map((request) => request.size)).toEqual([1000, 1]);
-    expect(result.stdout).toContain('Imported: 1001  Skipped: 0');
+    expect(result.stdout).toContain('Processed: 1001  Skipped: 0');
   });
 
   it('counts rejected batches and reports the first API failure', async () => {
@@ -260,7 +260,7 @@ describe('import --from', () => {
     const result = await runImport('', ['--from', 'claude', file]);
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('Imported: 0  Skipped: 2');
+    expect(result.stdout).toContain('Processed: 0  Skipped: 2');
     expect(result.stdout).toContain('First failure: API 500: /api/memory/batch');
   });
 
@@ -270,7 +270,7 @@ describe('import --from', () => {
 
     expect(result.status).toBe(1);
     expect(received).toHaveLength(1);
-    expect(result.stdout).toContain('Imported: 1  Skipped: 4');
+    expect(result.stdout).toContain('Processed: 1  Skipped: 4');
   });
 
   it('reports malformed ChatGPT JSON without posting', async () => {

@@ -13,6 +13,8 @@
 
 import path from 'path';
 import os from 'os';
+import { isIP } from 'node:net';
+import { domainToASCII } from 'node:url';
 
 export const NAMESPACE_MODES = ['none', 'filter', 'isolated', 'project'] as const;
 export type NamespaceModeName = (typeof NAMESPACE_MODES)[number];
@@ -82,6 +84,15 @@ export function isValidPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
+function isValidHost(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (isIP(value)) return true;
+  // Only pass hostname characters to the URL parser, which also accepts paths and escapes.
+  if (/[^\p{L}\p{M}\p{N}.-]/u.test(value)) return false;
+  const name = domainToASCII(value).replace(/\.$/, '');
+  return name.length <= 253 && name.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
+}
+
 export interface NormalizedConfig {
   readonly config: EngramConfig;
   /** Human-readable notes about fields that were refused, for the caller to print. */
@@ -142,13 +153,18 @@ export function normalizeConfig(stored: unknown, defaults: EngramConfig): Normal
   const config: EngramConfig = {
     dbPath,
     port,
-    host: takeString(stored, 'host', defaults.host, problems),
+    host: defaults.host,
     namespace,
     namespaceMode,
     embeddingModel: takeString(stored, 'embeddingModel', defaults.embeddingModel, problems),
     indexPath: takeString(stored, 'indexPath', defaults.indexPath, problems),
     repoPath: takeString(stored, 'repoPath', defaults.repoPath, problems),
   };
+
+  if (stored['host'] !== undefined) {
+    if (isValidHost(stored['host'])) config.host = stored['host'];
+    else problems.push(`config: host must be an IP address or hostname — using ${defaults.host}`);
+  }
 
   if (typeof stored['syncUrl'] === 'string' && stored['syncUrl'].length > 0) config.syncUrl = stored['syncUrl'];
   if (typeof stored['deviceName'] === 'string' && stored['deviceName'].length > 0) config.deviceName = stored['deviceName'];
@@ -173,6 +189,10 @@ export type ParsedValue =
 
 /** Validate one `engram configure set <key> <value>` pair. */
 export function parseConfigValue(key: ConfigKey, value: string): ParsedValue {
+  if (key === 'host' && !isValidHost(value)) {
+    return { ok: false, error: 'Invalid host (expected an IP address or hostname)' };
+  }
+
   if (key === 'port') {
     // An unparseable port used to become NaN, which JSON.stringify writes as
     // null — loadConfig then spread null over the default, so every later

@@ -186,19 +186,28 @@ export function updateJsonConfig(
   return writeConfigFile(file, JSON.stringify(next, null, 2) + '\n', now, original);
 }
 
+function escapeBashSingleQuotes(value: string): string {
+  return value.replace(/'/g, `'\\''`);
+}
+
+function bashLiteral(value: string): string {
+  return `'${escapeBashSingleQuotes(value)}'`;
+}
+
 /** Render hook paths, API base and the same environment as its MCP entry. */
 export function renderHook(
   templateBody: string, apiBase: string, repoPath = '', dbPath = '',
   mcpEnv: Readonly<Record<string, string>> = { ENGRAM_DB_PATH: dbPath, ENGRAM_SOURCE: 'claude-code' },
 ): string {
   return templateBody.replace(/__API_BASE__|__REPO_PATH__|__DB_PATH__|__MCP_ENV__|__NAMESPACE_MODE__|__NAMESPACE__/g, (placeholder) => {
-    if (placeholder === '__API_BASE__') return apiBase;
-    if (placeholder === '__NAMESPACE_MODE__') return quoteHookCommand(mcpEnv['ENGRAM_NAMESPACE_MODE'] || 'project');
-    if (placeholder === '__NAMESPACE__') return quoteHookCommand(mcpEnv['ENGRAM_NAMESPACE'] || '');
+    // The templates enclose the default URL in single quotes.
+    if (placeholder === '__API_BASE__') return escapeBashSingleQuotes(apiBase);
+    if (placeholder === '__NAMESPACE_MODE__') return bashLiteral(mcpEnv['ENGRAM_NAMESPACE_MODE'] || 'project');
+    if (placeholder === '__NAMESPACE__') return bashLiteral(mcpEnv['ENGRAM_NAMESPACE'] || '');
     if (placeholder === '__MCP_ENV__') {
-      return Object.entries(mcpEnv).map(([key, value]) => quoteHookCommand(`${key}=${value}`)).join(' ');
+      return Object.entries(mcpEnv).map(([key, value]) => bashLiteral(`${key}=${value}`)).join(' ');
     }
-    return quoteHookCommand(placeholder === '__REPO_PATH__' ? repoPath : dbPath);
+    return bashLiteral(placeholder === '__REPO_PATH__' ? repoPath : dbPath);
   });
 }
 
@@ -218,7 +227,7 @@ export function installHookScript(
 /** Quote a hook script path so a home directory containing spaces still runs. */
 export function quoteHookCommand(command: string, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') return `"${command}"`;
-  return `'${command.replace(/'/g, `'\\''`)}'`;
+  return bashLiteral(command);
 }
 
 /** Undo quoteHookCommand for basename comparison, including older quoted entries. */

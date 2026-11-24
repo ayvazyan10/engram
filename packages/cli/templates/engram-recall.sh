@@ -10,7 +10,8 @@
 #
 # Tunables: ENGRAM_API, ENGRAM_API_KEY, ENGRAM_RECALL_MIN_SIM, ENGRAM_SOURCE.
 
-ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
+DEFAULT_API='__API_BASE__'
+ENGRAM_API="${ENGRAM_API:-$DEFAULT_API}"
 MIN_SIM="${ENGRAM_RECALL_MIN_SIM:-0.5}"
 SOURCE="${ENGRAM_SOURCE:-claude-code}"
 NAMESPACE_MODE=__NAMESPACE_MODE__
@@ -62,9 +63,11 @@ PROMPT=$(printf '%s' "$INPUT" | jq -er '.prompt | if type == "string" then . els
 case "$PROMPT" in /*|!*) exit 0 ;; esac
 # Messages from other sessions, subagents and background tasks are not the
 # user's prompt; their wrapper (sender names, paths) skews similarity too.
-# The host may put a line of its own before the tag, so look at the head.
-WRAPPER='<(cross-session-message|agent-message|task-notification)[[:space:]>]'
-[[ "${PROMPT:0:300}" =~ $WRAPPER ]] && exit 0
+# The host may put a preamble line before the opening tag on its own line.
+WRAPPER='<(cross-session-message|agent-message|task-notification)([[:blank:]][^>]*)?>'
+[[ "$PROMPT" =~ ^[[:space:]]*$WRAPPER ]] && exit 0
+AFTER_PREAMBLE="${PROMPT#*$'\n'}"
+[[ "${AFTER_PREAMBLE%%$'\n'*}" =~ ^[[:space:]]*$WRAPPER[[:space:]]*$ ]] && exit 0
 
 # Search returns the stored tags and raw cosine score. Recall drops the tags.
 BODY=$(jq -cn --arg q "$PROMPT" --arg ns "$PROJECT" --arg mode "$NAMESPACE_MODE" --argjson min "$MIN_SIM" '

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { asMemoryRecord } from '../../hooks/useWebSocket.js';
 import { api } from '../../lib/api.js';
 import type { MemoryRecord } from '../../store/memoryStore.js';
 import ModalShell from './ModalShell.js';
@@ -37,17 +38,14 @@ export default function StoreMemoryModal({ onClose, onStored }: Props) {
         tags: tags.length > 0 ? tags : undefined,
         source: 'dashboard',
       });
-      onStored({
-        id: res.memory.id,
-        type: res.memory.type as MemoryRecord['type'],
-        content: res.memory.content,
-        summary: res.memory.summary,
-        importance: res.memory.importance,
-        source: res.memory.source,
-        concept: res.memory.concept,
-        tags: res.memory.tags,
-        createdAt: res.memory.createdAt,
-      });
+      const record = asMemoryRecord(res.memory);
+      if (res.discarded || res.memory?.archivedAt) {
+        setError('This memory was archived while it was being stored.');
+      } else if (record) {
+        onStored(record);
+      } else {
+        setError('Engram returned an invalid memory.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to store memory');
     } finally {

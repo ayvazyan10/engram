@@ -49,7 +49,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(`${BASE}${path}`, { ...init, headers, signal: controller.signal });
     if (res.status === 401) {
       useAuthStore.getState().lock(Boolean(apiKey));
-    } else if (res.ok) {
+    } else if (res.ok && path !== '/health') {
       useAuthStore.getState().unlock();
     }
     if (res.status === 204) return undefined as T;
@@ -262,7 +262,14 @@ export const api = {
     tags?: string[];
     importance?: number;
     concept?: string;
-  }) => request<{ memory: { id: string; type: string; content: string; importance: number; source: string | null; concept: string | null; tags: string; createdAt: string; summary: string | null } }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
+  }) => request<{
+    memory: {
+      id: string; type: string; content: string; importance: number; source: string | null;
+      concept: string | null; tags: string; createdAt: string; summary: string | null;
+      namespace?: string | null; archivedAt?: string | null;
+    };
+    discarded?: boolean;
+  }>('/memory', { method: 'POST', body: JSON.stringify(body) }),
 
   /** `keepalive` lets the call outlive the page: a deferred archive still
    *  waiting out its undo window is sent this way when the tab closes. */

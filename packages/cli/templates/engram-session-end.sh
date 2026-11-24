@@ -8,7 +8,8 @@
 #
 # Tunables: ENGRAM_API, ENGRAM_API_KEY.
 
-ENGRAM_API="${ENGRAM_API:-__API_BASE__}"
+DEFAULT_API='__API_BASE__'
+ENGRAM_API="${ENGRAM_API:-$DEFAULT_API}"
 NAMESPACE_MODE=__NAMESPACE_MODE__
 PROJECT=__NAMESPACE__
 # An older `engram update` leaves these two unrendered: behave as project mode.
