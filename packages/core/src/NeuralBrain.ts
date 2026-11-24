@@ -95,7 +95,7 @@ export interface BrainConfig {
   decayPolicy?: Partial<DecayPolicyConfig>;
   /**
    * Namespace behavior. Defaults to `none`.
-   * - none: ignore namespace values and use one shared memory pool
+   * - none: read across projects by default and preserve an explicit namespace on store
    * - filter: optional namespace filtering with per-request overrides
    * - isolated: require one fixed namespace and reject overrides/cross-namespace access
    */
@@ -263,6 +263,11 @@ export interface Collection {
   prefix: string;
   tags: TagInfo[];
   totalMemories: number;
+}
+
+function collectionPrefix(tag: string): string {
+  const colon = tag.indexOf(':');
+  return colon > 0 ? tag.slice(0, colon) : 'default';
 }
 
 /** A search result: the stored memory plus cosine similarity, ordered by retrieval relevance. */
@@ -1239,12 +1244,14 @@ export class NeuralBrain {
       crossNamespace: this.resolveCrossNamespace(options?.crossNamespace),
     });
 
-    void this.pluginRegistry.runHook('onRecall', {
+    const hookContext = {
       query,
       memoriesUsed: result.memories.length,
       latencyMs: result.latencyMs,
       context: result.context,
-    });
+    };
+    await this.pluginRegistry.runHook('onRecall', hookContext);
+    result.context = hookContext.context;
 
     return result;
   }
@@ -1605,6 +1612,7 @@ export class NeuralBrain {
 
     // For each cluster, create a semantic summary
     const results: Memory[] = [];
+    let archivedAny = false;
 
     for (const cluster of clusters) {
       const contents = cluster.map((m) => m.content);
@@ -1618,6 +1626,9 @@ export class NeuralBrain {
       const importance = clampImportance(avgImportance + 0.1);
 
       const summary = this.summarizeCluster(contents);
+      if (!summary) continue;
+      const sources = new Map(cluster.map((m) => [m.id, m]));
+      const episodeIds = [...sources.keys()];
 
       const { memory: semantic, discarded, deduplicated } = await this.store({
         content: summary,
@@ -1627,55 +1638,63 @@ export class NeuralBrain {
         source: 'consolidation',
         namespace: cluster[0]!.namespace,
         tags: ['consolidated'],
-        metadata: { episodeCount: cluster.length, episodeIds: cluster.map((m) => m.id) },
+        metadata: { episodeCount: cluster.length, episodeIds },
       });
+      if (discarded || semantic.source !== 'consolidation') continue;
 
-      // The summary can be archived the instant it is written: the dedup
-      // summary repeats each episode's wording, negations included, so with
-      // contradiction auto-resolution on it contradicts its own sources at
-      // near-identical similarity and keep_oldest discards it. Archiving the
-      // cluster behind a summary that is already gone destroyed the cluster and
-      // replaced it with nothing — three episodes and a summary, none of them
-      // live — while store()'s return value was still reported as created.
-      // Leave the cluster intact and report no summary for it.
-      // A reused summary belongs to another consolidation attempt. It must
-      // retain ownership of archiving its sources and reporting the new row.
-      if (discarded || deduplicated) continue;
+      const archivedIds = db.transaction((tx) => {
+        const current = tx.select().from(schema.memories).where(and(
+          eq(schema.memories.id, semantic.id), eq(schema.memories.type, 'semantic'),
+          eq(schema.memories.source, 'consolidation'), isNull(schema.memories.archivedAt),
+          sql`${schema.memories.namespace} IS ${cluster[0]!.namespace}`,
+          sql`json_valid(${schema.memories.metadata})`,
+        )).get();
+        if (!current) return [];
+        const metadata = JSON.parse(current.metadata);
+        if (deduplicated) {
+          // Dedup can match an unrelated summary. Verify the sources and
+          // regenerate the text in their original order before taking over.
+          const ids: unknown = metadata?.episodeIds;
+          if (!Array.isArray(ids) || ids.length !== sources.size || new Set(ids).size !== sources.size
+            || !ids.every((id) => sources.has(id))
+            || current.content !== this.summarizeCluster(ids.map((id) => sources.get(id)!.content))) return [];
+        } else if (metadata?.episodesArchived === true) {
+          // A retry completed our archive while store() was still returning.
+          results.push(current);
+          return [];
+        }
 
-      // Archive the whole cluster in ONE transaction. Calling forget() per
-      // episode meant a failure mid-loop left the cluster half-archived: a
-      // summary plus some still-live episodes AND some already gone.
-      //
-      // Note the remaining boundary: the summary is created by store() above
-      // (which must be async to embed), so a crash between the two leaves the
-      // summary with its episodes still live — duplicated information, but
-      // nothing lost. Full atomicity would mean bypassing store() and losing
-      // its auto-link and contradiction handling.
-      const sources = new Map(cluster.map((m) => [m.id, m]));
-      if (!this.archiveAtomic([...sources.keys()], isNull(schema.memories.archivedAt), (m) => {
-        const source = sources.get(m.id)!;
-        return m.updatedAt === source.updatedAt && m.content === source.content
-          && m.concept === source.concept && m.importance === source.importance
-          && m.namespace === semantic.namespace && (!automatic || !this.decayEngine.isProtected(m));
-      })) {
-        await this.forget(semantic.id);
-        continue;
+        if (!this.archiveAtomic(episodeIds, isNull(schema.memories.archivedAt), (m) => {
+          const source = sources.get(m.id)!;
+          return m.updatedAt === source.updatedAt && m.content === source.content
+            && m.concept === source.concept && m.importance === source.importance
+            && m.namespace === current.namespace && (!automatic || !this.decayEngine.isProtected(m));
+        })) {
+          return !deduplicated && this.archiveAtomic([current.id]) ? [current.id] : [];
+        }
+
+        if (deduplicated) {
+          tx.update(schema.memories).set({
+            metadata: JSON.stringify({ ...metadata, episodesArchived: true }),
+            updatedAt: new Date().toISOString(), deviceId: getDeviceId(),
+          }).where(eq(schema.memories.id, current.id)).run();
+        } else {
+          results.push(current);
+        }
+        return episodeIds;
+      }, { behavior: 'immediate' });
+
+      if (archivedIds.length > 0) archivedAny = true;
+      for (const id of archivedIds) {
+        this.vectorSearch.remove(id);
+        this.graph.removeNode(id);
+        this.webhookManager.fire('forgotten', { id });
+        void this.pluginRegistry.runHook('onForget', { memoryId: id });
       }
-
-      for (const ep of cluster) {
-        this.vectorSearch.remove(ep.id);
-        this.graph.removeNode(ep.id);
-        this.webhookManager.fire('forgotten', { id: ep.id });
-        void this.pluginRegistry.runHook('onForget', { memoryId: ep.id });
-      }
-
-      results.push(semantic);
     }
 
+    if (archivedAny) await this.refreshIndexBaseline();
     if (results.length > 0) {
-      // The archives above land after the last store() claimed the fingerprint,
-      // so re-claim it here for the same reason forget() does.
-      await this.refreshIndexBaseline();
       this.webhookManager.fire('consolidated', {
         count: results.length,
         ids: results.map((m) => m.id),
@@ -1937,6 +1956,10 @@ export class NeuralBrain {
    * Get a tag cloud — all unique tags with their memory counts.
    */
   async getTags(): Promise<TagInfo[]> {
+    return this.countTags();
+  }
+
+  private async countTags(collectionTotals?: Map<string, number>): Promise<TagInfo[]> {
     this.assertInitialized();
     const db = getDb();
 
@@ -1950,6 +1973,11 @@ export class NeuralBrain {
       const tags: string[] = JSON.parse(row.tags);
       for (const tag of tags) {
         counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+      if (collectionTotals) {
+        for (const prefix of new Set(tags.map(collectionPrefix))) {
+          collectionTotals.set(prefix, (collectionTotals.get(prefix) ?? 0) + 1);
+        }
       }
     }
 
@@ -2014,21 +2042,18 @@ export class NeuralBrain {
    * Tags without a prefix go into a "default" collection.
    */
   async getCollections(): Promise<Collection[]> {
-    const allTags = await this.getTags();
-
-    const collections = new Map<string, { prefix: string; tags: TagInfo[]; total: number }>();
+    const totals = new Map<string, number>();
+    const allTags = await this.countTags(totals);
+    const collections = new Map<string, Collection>();
 
     for (const tagInfo of allTags) {
-      const colonIdx = tagInfo.tag.indexOf(':');
-      const prefix = colonIdx > 0 ? tagInfo.tag.slice(0, colonIdx) : 'default';
-      const entry = collections.get(prefix) ?? { prefix, tags: [], total: 0 };
+      const prefix = collectionPrefix(tagInfo.tag);
+      const entry = collections.get(prefix) ?? { name: prefix, prefix, tags: [], totalMemories: totals.get(prefix)! };
       entry.tags.push(tagInfo);
-      entry.total += tagInfo.count;
       collections.set(prefix, entry);
     }
 
     return [...collections.values()]
-      .map((c) => ({ name: c.prefix, prefix: c.prefix, tags: c.tags, totalMemories: c.total }))
       .sort((a, b) => b.totalMemories - a.totalMemories);
   }
 
@@ -2224,7 +2249,7 @@ export class NeuralBrain {
     const now = new Date().toISOString();
     const deviceId = getDeviceId();
 
-    await db
+    const result = db
       .update(schema.memories)
       // updatedAt/deviceId must move with the change — this write silently
       // mutated embeddingModel with no updatedAt bump, so a backfill would
@@ -2235,21 +2260,8 @@ export class NeuralBrain {
           ...this.liveConditions(),
           isNull(schema.memories.embeddingModel),
         )
-      );
-
-    // Drizzle SQLite doesn't return affected count directly, so count manually
-    const remaining = await db
-      .select()
-      .from(schema.memories)
-      .where(
-        and(
-          ...this.liveConditions(),
-          isNull(schema.memories.embeddingModel),
-        )
-      );
-
-    // All that didn't match = were updated
-    return remaining.length === 0 ? -1 : 0; // -1 signals "all done"
+      ).run();
+    return result.changes;
   }
 
   /** Get the currently active embedding model ID. */

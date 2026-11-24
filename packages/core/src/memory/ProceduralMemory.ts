@@ -106,11 +106,11 @@ export class ProceduralMemory {
       tags: JSON.stringify(input.tags ?? []),
       metadata: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
-      updatedAt: now,
       deviceId: getDeviceId(),
     };
 
     this.indexSink?.beforeMemoryWrite?.();
+    record.updatedAt = new Date().toISOString();
     db.insert(schema.memories).values(record).run();
 
     // Index and graph only after the durable write succeeded, so in-memory

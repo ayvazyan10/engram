@@ -178,10 +178,7 @@ export class SemanticMemory {
     if (updates.importance !== undefined) assertValidImportance(updates.importance);
 
     const db = getDb();
-    const now = new Date().toISOString();
-
     const updateData: Partial<NewMemory> = {
-      updatedAt: now,
       deviceId: getDeviceId(),
     };
 
@@ -231,6 +228,7 @@ export class SemanticMemory {
     }
 
     this.indexSink?.beforeMemoryWrite?.();
+    updateData.updatedAt = new Date().toISOString();
     db.update(schema.memories).set(updateData).where(eq(schema.memories.id, id)).run();
 
     if (reindex) {

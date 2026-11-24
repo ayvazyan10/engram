@@ -11,7 +11,7 @@
  * 7. Log to context_assemblies
  */
 
-import { inArray, sql } from 'drizzle-orm';
+import { and, inArray, isNull, sql } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb, schema } from '../db/index.js';
 import type { Memory, MemoryType } from '../db/schema.js';
@@ -175,12 +175,19 @@ export class ContextAssembler {
     return this.commit(await this.plan(query, options));
   }
 
+  private matchesScope(record: Memory, options: RecallOptions): boolean {
+    if (!matchesMemoryFilters(record, options)) return false;
+    if (options.sources && !options.sources.includes(record.source ?? '')) return false;
+    if (options.types && !options.types.includes(record.type)) return false;
+    return options.crossNamespace === true || (this.namespace === undefined && !this.includeGlobal)
+      || record.namespace === this.namespace || (this.includeGlobal && record.namespace === null);
+  }
+
   /** Select, rank, budget and format using reads and embedding only. */
   async plan(query: string, options: RecallOptions = {}): Promise<RecallPlan> {
     const startTime = Date.now();
     const {
       maxTokens = 2000,
-      sources,
       types,
       threshold = 0.3,
       topK = 20,
@@ -233,19 +240,7 @@ export class ContextAssembler {
 
       for (const record of rows) {
         if (record.archivedAt || record.embeddingModel !== model) continue;
-        if (!matchesMemoryFilters(record, options)) continue;
-        // Apply source filter
-        if (sources && !sources.includes(record.source ?? '')) continue;
-        // Apply type filter. The vector search already honours `types`, but
-        // graph expansion reaches memories it never scored, so without this the
-        // documented "Filter by memory type" leaked neighbours of every other
-        // type into the result — and rendered whole sections for them.
-        if (types && !types.includes(record.type as MemoryType)) continue;
-        // Apply namespace filter
-        if (!crossNamespace && (this.namespace !== undefined || this.includeGlobal)
-          && record.namespace !== this.namespace
-          && !(this.includeGlobal && record.namespace == null)) continue;
-        records.push(record);
+        if (this.matchesScope(record, options)) records.push(record);
       }
     }
 
@@ -346,61 +341,46 @@ export class ContextAssembler {
 
   /** Persist the access statistics and audit row for a completed plan. */
   async commit(plan: RecallPlan): Promise<RecallResult> {
-    const { context, memories, selected, query, queryVec, startTime, options: { source, sessionId } } = plan;
-    if (plan.options.touch === false || !plan.hasCandidates) return { context, memories, latencyMs: plan.latencyMs };
-    const db = getDb();
+    const { options, selected } = plan;
+    if (!plan.hasCandidates) return { context: plan.context, memories: plan.memories, latencyMs: plan.latencyMs };
 
-    // Update access counts in DB. These must be awaited: drizzle query builders
-    // are lazy, so a bare `void db.update(...)` never sends the statement. The
-    // increment is done in SQL so concurrent recalls cannot clobber each other.
-    //
-    // Deliberately does NOT set `updatedAt` here. Bumping it on every recall
-    // would push every recalled memory to the cloud on every agent turn —
-    // dozens of rows per call. `access_count` is designed to be write-hot
-    // (see the raw `+ 1` above) and gets its own MAX-merge sync rule in a
-    // later phase instead of last-write-wins; do not "fix" this to bump
-    // updatedAt without that rule in place.
-    const now = new Date().toISOString();
-    const accessed = selected.filter(({ record }) => !this.includeGlobal
-      || record.namespace === this.namespace || record.namespace == null);
-    if (accessed.length > 0) {
-      await db
-        .update(schema.memories)
-        .set({
+    // A stream may have paused after any chunk. Check visibility in the same
+    // transaction as the audit so a concurrent forget cannot be logged again.
+    return getDb().transaction((tx) => {
+      const rows = tx.select().from(schema.memories).where(and(
+        inArray(schema.memories.id, selected.map(({ record }) => record.id)),
+        isNull(schema.memories.archivedAt),
+      )).all().filter((row) => this.matchesScope(row, options));
+      const liveIds = new Set(rows.map((row) => row.id));
+      const memories = plan.memories.filter((m) => liveIds.has(m.id));
+      const context = memories.length === selected.length ? plan.context
+        : formatContext(selected.filter(({ record }) => liveIds.has(record.id)).map(({ record }) => record));
+      if (options.touch === false) return { context, memories, latencyMs: plan.latencyMs };
+
+      const now = new Date().toISOString();
+      const accessed = rows.filter((row) => !this.includeGlobal || row.namespace === this.namespace || row.namespace === null);
+      if (accessed.length > 0) {
+        // Access counts merge independently of the sync revision.
+        tx.update(schema.memories).set({
           accessCount: sql`${schema.memories.accessCount} + 1`,
           lastAccessedAt: now,
-        })
-        .where(inArray(schema.memories.id, accessed.map((s) => s.record.id)));
-    }
+        }).where(inArray(schema.memories.id, accessed.map((row) => row.id))).run();
+      }
 
-    const latencyMs = Date.now() - startTime;
-
-    // Step 7: Log to context_assemblies
-    const assemblyLog = {
-      id: uuidv4(),
-      query,
-      queryEmbedding: packFP16(queryVec),
-      assembledContext: JSON.stringify(
-        selected.map((s) => ({
-          memoryId: s.record.id,
-          score: s.score,
-          type: s.record.type,
-        }))
-      ),
-      source: source ?? null,
-      sessionId: sessionId ?? null,
-      namespace: this.namespace ?? null,
-      latencyMs,
-      // Explicit ISO timestamp — the column's `CURRENT_TIMESTAMP` default
-      // yields second-precision "2026-08-25 14:23:01" with no T/Z, breaking
-      // any last-write-wins comparison against the millisecond ISO strings
-      // every other write site produces.
-      createdAt: now,
-    };
-
-    await db.insert(schema.contextAssemblies).values(assemblyLog);
-
-    return { context, memories, latencyMs };
+      const latencyMs = Date.now() - plan.startTime;
+      tx.insert(schema.contextAssemblies).values({
+        id: uuidv4(),
+        query: plan.query,
+        queryEmbedding: packFP16(plan.queryVec),
+        assembledContext: JSON.stringify(memories.map(({ id, score, type }) => ({ memoryId: id, score, type }))),
+        source: options.source ?? null,
+        sessionId: options.sessionId ?? null,
+        namespace: this.namespace ?? null,
+        latencyMs,
+        createdAt: now,
+      }).run();
+      return { context, memories, latencyMs };
+    }, { behavior: options.touch === false ? 'deferred' : 'immediate' });
   }
 
   /**
