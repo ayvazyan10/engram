@@ -3,7 +3,7 @@ import { getDb, schema } from '@engram-ai-memory/core';
 import { eq, isNull, desc, and, or, getTableColumns, lt, sql } from 'drizzle-orm';
 import { brain, realtime, notifySyncWrite } from '../index.js';
 import { strictObjectBody, strictQueryString } from '../lib/strictBody.js';
-import { redactField, scanSecrets, secretRuleNames } from '../lib/review/secrets.js';
+import { redactFieldWithCount, scanSecrets, secretRuleNames } from '../lib/review/secrets.js';
 import { isMemoryNotFound } from '../lib/notFound.js';
 
 export const memoryRoutes: FastifyPluginAsync = async (app) => {
@@ -215,14 +215,18 @@ export const memoryRoutes: FastifyPluginAsync = async (app) => {
       const findings = scanSecrets(memory).filter((f) => req.body.rules === undefined || req.body.rules.includes(f.rule));
       if (!findings.length) return reply.code(409).send({ error: 'Nothing to redact' });
       const updates: { content?: string; concept?: string; summary?: string } = {};
+      let redacted = 0;
       for (const field of ['content', 'concept', 'summary'] as const) {
         const spans = findings.filter((f) => f.field === field);
-        if (spans.length) updates[field] = redactField(memory[field]!, spans);
+        if (!spans.length) continue;
+        const { text, count } = redactFieldWithCount(memory[field]!, spans);
+        updates[field] = text;
+        redacted += count;
       }
       try {
         await brain.updateMemory(memory.id, updates);
         notifySyncWrite();
-        return { id: memory.id, redacted: findings.length };
+        return { id: memory.id, redacted };
       } catch (error) {
         if (isMemoryNotFound(error)) return reply.code(404).send({ error: 'Memory not found' });
         throw error;

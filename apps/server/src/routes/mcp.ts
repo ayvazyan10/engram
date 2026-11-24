@@ -3,11 +3,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { registerTools } from '@engram-ai-memory/mcp/dist/tools.js';
 import { brain, notifySyncWrite, VERSION } from '../index.js';
+import { runExclusive } from '../lib/exclusive.js';
 
 async function handleMcpRequest(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const server = new McpServer({ name: 'engram', version: VERSION });
   // buildApp's caller initializes this brain, exactly as for REST routes.
-  registerTools(server, brain, async () => {}, { notifyWrite: notifySyncWrite });
+  registerTools(server, brain, async () => {}, { notifyWrite: notifySyncWrite }, {
+    runDecaySweep: (dryRun) => runExclusive('consolidate', () => brain.runDecaySweep(dryRun)),
+    reEmbed: (onlyStale, batchSize) => runExclusive('re-embed', () => brain.reEmbed(onlyStale, batchSize)),
+  });
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,

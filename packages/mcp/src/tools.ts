@@ -16,12 +16,15 @@ export interface ToolContext {
   clientSource: () => string;
 }
 
+type Maintenance = Pick<NeuralBrain, 'runDecaySweep' | 'reEmbed'>;
+
 /** Register the same tools for either transport without creating a brain. */
 export function registerTools(
   server: McpServer,
   brain: NeuralBrain,
   ensureInitialized: () => Promise<void>,
   syncEngine?: Pick<SyncEngine, 'notifyWrite'>,
+  maintenance: Maintenance = brain,
 ): void {
   const clientSource = (): string =>
     process.env['ENGRAM_SOURCE'] || server.server.getClientVersion()?.name || 'mcp-client';
@@ -39,7 +42,7 @@ export function registerTools(
   registerGetReflections(context);
   if (process.env['ENGRAM_ADMIN_TOOLS'] === '1') {
     registerMemoryStats(context);
-    registerDecaySweep(context);
+    registerDecaySweep(context, maintenance);
     registerDecayPolicy(context);
     registerCheckContradictions(context);
     registerResolveContradiction(context);
@@ -48,7 +51,7 @@ export function registerTools(
     registerWebhookList(context);
     registerIndexStatus(context);
     registerEmbeddingStatus(context);
-    registerReEmbed(context);
+    registerReEmbed(context, maintenance);
   }
 }
 
@@ -98,7 +101,7 @@ function registerForget({ server, brain, ensureInitialized, syncEngine }: ToolCo
   );
 }
 
-function registerDecaySweep({ server, brain, ensureInitialized, syncEngine }: ToolContext): void {
+function registerDecaySweep({ server, ensureInitialized, syncEngine }: ToolContext, maintenance: Maintenance): void {
   server.tool(
     'decay_sweep',
     'Run a memory decay sweep — evaluates all memories and archives stale ones based on the decay policy. Also triggers auto-consolidation of old episodic memories if enabled.',
@@ -112,7 +115,7 @@ function registerDecaySweep({ server, brain, ensureInitialized, syncEngine }: To
     { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     async ({ dryRun }) => {
       await ensureInitialized();
-      const result = await brain.runDecaySweep(dryRun);
+      const result = await maintenance.runDecaySweep(dryRun);
       if (!dryRun) syncEngine?.notifyWrite();
       return {
         content: [{
@@ -455,7 +458,7 @@ function registerEmbeddingStatus({ server, brain, ensureInitialized }: ToolConte
   );
 }
 
-function registerReEmbed({ server, brain, ensureInitialized, syncEngine }: ToolContext): void {
+function registerReEmbed({ server, brain, ensureInitialized, syncEngine }: ToolContext, maintenance: Maintenance): void {
   server.tool(
     're_embed',
     'Re-embed memories with the current embedding model. Use after switching models to update stale vectors. Can be slow for large stores.',
@@ -466,7 +469,7 @@ function registerReEmbed({ server, brain, ensureInitialized, syncEngine }: ToolC
     { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ onlyStale, batchSize }) => {
       await ensureInitialized();
-      const result = await brain.reEmbed(onlyStale, batchSize);
+      const result = await maintenance.reEmbed(onlyStale, batchSize);
       if (result.processed > 0) syncEngine?.notifyWrite();
       return {
         content: [{

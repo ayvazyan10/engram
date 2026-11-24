@@ -12,24 +12,16 @@ import { buildForwardHeaders, buildResponseHeaders } from './headers.js';
 
 export interface UpstreamTarget {
   url: URL;
-  /** Abort a request that never responds, so sockets are not held forever. */
+  /** Deadline for connection setup and the entire upstream response. */
   timeoutMs: number;
 }
 
-/** Ollama's own default port, assumed when a plaintext target omits one. */
-const DEFAULT_OLLAMA_PORT = 11434;
-const DEFAULT_TLS_PORT = 443;
+/** Larger replies still stream in full, but do not become memories. */
+const MAX_CAPTURE_BYTES = 1024 * 1024;
 
-/**
- * The TCP port to dial for a target URL.
- *
- * `new URL('https://host').port` is the empty string, so an https target with
- * no explicit port must fall back to the TLS default — falling through to
- * Ollama's plaintext port instead would speak TLS to the wrong service.
- */
 export function upstreamPort(url: URL): number {
   if (url.port !== '') return parseInt(url.port, 10);
-  return url.protocol === 'https:' ? DEFAULT_TLS_PORT : DEFAULT_OLLAMA_PORT;
+  return url.protocol === 'https:' ? 443 : 80;
 }
 
 /**
@@ -62,6 +54,11 @@ function requestOptions(
 
 function protocolFor(target: UpstreamTarget): typeof http | typeof https {
   return target.url.protocol === 'https:' ? https : http;
+}
+
+function setDeadline(req: http.ClientRequest, timeoutMs: number): void {
+  const timer = setTimeout(() => req.destroy(new Error(`Upstream timed out after ${timeoutMs}ms`)), timeoutMs);
+  req.once('close', () => clearTimeout(timer));
 }
 
 /** Send a request and buffer the whole response. */
@@ -97,17 +94,15 @@ export function makeBufferedRequest(
     });
 
     req.on('error', reject);
-    req.setTimeout(target.timeoutMs, () => {
-      req.destroy(new Error(`Upstream timed out after ${target.timeoutMs}ms`));
-    });
+    setDeadline(req, target.timeoutMs);
     req.write(body);
     req.end();
   });
 }
 
 /**
- * Stream the upstream response straight through to the client while buffering a
- * copy for auto-store.
+ * Stream the upstream response, returning an empty buffer if it exceeds the
+ * auto-store capture limit.
  *
  * On failure this function answers the client itself — the caller cannot,
  * because headers may already have been sent.
@@ -131,23 +126,27 @@ export function streamRequest(
         res.writeHead(502, { 'Content-Type': 'text/plain' });
         res.end('Bad Gateway');
       } else if (!res.writableEnded) {
-        res.end();
+        res.destroy();
       }
       reject(err);
     };
 
     const req = protocolFor(target).request(options, (proxyRes) => {
       res.writeHead(proxyRes.statusCode ?? 200, buildResponseHeaders(proxyRes.headers));
-      const chunks: Buffer[] = [];
-      proxyRes.on('data', (c: Buffer) => { chunks.push(c); res.write(c); });
+      let capture: Buffer | undefined = Buffer.allocUnsafe(MAX_CAPTURE_BYTES);
+      let size = 0;
+      proxyRes.on('data', (chunk: Buffer) => {
+        if (!capture) return;
+        if (size + chunk.length > capture.length) capture = undefined;
+        else size += chunk.copy(capture, size);
+      });
       proxyRes.on('error', failClient);
-      proxyRes.on('end', () => { res.end(); resolve(Buffer.concat(chunks)); });
+      proxyRes.on('end', () => resolve(capture?.subarray(0, size) ?? Buffer.alloc(0)));
+      proxyRes.pipe(res);
     });
 
     req.on('error', failClient);
-    req.setTimeout(target.timeoutMs, () => {
-      req.destroy(new Error(`Upstream timed out after ${target.timeoutMs}ms`));
-    });
+    setDeadline(req, target.timeoutMs);
 
     // Client went away — release the upstream instead of streaming into a dead socket.
     res.on('close', () => {
@@ -184,7 +183,7 @@ export function passthrough(
       res.writeHead(502, { 'Content-Type': 'text/plain' });
       res.end('Bad Gateway');
     } else if (!res.writableEnded) {
-      res.end();
+      res.destroy();
     }
   };
 
@@ -197,9 +196,7 @@ export function passthrough(
   });
 
   proxyReq.on('error', failClient);
-  proxyReq.setTimeout(target.timeoutMs, () => {
-    proxyReq.destroy(new Error(`Upstream timed out after ${target.timeoutMs}ms`));
-  });
+  setDeadline(proxyReq, target.timeoutMs);
 
   // Client went away — release the upstream instead of holding its socket.
   res.on('close', () => {

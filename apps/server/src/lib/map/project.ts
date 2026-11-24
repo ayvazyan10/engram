@@ -78,12 +78,11 @@ export async function project(
     const extent = Math.max(1e-9, ...pca.coords.map(([x, y]) => Math.max(Math.abs(x), Math.abs(y))));
     embedded.forEach((r, i) => seeds.set(r.id, [pca.coords[i]![0] / extent, pca.coords[i]![1] / extent]));
   }
-  const old = new Map(insertPoints(rows.map((r) => r.id), links, previous).map((p) => [p.id, p]));
-  const nodes: (Point & SimulationNodeDatum)[] = rows.map(({ id }) => {
-    const p = old.get(id)!;
-    const [x, y] = previous.length ? [p.x, p.y] : seeds.get(id) ?? fallback(id);
-    return { id, x: x!, y: y! };
-  });
+  const nodes: (Point & SimulationNodeDatum)[] = insertPoints(rows.map((r) => r.id), links, previous);
+  for (const point of nodes) {
+    const seed = seeds.get(point.id);
+    if (seed) [point.x, point.y] = seed;
+  }
   // Explicit LCG seed; the simulation is stopped immediately, so no timer runs.
   let seed = 1;
   const forceLinks = links.map((l) => ({ source: l.sourceId, target: l.targetId, strength: l.strength }));

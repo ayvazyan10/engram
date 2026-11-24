@@ -138,6 +138,22 @@ const DEFAULT_UPSTREAM_TIMEOUT_MS = 300_000;
 /** Highest port number the kernel can bind. 0 means "any free port". */
 const MAX_PORT = 65535;
 
+function readUpstream(env: EnvSource): string {
+  const upstream = readEnvString(env, 'ENGRAM_UPSTREAM');
+  if (upstream) return upstream;
+  const legacy = readEnvString(env, 'OLLAMA_TARGET');
+  if (!legacy) return DEFAULT_OLLAMA_TARGET;
+  const url = new URL(legacy);
+  // Only the legacy setting assumes Ollama's port. URL.port normalizes :80
+  // to '', so check the original authority before supplying an omitted port.
+  const authority = legacy.trim().split(/[/?#]/, 3)[2] ?? '';
+  if (url.protocol === 'http:' && !url.port && !/:\d+$/.test(authority)) {
+    url.port = '11434';
+    return url.href;
+  }
+  return legacy;
+}
+
 /** Everything proxy.ts reads out of the environment, already checked. */
 export interface ProxyConfig {
   readonly port: number;
@@ -178,13 +194,10 @@ export function readProxyConfig(
   return {
     port: readEnvNumber(env, 'OLLAMA_PROXY_PORT', DEFAULT_PROXY_PORT, { min: 0, max: MAX_PORT }),
     listenHost: readEnvString(env, 'ENGRAM_PROXY_HOST') ?? DEFAULT_LISTEN_HOST,
-    ollamaTarget:
-      readEnvString(env, 'ENGRAM_UPSTREAM') ??
-      readEnvString(env, 'OLLAMA_TARGET') ??
-      DEFAULT_OLLAMA_TARGET,
+    ollamaTarget: readUpstream(env),
     engramApi: readEnvString(env, 'ENGRAM_API') ?? DEFAULT_ENGRAM_API,
     engramApiKey: readEnvString(env, 'ENGRAM_API_KEY'),
-    maxTokens: readEnvNumberOr(env, 'ENGRAM_MAX_TOKENS', DEFAULT_MAX_TOKENS, { min: 1 }, warn),
+    maxTokens: readEnvNumberOr(env, 'ENGRAM_MAX_TOKENS', DEFAULT_MAX_TOKENS, { min: 1, max: 32000 }, warn),
     maxBodyBytes: readEnvNumber(env, 'ENGRAM_MAX_BODY_BYTES', DEFAULT_MAX_BODY_BYTES, { min: 1 }),
     // Opt-OUT flag: only the exact string "false" disables it, so a blank value
     // leaves the documented default (enabled) in place.
@@ -193,7 +206,7 @@ export function readProxyConfig(
       env,
       'ENGRAM_UPSTREAM_TIMEOUT_MS',
       DEFAULT_UPSTREAM_TIMEOUT_MS,
-      { min: 1 },
+      { min: 1, max: 2147483647 },
       warn
     ),
   };

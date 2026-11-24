@@ -53,12 +53,13 @@ describe('secret detection', () => {
     expect(scanSecrets({ content: `token=${placeholder}` })).toEqual([]);
   });
 
-  it('excludes URL examples and scans all three fields with nonoverlapping spans', () => {
+  it('excludes URL examples and keeps overlapping rules across all three fields', () => {
     expect(scanSecrets({ content: 'https://user:password@example.com' })).toEqual([]);
     const key = `ghp_${token}`;
     const findings = scanSecrets({ content: `token=${key}`, concept: key, summary: key });
-    expect(findings.map((f) => f.field).sort()).toEqual(['concept', 'content', 'summary']);
-    expect(findings.every((f) => f.rule === 'github-token')).toBe(true);
+    expect(findings.map((f) => [f.field, f.rule])).toEqual([
+      ['concept', 'github-token'], ['content', 'github-token'], ['content', 'keyword-assignment'], ['summary', 'github-token'],
+    ]);
     expect(redactField(`token=${key}`, findings.filter((f) => f.field === 'content'))).toBe('token=[REDACTED]');
   });
 

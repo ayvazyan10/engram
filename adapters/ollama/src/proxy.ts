@@ -68,6 +68,7 @@ const MAX_BODY_BYTES = config.maxBodyBytes;
 const TOOL_RETRY = config.toolRetry;
 const UPSTREAM_TIMEOUT_MS = config.upstreamTimeoutMs;
 
+if (!URL.canParse(OLLAMA_TARGET)) throw new Error('Invalid upstream URL');
 const target: UpstreamTarget = {
   url: new URL(OLLAMA_TARGET),
   timeoutMs: UPSTREAM_TIMEOUT_MS,
@@ -278,13 +279,13 @@ async function handleToolCall(d: ChatDispatch, signal: AbortSignal): Promise<voi
   );
 }
 
-/** Stream straight through, keeping a copy for auto-store. */
+/** Auto-store only when the whole streamed reply fit in the capture buffer. */
 async function handleStream(d: ChatDispatch): Promise<void> {
   const bodyBuf = Buffer.from(JSON.stringify(d.body));
   const responseBody = await streamRequest(target, d.url, d.method, d.headers, bodyBuf, d.res)
     .catch(() => null);
 
-  if (!responseBody) return; // error already written by streamRequest
+  if (!responseBody?.length) return;
 
   const parse = d.openai ? parseOpenAIResponse : parseOllamaResponse;
   rememberExchange(d.userQuery, parse(responseBody.toString()).text, 'ollama');
@@ -341,6 +342,11 @@ async function handleChatRequest(
 }
 
 async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  if (!isTrustedRequest(req)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain', Connection: 'close' });
+    res.end('Forbidden');
+    return;
+  }
   const url = req.url ?? '/';
 
   const read = await readLimitedBody(req, MAX_BODY_BYTES);
@@ -358,6 +364,21 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
 // ─── Server lifecycle ─────────────────────────────────────────────────────────
 
+function isTrustedRequest(req: http.IncomingMessage): boolean {
+  const host = req.headers.host?.toLowerCase();
+  if (!host) return false;
+  // A wildcard bind accepts LAN requests addressed to the receiving interface.
+  const localAddress = req.socket.localAddress?.replace(/^::ffff:(?=\d+\.)/, '');
+  const hosts = ['localhost', '127.0.0.1', '::1', LISTEN_HOST.toLowerCase(), localAddress];
+  const allowed = hosts.some((name) => {
+    if (!name) return false;
+    const hostname = name.includes(':') ? `[${name}]` : name;
+    return host === hostname || host === `${hostname}:${req.socket.localPort}`;
+  });
+  const origin = req.headers.origin;
+  return allowed && (origin === undefined || origin === `http://${host.replace(/:80$/, '')}`);
+}
+
 /** Answer a request whose handler threw, instead of letting the process die. */
 function failRequest(res: http.ServerResponse, err: unknown): void {
   console.error(`[Engram] Request handler failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -365,7 +386,7 @@ function failRequest(res: http.ServerResponse, err: unknown): void {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Internal Proxy Error');
   } else if (!res.writableEnded) {
-    res.end();
+    res.destroy();
   }
 }
 
@@ -405,8 +426,8 @@ proxy.listen(PROXY_PORT, LISTEN_HOST, () => {
   } else {
     console.warn(`  Bind:         ${LISTEN_HOST} — reachable off-host, and this proxy has no auth`);
   }
-  console.info(`  Ollama target: ${OLLAMA_TARGET}`);
-  console.info(`  Engram:   ${ENGRAM_API}`);
+  console.info(`  Ollama target: ${target.url.origin}`);
+  console.info(`  Engram:   ${URL.canParse(ENGRAM_API) ? new URL(ENGRAM_API).origin : '(invalid URL)'}`);
   console.info(`  Max body:     ${MAX_BODY_BYTES} bytes`);
   console.info(`  Tool retry:    ${TOOL_RETRY ? 'enabled' : 'disabled'}`);
   console.info('');

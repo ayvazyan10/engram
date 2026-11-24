@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { sep } from 'node:path';
 import { brain, VERSION, notifySyncWrite, realtime } from '../index.js';
 import { runExclusive, OperationInProgressError } from '../lib/exclusive.js';
+import { strictObjectBody } from '../lib/strictBody.js';
 
 /**
  * The subset of the policy that is safe to hand back over HTTP.
@@ -120,19 +121,27 @@ export const healthRoutes: FastifyPluginAsync = async (app) => {
 
   // ─── Decay & Garbage Collection ──────────────────────────────────────────
 
-  app.post('/decay', {
+  app.post<{ Body: { dryRun?: boolean } }>('/decay', {
     schema: {
       tags: ['health'],
       summary: 'Run a memory decay sweep',
       body: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           dryRun: { type: 'boolean', default: false },
         },
       },
     },
+    preValidation: [async (req, reply) => {
+      if (req.body === undefined) req.body = {};
+      if (req.body?.dryRun !== undefined && typeof req.body.dryRun !== 'boolean') {
+        return reply.code(400).send({ error: 'Bad Request', message: 'dryRun must be a boolean.' });
+      }
+      return undefined;
+    }, strictObjectBody(['dryRun'])],
     handler: async (req) => {
-      const { dryRun } = (req.body as { dryRun?: boolean }) ?? {};
+      const { dryRun } = req.body;
       // Decay includes consolidation, so all three entry points share a guard.
       const result = await runExclusive('consolidate', () => brain.runDecaySweep(dryRun ?? false));
       if (!dryRun && (result.archivedCount > 0 || result.decayedCount > 0 || result.consolidatedCount > 0)) {

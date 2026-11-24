@@ -33,7 +33,7 @@ export function scanSecrets(memory: { content: string; concept?: string | null; 
     const text = memory[field] ?? '';
     const add = (rule: string, start: number, value: string) => {
       const end = start + value.length;
-      if (placeholder(value) || findings.some((f) => f.field === field && start < f.end && end > f.start)) return;
+      if (placeholder(value)) return;
       // Only known public prefixes and a short suffix are exposed, never context.
       const prefix = value.match(/^(?:gh[pousr]_|github_pat_|glpat-|cfat_|sk-ant-|sk-|AKIA|ASIA|xox[abprs]-|[sr]k_live_)/)?.[0] ?? '';
       const preview = rule === 'private-key' || value.length < 12 ? '****' : `${prefix}****${value.slice(-4)}`;
@@ -76,9 +76,20 @@ export function scanSecrets(memory: { content: string; concept?: string | null; 
   return findings.sort((a, b) => a.field.localeCompare(b.field) || a.start - b.start);
 }
 
-export function redactField(text: string, findings: Finding[]): string {
-  for (const finding of [...findings].sort((a, b) => b.start - a.start)) {
-    text = text.slice(0, finding.start) + '[REDACTED]' + text.slice(finding.end);
+export function redactFieldWithCount(text: string, findings: Finding[]): { text: string; count: number } {
+  let redacted = '';
+  let count = 0;
+  let end = 0;
+  for (const finding of [...findings].sort((a, b) => a.start - b.start)) {
+    if (finding.start >= end) {
+      redacted += text.slice(end, finding.start) + '[REDACTED]';
+      count++;
+    }
+    end = Math.max(end, finding.end);
   }
-  return text;
+  return { text: redacted + text.slice(end), count };
+}
+
+export function redactField(text: string, findings: Finding[]): string {
+  return redactFieldWithCount(text, findings).text;
 }
