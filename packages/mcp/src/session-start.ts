@@ -53,7 +53,7 @@ function sessionLines(hits: SessionMemory[], source: string): string {
   return lines.join('\n');
 }
 
-async function recallContext(cwd: string, env: NamespaceEnv): Promise<string> {
+async function recallContext(cwd: string | undefined, env: NamespaceEnv): Promise<string> {
   const { resolveNamespaceSettings }: typeof NamespaceModule = await import(namespaceModulePath);
   const { namespaceMode, namespace } = resolveNamespaceSettings(env, cwd);
   if (!namespace || namespaceMode === 'none') return '';
@@ -81,7 +81,7 @@ export async function runSessionStart(
   try {
     const payload: unknown = JSON.parse(input);
     const cwd = payload && typeof payload === 'object' && 'cwd' in payload
-      && typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : process.cwd();
+      && typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : undefined;
     const parts = [
       await recallContext(cwd, env).catch(() => ''),
       await (import(versionModulePath) as Promise<typeof VersionModule>)
