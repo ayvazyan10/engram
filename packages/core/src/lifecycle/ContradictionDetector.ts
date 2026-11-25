@@ -309,9 +309,13 @@ export class ContradictionDetector {
   analyzeContradiction(newContent: string, existingContent: string): ContradictionSignal[] {
     if (newContent.trim() === existingContent.trim()) return [];
     const signals: ContradictionSignal[] = [];
+    const wordsA = this.tokenize(newContent);
+    const wordsB = this.tokenize(existingContent);
+    const overlap = this.overlapRatio(wordsA, wordsB);
+    const sharedSubject = overlap > 0.3;
 
     // Signal 1: Negation — one text negates what the other states
-    const negationScore = this.detectNegation(newContent, existingContent);
+    const negationScore = this.detectNegation(wordsA, wordsB, overlap);
     if (negationScore > 0) {
       signals.push({
         type: 'negation',
@@ -321,7 +325,7 @@ export class ContradictionDetector {
     }
 
     // Signal 2: Value change — explicit "changed from X to Y" patterns
-    const changeScore = this.detectValueChange(newContent, existingContent);
+    const changeScore = this.detectValueChange(newContent, existingContent, sharedSubject);
     if (changeScore > 0) {
       signals.push({
         type: 'value_change',
@@ -331,7 +335,7 @@ export class ContradictionDetector {
     }
 
     // Signal 3: Temporal override — newer info supersedes older
-    const temporalScore = this.detectTemporalOverride(newContent, existingContent);
+    const temporalScore = sharedSubject ? this.detectTemporalOverride(newContent, existingContent) : 0;
     if (temporalScore > 0) {
       signals.push({
         type: 'temporal_override',
@@ -360,22 +364,9 @@ export class ContradictionDetector {
    * Compares word overlap, looking for cases where one text negates
    * a statement in the other.
    */
-  private detectNegation(a: string, b: string): number {
-    const wordsA = this.tokenize(a);
-    const wordsB = this.tokenize(b);
-
-    // Count negation words in each
+  private detectNegation(wordsA: string[], wordsB: string[], overlapRatio: number): number {
     const negA = wordsA.filter((w) => NEGATION_WORDS.has(w)).length;
     const negB = wordsB.filter((w) => NEGATION_WORDS.has(w)).length;
-
-    // Content words (non-negation, non-stop)
-    const contentA = new Set(wordsA.filter((w) => !NEGATION_WORDS.has(w) && w.length > 3));
-    const contentB = new Set(wordsB.filter((w) => !NEGATION_WORDS.has(w) && w.length > 3));
-
-    // High overlap in content words but different negation counts = likely contradiction
-    const overlap = [...contentA].filter((w) => contentB.has(w)).length;
-    const maxContent = Math.max(contentA.size, contentB.size, 1);
-    const overlapRatio = overlap / maxContent;
 
     // If one has negation and the other doesn't (or different counts), with high overlap
     if (overlapRatio > 0.3 && negA !== negB) {
@@ -385,42 +376,19 @@ export class ContradictionDetector {
     return 0;
   }
 
-  /**
-   * Detect explicit value/state change patterns.
-   *
-   * Each text is tested on its own, deliberately. An earlier draft concatenated
-   * them (`a + ' ' + b`) so a CHANGE_PATTERN could span the boundary — a match
-   * on "was ... now" made of one word from each memory. That intent is
-   * abandoned, for two reasons: a pattern straddling two independent texts
-   * matches an artefact of the join order rather than anything either memory
-   * says, and the one real cross-text case it would catch (older text says
-   * "was", newer says "now") is already the temporal_override signal's job, so
-   * wiring it up here would double-count the same evidence into confidence.
-   * The question this signal answers is "does either memory announce a change?"
-   * — and the pair is already known to be on the same topic by similarity.
-   */
-  private detectValueChange(a: string, b: string): number {
-    let score = 0;
-
+  /** Detect changed numbers or a change phrase about a shared subject. */
+  private detectValueChange(a: string, b: string, sharedSubject: boolean): number {
     // A changed number in the same statement is a value change even without
     // an explicit "changed to" phrase (for example, "port 4901" / "port 4902").
     const numbers = /\b\d+(?:\.\d+)*\b/g;
     const valuesA = a.match(numbers) ?? [];
     const valuesB = b.match(numbers) ?? [];
-    if (valuesA.length > 0 && valuesB.length > 0
+    const changedNumber = valuesA.length > 0 && valuesB.length > 0
       && valuesA.join('|') !== valuesB.join('|')
       && this.tokenize(a.replace(numbers, 'number')).join(' ')
-        === this.tokenize(b.replace(numbers, 'number')).join(' ')) {
-      score += 0.6;
-    }
-
-    for (const pattern of CHANGE_PATTERNS) {
-      if (pattern.test(a) || pattern.test(b)) {
-        score += 0.3;
-      }
-    }
-
-    return Math.min(1.0, score);
+        === this.tokenize(b.replace(numbers, 'number')).join(' ');
+    const changes = sharedSubject ? CHANGE_PATTERNS.filter((p) => p.test(a) || p.test(b)).length : 0;
+    return Math.min(1, (changedNumber ? 0.6 : 0) + changes * 0.3);
   }
 
   /**
@@ -440,24 +408,32 @@ export class ContradictionDetector {
    * Detect opposite sentiment about the same subject.
    */
   private detectOppositeSentiment(a: string, b: string): number {
-    let score = 0;
-
-    for (const [positive, negative] of SENTIMENT_OPPOSITES) {
-      const aPos = positive.test(a);
-      const aNeg = negative.test(a);
-      const bPos = positive.test(b);
-      const bNeg = negative.test(b);
-
-      // One positive, the other negative = contradiction
-      if ((aPos && bNeg) || (aNeg && bPos)) {
-        score += 0.5;
-      }
-    }
-
-    return Math.min(1.0, score);
+    const clauses = (text: string) => text.split(/[.!?;,\n]+/).map((clause) => this.tokenize(clause));
+    const clausesA = clauses(a);
+    const clausesB = clauses(b);
+    // Take up to four words on each side of a cue, within the same clause.
+    const contexts = (parts: string[][], cue: RegExp) => parts.flatMap((words) =>
+      words.flatMap((word, i) => cue.test(word)
+        ? [[...words.slice(Math.max(0, i - 4), i), ...words.slice(i + 1, i + 5)]]
+        : []));
+    const opposed = (cueA: RegExp, cueB: RegExp) => {
+      const nearbyA = contexts(clausesA, cueA);
+      if (nearbyA.length === 0) return false;
+      const nearbyB = contexts(clausesB, cueB);
+      return nearbyA.some((left) => nearbyB.some((right) => this.overlapRatio(left, right) > 0.5));
+    };
+    const matches = SENTIMENT_OPPOSITES.filter(([pos, neg]) => opposed(pos, neg) || opposed(neg, pos));
+    return Math.min(1, matches.length * 0.5);
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
+
+  private overlapRatio(wordsA: string[], wordsB: string[]): number {
+    const contentA = new Set(wordsA.filter((w) => !NEGATION_WORDS.has(w) && w.length > 3));
+    const contentB = new Set(wordsB.filter((w) => !NEGATION_WORDS.has(w) && w.length > 3));
+    const overlap = [...contentA].filter((w) => contentB.has(w)).length;
+    return overlap / Math.max(contentA.size, contentB.size, 1);
+  }
 
   /**
    * Compute overall contradiction confidence from signals and similarity.
@@ -502,12 +478,11 @@ export class ContradictionDetector {
       return 'keep_both';
     }
 
-    // Moderate confidence → keep both
-    if (confidence < 0.6) {
-      return 'keep_both';
+    if (confidence >= 0.6 && this.config.defaultStrategy === 'manual') {
+      return 'manual';
     }
 
-    return this.config.defaultStrategy;
+    return confidence > 0.7 ? this.config.defaultStrategy : 'keep_both';
   }
 
   /**
