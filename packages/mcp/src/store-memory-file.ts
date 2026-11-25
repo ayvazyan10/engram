@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
-const { readContent, storeLocalMemory }: typeof import('./store-session.ts') = require('./store-session.js');
+import { readContent, storeLocalMemory } from './store-session.js';
 
 async function main(): Promise<void> {
   const file = await readContent(process.argv, process.stdin);
