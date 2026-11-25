@@ -9,6 +9,15 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-11-25
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.15.1, and the Claude Desktop extension bundle 0.15.1. Private workspace versions unchanged.
+
+### Fixed
+
+- **The MCP server no longer fails to start when its working directory has been deleted.** `process.cwd()` was read in every namespace mode and threw `ENOENT: uv_cwd`. It is now read only in `project` mode, and if it fails Engram uses the global namespace.
+- **Claude Code’s SessionStart hook keeps the version notice when the directory is gone.** Without a `cwd` in the hook payload, it no longer calls `process.cwd()` itself and falls back to the global namespace instead.
+
 ## [0.15.0] — 2026-11-25
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.15.0, and the Claude Desktop extension bundle 0.15.0. Private workspace versions unchanged.
