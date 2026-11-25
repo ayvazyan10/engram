@@ -8,7 +8,7 @@
  *   node store-session.js "session summary text"
  */
 
-import { NeuralBrain, resolveDbPath } from '@engram-ai-memory/core';
+import { NeuralBrain, resolveDbPath, type StoreInput } from '@engram-ai-memory/core';
 import fs from 'fs';
 import path from 'path';
 import { resolveNamespaceSettings, type NamespaceEnv } from './namespaceEnv.js';
@@ -49,7 +49,17 @@ export async function readContent(argv: readonly string[], stdin: AsyncIterable<
  * one kind of memory that ignored the user's isolation setting entirely.
  */
 export async function storeSession(content: string, env: NamespaceEnv): Promise<void> {
-  const source = env['ENGRAM_SOURCE'] || 'mcp-client';
+  await storeLocalMemory({
+    content,
+    type: 'episodic',
+    tags: ['session-summary', 'auto-stored', 'pending-distill'],
+    importance: 0.6,
+    namespace: env['ENGRAM_NAMESPACE'] || undefined,
+  }, env);
+}
+
+/** Both hook bins use the same database, project resolver and brain lifecycle. */
+export async function storeLocalMemory(input: StoreInput, env: NamespaceEnv): Promise<void> {
   const { namespaceMode, namespace } = resolveNamespaceSettings(env);
 
   const dbPath = resolveDbPath(env['ENGRAM_DB_PATH']);
@@ -60,20 +70,13 @@ export async function storeSession(content: string, env: NamespaceEnv): Promise<
 
   const brain = new NeuralBrain({
     dbPath,
-    defaultSource: source,
+    defaultSource: input.source || env['ENGRAM_SOURCE'] || 'mcp-client',
     namespaceMode,
     ...(namespace ? { namespace } : {}),
   });
   await brain.initialize();
   try {
-    await brain.store({
-      content,
-      type: 'episodic',
-      source,
-      tags: ['session-summary', 'auto-stored', 'pending-distill'],
-      importance: 0.6,
-      ...(namespace ? { namespace } : {}),
-    });
+    await brain.store(input);
   } finally {
     brain.shutdown();
   }

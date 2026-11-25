@@ -21,7 +21,7 @@ command -v jq >/dev/null 2>&1 || { printf '%s\n' 'Engram session-end hook requir
 set -o pipefail
 INPUT=$(cat) || exit 0
 REASON=$(printf '%s' "$INPUT" | jq -r '.reason | if . == null then "" elif type == "string" then . else error("invalid reason") end') || exit 0
-case "$REASON" in clear|resume) exit 0 ;; esac
+case "$REASON" in resume) exit 0 ;; esac
 CWD=$(printf '%s' "$INPUT" | jq -r '.cwd | if . == null then "" elif type == "string" then . else error("invalid cwd") end') || exit 0
 case "$NAMESPACE_MODE" in
   project)

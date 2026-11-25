@@ -26,6 +26,7 @@ import {
 } from '../setupSteps.ts';
 import { buildArtifactPaths, parseBuildStamp } from '../buildState.js';
 import { defaultConfig } from '../engramConfig.js';
+import { mcpServerConfig } from '../mcpClients.ts';
 
 let printed: string[] = [];
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -299,7 +300,8 @@ describe('setupClaudeCode', () => {
     const settings = JSON.parse(fs.readFileSync(paths.settings, 'utf8'));
     const commands = Object.values(settings.hooks as Record<string, Array<{ hooks: Array<{ command: string }> }>>)
       .flatMap((entries) => entries.flatMap((e) => e.hooks.map((h) => h.command)));
-    expect(commands).toHaveLength(3);
+    expect(commands).toHaveLength(4);
+    expect(settings.hooks.PostToolUse[0].matcher).toBe('Write|Edit|MultiEdit');
     for (const command of commands) {
       // The registered command is shell-quoted so a home directory with spaces works.
       const script = command.replace(/^(['"])(.*)\1$/, '$2');
@@ -315,9 +317,13 @@ describe('setupClaudeCode', () => {
     const home = tempDir('home');
     const paths = claudePathsIn(home);
     fs.mkdirSync(paths.dir);
-    const settings = { hooks: { UserPromptSubmit: [{ hooks: [{
-      command: registered ? "'/legacy/engram-recall.sh'" : '/other/hook.sh',
-    }] }] } };
+    const settings = { hooks: {
+      UserPromptSubmit: [{ hooks: [{ command: registered ? "'/legacy/engram-recall.sh'" : '/other/hook.sh' }] }],
+      ...(registered ? {
+        SessionStart: [{ hooks: [{ command: "'/legacy/engram-session-start.sh'" }] }],
+        SessionEnd: [{ hooks: [{ command: "'/legacy/engram-session-end.sh'" }] }],
+      } : {}),
+    } };
     fs.writeFileSync(paths.settings, JSON.stringify(settings));
     const config = { ...defaultConfig(home), repoPath: repoWithTemplates() };
     const hooksDir = path.join(home, 'hooks');
@@ -328,6 +334,9 @@ describe('setupClaudeCode', () => {
       expect(fs.readFileSync(path.join(hooksDir, 'engram-session-start.sh'), 'utf8')).toContain(config.repoPath);
       const updated = JSON.parse(fs.readFileSync(paths.settings, 'utf8'));
       expect(updated.hooks.SessionStart[0].hooks[0].timeout).toBe(10);
+      expect(updated.hooks.PostToolUse).toEqual([{ matcher: 'Write|Edit|MultiEdit', hooks: [{
+        type: 'command', timeout: 15, command: expect.stringContaining('engram-memory-mirror.sh'),
+      }] }]);
       expect(updated.hooks.UserPromptSubmit).toHaveLength(1);
       expect(updated.hooks.UserPromptSubmit[0].hooks[0].command).toContain(hooksDir);
       fs.writeFileSync(path.join(hooksDir, 'engram-recall.sh'), 'old template');
@@ -379,19 +388,23 @@ describe('setupClaudeCode', () => {
     expect(output()).toContain('Claude Code plugin check skipped');
   });
 
-  it('registers the MCP server but no hooks in npx mode', () => {
+  it.each([true, false])('registers the npx server with global rules enabled=%s and skips hooks', (globalRules) => {
     const home = tempDir('home');
     const paths = claudePathsIn(home);
     fs.mkdirSync(paths.dir, { recursive: true });
 
-    setupClaudeCode(defaultConfig(home), { command: 'npx' }, false, path.join(home, 'hooks'), paths, []);
+    const config = defaultConfig(home);
+    const server = mcpServerConfig(config, 'codex', true, globalRules);
+    setupClaudeCode(config, server, false, path.join(home, 'hooks'), paths, []);
 
     expect(JSON.parse(fs.readFileSync(paths.userJson, 'utf8')).mcpServers.engram).toEqual({
       command: 'npx',
+      args: ['-y', '@engram-ai-memory/mcp@latest'],
       env: {
         ENGRAM_DB_PATH: path.join(home, 'engram.db'),
         ENGRAM_SOURCE: 'claude-code',
         ENGRAM_NAMESPACE_MODE: 'project',
+        ...(!globalRules ? { ENGRAM_GLOBAL_RULES: '0' } : {}),
       },
     });
     expect(fs.existsSync(paths.settings)).toBe(false);
@@ -443,7 +456,7 @@ describe('setup command', () => {
     ['claude-code', ['--no-claude-hooks'], true, false, 1],
     ['claude-code', [], false, false, 1],
     ['mcp-client', [], true, false, 1],
-    ['cursor', ['--no-claude-hooks'], true, false, 0],
+    ['cursor', ['--no-claude-hooks', '--no-global-rules'], true, false, 0],
     ['claude-code', [], true, true, 0],
   ] as const)('prints plugin advice once only for Claude: %s %j, detected=%s, plugin=%s',
     (source, flags, detected, enabled, adviceCount) => {
@@ -462,7 +475,8 @@ describe('setup command', () => {
           '--import', 'tsx', path.join(__dirname, '..', 'cli.ts'),
           'setup', '--npx', '--source', source, ...flags,
         ], {
-          env: { ...process.env, HOME: home, USERPROFILE: home, ENGRAM_HOME: path.join(home, '.engram') },
+          env: { ...process.env, HOME: home, USERPROFILE: home, ENGRAM_HOME: path.join(home, '.engram'),
+            CODEX_HOME: path.join(home, '.codex') },
           stdio: ['ignore', logFd, logFd],
           timeout: 20000,
         });
@@ -477,6 +491,9 @@ describe('setup command', () => {
       // A second write would create a backup of the freshly registered MCP config.
       expect(fs.readdirSync(home).filter((file) => file.endsWith('.bak'))).toEqual([]);
       expect(stdout).toContain('Engram installed');
+      const rules = path.join(claudeDir, 'CLAUDE.md');
+      if (flags.some(flag => flag === '--no-global-rules')) expect(fs.existsSync(rules)).toBe(false);
+      else expect(fs.readFileSync(rules, 'utf8')).toContain('<!-- engram:start -->');
       if (enabled) {
         expect(fs.existsSync(path.join(home, '.claude.json'))).toBe(false);
         expect(stdout.match(/Engram plugin is active/g)).toHaveLength(1);

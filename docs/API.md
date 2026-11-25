@@ -319,6 +319,8 @@ Store a new memory. The brain automatically:
 - **Auto-extracts** a concept label if none provided
 - **Contradiction detection** — checks for conflicting memories and returns any found
 
+The Claude Code PostToolUse hook posts semantic memories with source `claude-code`, the `memory-file` and `memory-file:<basename>` tags, and the file path relative to `~/.claude/projects/` in `metadata.claudeMemoryFile`. Saving the same file in the same namespace replaces its content and returns the existing memory ID with `deduplicated: true`.
+
 **Request body**
 
 | Field | Type | Required | Description |

@@ -135,7 +135,7 @@ export interface StoreInput {
 export interface StoreResult {
   /** The stored memory */
   memory: Memory;
-  /** True when tags and importance were merged into an existing live memory. */
+  /** True when the write reused an existing live memory. */
   deduplicated?: boolean;
   /** Unverified heuristic candidates (empty if detection is disabled). */
   contradictions: ContradictionCheckResult;
@@ -1040,7 +1040,9 @@ export class NeuralBrain {
     };
 
     assertSyncText(record);
-    const duplicate = this.deduplicateStore(record, embedding, dedupThreshold);
+    const file = input.metadata?.['claudeMemoryFile'];
+    const mirror = source === 'claude-code' && type === 'semantic' && typeof file === 'string' && input.tags?.includes('memory-file');
+    const duplicate = mirror ? undefined : this.deduplicateStore(record, embedding, dedupThreshold);
     if (duplicate) {
       await this.refreshIndexBaseline();
       return duplicate;
@@ -1082,7 +1084,16 @@ export class NeuralBrain {
     // The callback MUST stay synchronous — better-sqlite3 transactions do not
     // await, so every async step (embedding) happens above.
     this.checkIndexClaimBeforeWrite();
-    db.transaction((tx) => {
+    const mirroredId = db.transaction((tx) => {
+      // Check under the insert lock so simultaneous first saves claim one row.
+      if (mirror) {
+        const m = schema.memories;
+        const existing = tx.select({ id: m.id }).from(m).where(and(
+          isNull(m.archivedAt), eq(m.source, source), eq(m.type, type),
+          sql`${m.namespace} IS ${record.namespace}`, sql`json_extract(${m.metadata}, '$.claudeMemoryFile') = ${file}`,
+        )).get();
+        if (existing) return existing.id;
+      }
       record.deviceId = getDeviceId();
       for (const edge of edges) edge.deviceId = record.deviceId;
       tx.insert(schema.memories).values(record).run();
@@ -1093,7 +1104,15 @@ export class NeuralBrain {
         // resurrection rule (see graph/connectionStore.ts).
         upsertConnections(tx, edges);
       }
+      return undefined;
     }, { behavior: 'immediate' });
+    if (mirroredId) {
+      const memory = await this.updateMemory(mirroredId, { content: input.content });
+      return {
+        memory, deduplicated: true,
+        contradictions: { hasContradictions: false, contradictions: [], candidatesChecked: 0, latencyMs: 0 },
+      };
+    }
 
     // In-memory state is updated only after the durable write succeeded —
     // previously the index and graph were advanced before the edges were

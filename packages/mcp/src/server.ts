@@ -15,6 +15,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ensureGlobalRules } from '@engram-ai-memory/core/global-rules';
 import { NeuralBrain, SyncEngine, redactSyncUrl, resolveDbPath } from '@engram-ai-memory/core';
 import fs from 'fs';
 import path from 'path';
@@ -86,7 +87,7 @@ function createServer(notice: string): McpServer {
     },
     {
       instructions: [
-        'Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user\'s explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.',
+        'Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. A tool\'s own memory, such as Claude Code\'s memory files, is visible only to that tool on that machine, so facts saved there also need to be stored in Engram for other tools to see them. When a recalled memory conflicts with the user\'s explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.',
         '- Recall when prior decisions or project history would help: recall_context for broad context, search_memory for a specific fact. Recalled memories can be stale — verify before relying on them.',
         '- Store durable facts worth keeping beyond this session: decisions and their reasons, conventions, fixes, user preferences. Not routine chatter. Follow the user\'s wishes about what to store.',
         '- Follow the namespace guidance in store_memory for project-specific memories. Use global: true only for facts about the user that hold in every project.',
@@ -169,6 +170,9 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Engram MCP server running on stdio');
+  void ensureGlobalRules(defaultSource).catch((err: unknown) => {
+    console.error('[engram-mcp] Could not update global memory rules:', err);
+  });
 
   // The client closing stdin is our shutdown signal over stdio transport.
   process.stdin.on('close', () => void shutdown('stdin close'));

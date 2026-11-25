@@ -30,7 +30,7 @@ import {
 } from './mcpClients.js';
 import {
   shortHead, checkPrerequisites, requireEngramWorkspace, recordBuild, currentBuildStatus, configureMcpClient, setupClaudeCode, refreshClaudeHooks,
-  CLAUDE_PATHS, hasMcpClientConfig, claudePluginEnabled, restHookDependencyIssue,
+  CLAUDE_PATHS, hasMcpClientConfig, claudePluginEnabled, restHookDependencyIssue, writeGlobalRules,
 } from './setupSteps.js';
 import {
   choosePassphraseSource, passphraseWarning, readHiddenLine, encryptionInstructions, PASSPHRASE_ENV,
@@ -182,7 +182,8 @@ program
   .command('setup')
   .description('Initialize Engram — clone, build, configure, and set up MCP for any AI client')
   .option('--no-mcp', 'Skip MCP configuration')
-  .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP + recall/session-start/session-end hooks)')
+  .option('--no-global-rules', 'Skip global memory instructions for AI clients')
+  .option('--no-claude-hooks', 'Skip Claude Code auto-memory (user-scope MCP and hooks)')
   .option('--npx', 'Use npx instead of cloning repo (fastest setup)')
   .option('--source <name>', `AI client identifier (${supportedClientList()})`, 'mcp-client')
   // Kept because commander rejects unknown options: dropping it would break
@@ -290,7 +291,8 @@ program
       ok('Using npx mode — skipping clone/build');
     }
 
-    const engramServer = mcpServerConfig(config, opts.source, opts.npx === true);
+    const globalRules = opts.globalRules !== false && process.env['ENGRAM_GLOBAL_RULES'] !== '0';
+    const engramServer = mcpServerConfig(config, opts.source, opts.npx === true, globalRules);
 
     // Every user config file setup declined to touch lands here. Setup still
     // exits 0 — the rest of the install is usable — but the banner has to say
@@ -308,11 +310,12 @@ program
     }
 
     // Claude Code gets the full auto-memory wiring: user-scope MCP so it loads
-    // without manual approval, plus recall/session-start/session-end hooks for a local install.
+    // without manual approval, plus automatic memory hooks for a local install.
     if (opts.claudeHooks !== false) {
       step('Setting up Claude Code auto-memory...');
       setupClaudeCode(config, engramServer, !opts.npx, HOOKS_DIR, CLAUDE_PATHS, skipped, opts.mcp !== false);
     }
+    if (globalRules) writeGlobalRules(os.homedir(), skipped, opts.source);
 
     if (skipped.length > 0) {
       console.log(`\n${B}${Y}  Engram installed, with ${skipped.length} step(s) skipped:${X}\n`);
@@ -507,7 +510,7 @@ program
           ok('Claude Code MCP and hooks provided by the enabled Engram plugin.');
         } else {
           for (const h of CLAUDE_HOOKS) {
-            const registeredPath = claudeHookCommands(settings, h.event).find((command) => path.basename(command) === h.file);
+            const registeredPath = claudeHookCommands(settings, h.event, h.matcher).find((command) => path.basename(command) === h.file);
             if (registeredPath && fs.existsSync(registeredPath)) ok(`Claude Code hook: ${h.event} (${h.file})`);
             else { warn(`Claude Code hook missing: ${h.event} (${h.file}) — run: engram setup`); issues++; }
           }
@@ -928,7 +931,7 @@ cloudCmd
 
 const MEMORY_INSTRUCTIONS = `# Memory (Engram)
 
-Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user's explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.
+Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. A tool's own memory, such as Claude Code's memory files, is visible only to that tool on that machine, so facts saved there also need to be stored in Engram for other tools to see them. When a recalled memory conflicts with the user's explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.
 - Recall when prior decisions or project history would help: recall_context for broad context, search_memory for a specific fact. Recalled memories can be stale — verify before relying on them.
 - Store durable facts worth keeping beyond this session: decisions and their reasons, conventions, fixes, user preferences. Not routine chatter. Follow the user's wishes about what to store.
 - Memories are scoped to the current project by default. Use global: true only for facts about the user that hold in every project.
@@ -975,6 +978,19 @@ program
 
 // ─── update ─────────────────────────────────────────────────────────────────
 
+function refreshLocalIntegrations(config: EngramConfig, skipped: string[], globalRules: boolean): void {
+  refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, skipped, globalRules);
+  if (globalRules) writeGlobalRules(os.homedir(), skipped);
+}
+
+// A pre-mirror CLI can update the SessionStart template while only registering
+// its three known hooks. That template calls the rebuilt CLI once to catch up.
+program.command('refresh-local-integrations', { hidden: true }).action(() => {
+  const skipped: string[] = [];
+  refreshLocalIntegrations(loadConfig(true), skipped, process.env['ENGRAM_GLOBAL_RULES'] !== '0');
+  if (skipped.length) process.exitCode = 1;
+});
+
 function updateGlobalCli(repoPath: string, prefix: string | null, degraded: string[]): void {
   step('Updating CLI...');
   try {
@@ -992,12 +1008,14 @@ program
   .command('update')
   .description('Update Engram to the latest version — pull, rebuild, and restart')
   .option('--no-restart', 'Skip server restart after update')
+  .option('--no-global-rules', 'Skip global memory instructions for AI clients')
   .option('-f, --force', 'Set local changes aside (stash / backup branch) and update anyway')
   .action(async (opts) => {
     console.log(`\n${B}  ⬡  Engram Update${X}\n`);
 
     const config = loadConfig();
     const repoPath = config.repoPath;
+    const globalRules = opts.globalRules !== false && process.env['ENGRAM_GLOBAL_RULES'] !== '0';
 
     if (!fs.existsSync(path.join(repoPath, '.git'))) {
       fail(`Repository not found at ${repoPath}`);
@@ -1021,7 +1039,7 @@ program
         // Hook templates can change without a new commit reaching this CLI:
         // the update that brought them in ran the previous CLI. Refresh anyway.
         const degraded: string[] = [];
-        refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, degraded);
+        refreshLocalIntegrations(config, degraded, globalRules);
         // A completed build can still have an older, separately installed CLI on PATH.
         const prefix = currentGlobalPrefix();
         if (prefix && fs.realpathSync(path.join(repoPath, 'packages', 'cli', 'dist', 'cli.js')) !== fileURLToPath(import.meta.url)) {
@@ -1078,7 +1096,7 @@ program
     // run must be able to tell them from a clean update, which costs the green
     // banner and the zero exit code at the end.
     const degraded: string[] = [];
-    refreshClaudeHooks(config, HOOKS_DIR, CLAUDE_PATHS, degraded);
+    refreshLocalIntegrations(config, degraded, globalRules);
 
     updateGlobalCli(repoPath, currentGlobalPrefix(), degraded);
 

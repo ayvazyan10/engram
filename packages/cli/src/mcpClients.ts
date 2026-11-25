@@ -19,6 +19,8 @@
  * gets a printed snippet and an honest "not configured" instead.
  */
 
+import fs from 'node:fs';
+import { globalRulesPath } from '@engram-ai-memory/core/global-rules';
 import path from 'path';
 import type { EngramConfig } from './engramConfig.ts';
 
@@ -91,6 +93,25 @@ const KNOWN_CLIENTS: readonly KnownClient[] = [
 
 export const KNOWN_CLIENT_IDS: readonly string[] = KNOWN_CLIENTS.map((c) => c.id);
 
+/** Global instruction files for the selected client and clients present on disk. */
+export function globalRulesFiles(home: string, source = ''): string[] {
+  const selected = resolveMcpClient(source, home).id;
+  const files = KNOWN_CLIENTS.flatMap((client) => {
+    const file = globalRulesPath(client.id, home);
+    if (!file) return [];
+    const config = path.join(home, ...client.relativePath);
+    const dir = client.id === 'claude-code' ? path.join(home, '.claude') : path.dirname(config);
+    const rulesDir = client.id === 'codex' ? path.dirname(file) : dir;
+    const selectedForRules = client.id === selected && client.id !== 'windsurf';
+    if (!selectedForRules && !fs.existsSync(rulesDir) && !fs.existsSync(config)) return [];
+    return [file];
+  });
+  const cline = path.join(home, 'Documents', 'Cline');
+  const clineRules = globalRulesPath('cline', home);
+  return clineRules && [cline, path.join(home, '.cline'), path.join(home, 'Cline')].some(dir => fs.existsSync(dir))
+    ? [...files, clineRules] : files;
+}
+
 /** Normalise the spellings people type into `--source`. */
 function normalize(source: string): string {
   return source.trim().toLowerCase().replace(/_/g, '-');
@@ -123,10 +144,11 @@ export interface McpServerConfig extends Record<string, unknown> {
 }
 
 /** One environment for setup, update and the installed SessionStart hook. */
-export function mcpServerConfig(config: EngramConfig, source: string, useNpx = false): McpServerConfig {
+export function mcpServerConfig(config: EngramConfig, source: string, useNpx = false, globalRules = true): McpServerConfig {
   const env: Record<string, string> = {
     ENGRAM_DB_PATH: config.dbPath,
     ENGRAM_SOURCE: resolveMcpClient(source, '').id,
+    ...(!globalRules ? { ENGRAM_GLOBAL_RULES: '0' } : {}),
     ENGRAM_NAMESPACE_MODE: config.namespaceMode,
     ...(config.namespace ? { ENGRAM_NAMESPACE: config.namespace } : {}),
   };

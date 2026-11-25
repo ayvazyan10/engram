@@ -29,16 +29,17 @@ memories **and** the config file that gets written:
 | `claude-code` | `~/.claude.json` (user scope — loads in every session) |
 | `cursor` | `~/.cursor/mcp.json` |
 | `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
+| `codex` | `~/.codex/config.toml` |
+| `opencode` | `~/.config/opencode/opencode.json` |
 
 Any other value — including the default — registers nothing for `--source`:
 setup prints the JSON block for you to paste into your own client's config and
 reports the step as skipped. It never writes `~/.mcp.json`; no MCP client reads
 that path.
 
-Separately, if `~/.claude` exists, setup also registers Engram at user scope in
-`~/.claude.json` and installs the recall, SessionStart, and session-end hooks — so plain
-`engram setup` wires up Claude Code on its own. Skip that with
-`--no-claude-hooks`.
+If `~/.claude` exists, local setup also registers Engram at user scope in `~/.claude.json` and installs four hooks. SessionStart and UserPromptSubmit recall context. PostToolUse mirrors writes and edits to Claude project memory Markdown files, excluding `MEMORY.md`. Each save updates the same Engram record. SessionEnd captures a summary on `/clear` and skips `resume`. Pass `--no-claude-hooks` to skip the Claude auto-memory integration.
+
+`engram setup` writes a marked block to each supported, configured or detected client's global instruction file. `engram update` refreshes the block. Pass `--no-global-rules` to either command to skip that step. MCP also refreshes its client’s block at startup. Setup with the flag records `ENGRAM_GLOBAL_RULES=0` in its MCP entries, including with `--npx`. See [global instruction paths](../../docs/INTEGRATIONS.md#setup).
 
 ## Server Management
 

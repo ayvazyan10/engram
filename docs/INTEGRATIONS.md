@@ -81,7 +81,9 @@ Run these commands in Claude Code:
 /plugin install engram@engram
 ```
 
-The plugin connects Engram's MCP tools and recalls project memory automatically at SessionStart. At SessionEnd, it saves a summary of the assistant's transcript in the background using the same local database, without requiring the REST server. Node.js 22 or newer and npm are required.
+The plugin connects Engram's MCP tools and recalls project memory automatically at SessionStart. SessionEnd saves a transcript summary on exit or `/clear` and skips `resume`. After a Write, Edit or MultiEdit to a Claude project memory Markdown file, PostToolUse mirrors its contents into the same local database. Both hooks run in the background. Edits reuse the file’s Engram record, and the mirror skips `MEMORY.md`. Node.js 22 or newer and npm are required.
+
+Global rules arrive on the next MCP launch through the plugin’s `@latest` entry. Hook changes arrive with the versioned plugin. Claude Code defaults to manual updates for third-party marketplaces. Run `claude plugin update engram@engram` and start a new session, or enable marketplace auto-update. [Claude Code plugin updates](https://code.claude.com/docs/en/plugins/host-marketplace#keep-users-up-to-date)
 
 The MCP server exposes Engram as native tools inside any MCP-compatible AI client. No API calls needed — your AI uses `store_memory`, `recall_context`, etc. directly as tool calls.
 
@@ -100,6 +102,20 @@ If you are not using the Claude Code plugin, add to the config file your client 
 
 `engram setup --source <client>` writes the right one for you. Any other client
 reads its own file — check its documentation and paste the same block there.
+
+`engram setup` also installs the Engram memory rules in the following global instruction files for configured or detected clients. `engram update` refreshes the text between `<!-- engram:start -->` and `<!-- engram:end -->`. Pass `--no-global-rules` to either command to skip this step.
+
+| Client | Global instruction file |
+|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` |
+| Codex | `$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) |
+| OpenCode | `~/.config/opencode/AGENTS.md` |
+| Windsurf, when detected | `~/.codeium/windsurf/memories/global_rules.md` |
+| Cline, when detected | `~/Documents/Cline/Rules/engram.md` |
+
+Each MCP server also refreshes the block for its own `ENGRAM_SOURCE` after connecting. This covers existing `@latest` configurations when the client next launches MCP. With an unrecognized or unset source, the server skips the global file.
+
+To opt out, set `ENGRAM_GLOBAL_RULES=0` in the MCP server environment. Setup with `--no-global-rules` writes this setting into each entry it configures, including in npx mode. To remove existing instructions, delete the marked block after opting out and pass the flag on subsequent setup or update runs.
 
 ```json
 {
@@ -373,9 +389,11 @@ mcpServers:
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.35 by default (calibrated for the multilingual model). SessionEnd uses importance 0.3 and skips `clear`/`resume`. SessionEnd stores under the absolute git project root; recall combines that project's memories with shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
+Local `engram setup` installs four Claude Code hooks. SessionStart loads context from the local MCP script. UserPromptSubmit recalls up to three memories with a default minimum similarity of 0.5. PostToolUse reads the final text after Write, Edit or MultiEdit to `~/.claude/projects/*/memory/*.md`, excluding `MEMORY.md`. It creates or updates one semantic Engram memory per file in the configured namespace. SessionEnd saves a summary at importance 0.3 when a session ends, including on `/clear`, and skips `resume`. Both storage hooks use the configured namespace. `engram update` refreshes the existing Claude MCP entry and installed hooks.
 
-By default, memories are only stored when Claude explicitly calls `store_memory`. To automatically save a conversation summary to engram when each session ends, add a Claude Code hook:
+To remove the mirror manually, delete its `engram-memory-mirror.sh` command from the `PostToolUse` hooks in `~/.claude/settings.json`. A subsequent update reinstalls it if other Engram hooks are still registered.
+
+For a manual installation of the standalone session-summary hook:
 
 ```bash
 # Copy the hook script from the repo

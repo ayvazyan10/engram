@@ -152,9 +152,12 @@ engram cloud disconnect      # Stop syncing; the local database is untouched
 `engram setup --source <client>` picks both the identifier stamped on stored
 memories **and** the config file that gets written: `claude-code` →
 `~/.claude.json`, `cursor` → `~/.cursor/mcp.json`, `windsurf` →
-`~/.codeium/windsurf/mcp_config.json`. Any other value — including the default
+`~/.codeium/windsurf/mcp_config.json`, `codex` → `~/.codex/config.toml`, and
+`opencode` → `~/.config/opencode/opencode.json`. Any other value — including the default
 — registers nothing and prints the JSON block for you to paste yourself. It
 never writes `~/.mcp.json`; no MCP client reads that path.
+
+`engram setup` adds a marked memory-rules block to the global instructions of configured or detected Claude Code, Codex, OpenCode, Windsurf and Cline clients. `engram update` refreshes the block and preserves the surrounding text. The MCP server also refreshes its own client’s block on startup, including for existing plugin and npx installs. Pass `--no-global-rules` to skip the CLI step. Setup records `ENGRAM_GLOBAL_RULES=0` in the MCP entries it writes.
 
 `engram stop`, `engram doctor` and `engram update` report failure through the
 exit code, so they can be used in scripts: `stop` waits up to 10 s for the
@@ -308,9 +311,11 @@ Restart your AI client. **15 tools** are visible by default; **11 admin tools** 
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs recall (UserPromptSubmit), SessionStart, and SessionEnd hooks automatically. Recall injects at most 3 memories, each meeting a minimum similarity of 0.5 by default. Set `ENGRAM_RECALL_MIN_SIM` to override it. SessionEnd uses importance 0.3 and skips `clear`/`resume`. Hooks honour the configured namespace mode. In `project` mode, SessionEnd stores under the main git repository's absolute root, shared by its worktrees, and recall combines that project's memories with shared memories; outside git, they use the resolved current working directory as the namespace, except that filesystem roots and the user's home directory use global memories only. SessionStart loads context from the local MCP script. `engram update` refreshes the existing Claude MCP entry and previously installed hooks.
+Local `engram setup` installs four Claude Code hooks. SessionStart loads context from the local MCP script. UserPromptSubmit recalls up to three memories with a minimum similarity of 0.5 by default (adjust with `ENGRAM_RECALL_MIN_SIM`). PostToolUse mirrors Claude Code's project memory Markdown files after Write, Edit or MultiEdit, excluding the `MEMORY.md` index. Editing a file updates its existing Engram memory. SessionEnd saves a summary at importance 0.3, including on `/clear`, and skips `resume`.
 
-Add a Claude Code hook to automatically save conversation summaries to engram when a session ends:
+The hooks honour the configured namespace mode. In `project` mode, worktrees share the main repository's absolute root. Outside Git, the namespace is the current working directory, with global storage at filesystem roots and the user's home. Recall includes shared memories. `engram update` refreshes the existing Claude MCP entry and installed hooks.
+
+For a manual installation of the standalone session-summary hook:
 
 ```bash
 # Copy the hook script

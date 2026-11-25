@@ -10,6 +10,7 @@
     "mcp": "./dist/server.js",
     "engram-mcp": "./dist/server.js",
     "engram-store-session": "./dist/store-session.js",
+    "engram-store-memory-file": "./dist/store-memory-file.js",
     "engram-session-start": "./dist/session-start.js"
   },
   "scripts": {

@@ -15,10 +15,11 @@ export const CLAUDE_SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 export const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
 
 /** Hooks installed for automatic memory, keyed by Claude Code event. */
-export const CLAUDE_HOOKS: ReadonlyArray<{ event: string; file: string; timeout: number }> = [
+export const CLAUDE_HOOKS: ReadonlyArray<{ event: string; file: string; timeout: number; matcher?: string }> = [
   { event: 'UserPromptSubmit', file: 'engram-recall.sh', timeout: 8 },
   { event: 'SessionStart', file: 'engram-session-start.sh', timeout: 10 },
   { event: 'SessionEnd', file: 'engram-session-end.sh', timeout: 15 },
+  { event: 'PostToolUse', file: 'engram-memory-mirror.sh', timeout: 15, matcher: 'Write|Edit|MultiEdit' },
 ];
 
 /** A config file that exists but could not be parsed. Never write over one. */
@@ -247,34 +248,40 @@ function unquoteHookCommand(command: string): string {
  * script never registers the same hook twice (which would fire it twice).
  */
 export function registerHook(
-  settings: Record<string, unknown>, event: string, command: string, timeout: number,
+  settings: Record<string, unknown>, event: string, command: string, timeout: number, matcher?: string,
 ): Record<string, unknown> {
   const hooks = configObject(settings.hooks, 'hooks');
   const rawEntries = hooks[event] ?? [];
   if (!Array.isArray(rawEntries)) throw new Error(`hooks.${event} must be an array`);
-  const entries = rawEntries.map((entry: unknown) => {
-    const group = configObject(entry, `hooks.${event} entry`);
-    const handlers = group.hooks ?? [];
-    if (!Array.isArray(handlers)) throw new Error(`hooks.${event} entry.hooks must be an array`);
-    return { ...group, hooks: handlers.map((hook: unknown) => configObject(hook, `hooks.${event} handler`)) };
-  });
   const matches = (hook: Record<string, unknown>): boolean =>
     typeof hook.command === 'string' && path.basename(unquoteHookCommand(hook.command)) === path.basename(command);
   const replacement = { type: 'command', command: quoteHookCommand(command), timeout };
-  const already = entries.some((entry) => (entry.hooks ?? []).some(matches));
-  const next = already
-    ? entries.map((entry) => ({ ...entry, hooks: (entry.hooks ?? []).map((hook) =>
-      matches(hook) ? { ...hook, ...replacement } : hook) }))
-    : [...entries, { matcher: '', hooks: [replacement] }];
+  let registered = false;
+  const entries = rawEntries.flatMap((entry: unknown) => {
+    const group = configObject(entry, `hooks.${event} entry`);
+    const handlers = group.hooks ?? [];
+    if (!Array.isArray(handlers)) throw new Error(`hooks.${event} entry.hooks must be an array`);
+    const next = handlers.flatMap((handler: unknown) => {
+      const hook = configObject(handler, `hooks.${event} handler`);
+      if (!matches(hook)) return [hook];
+      if (matcher !== undefined && (group.matcher !== matcher || registered)) return [];
+      registered = true;
+      return [{ ...hook, ...replacement }];
+    });
+    return next.length || !handlers.length ? [{ ...group, hooks: next }] : [];
+  });
+  const next = registered ? entries : [...entries, { matcher: matcher ?? '', hooks: [replacement] }];
   return { ...settings, hooks: { ...hooks, [event]: next } };
 }
 
 /** Validate an event's handlers and resolve the paths we quote at install. */
-export function claudeHookCommands(settings: Record<string, unknown>, event: string): string[] {
+export function claudeHookCommands(settings: Record<string, unknown>, event: string, matcher?: string): string[] {
   const entries = configObject(settings.hooks, 'hooks')[event] ?? [];
   if (!Array.isArray(entries)) throw new Error(`hooks.${event} must be an array`);
   return entries.flatMap((entry: unknown) => {
-    const handlers = configObject(entry, `hooks.${event} entry`).hooks ?? [];
+    const group = configObject(entry, `hooks.${event} entry`);
+    if (matcher !== undefined && group.matcher !== matcher) return [];
+    const handlers = group.hooks ?? [];
     if (!Array.isArray(handlers)) throw new Error(`hooks.${event} entry.hooks must be an array`);
     return handlers.flatMap((handler: unknown) => {
       const { command } = configObject(handler, `hooks.${event} handler`);

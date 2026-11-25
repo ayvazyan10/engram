@@ -10,9 +10,7 @@ MCP Server — connects [Engram](https://github.com/ayvazyan10/engram) brain to 
 npm install -g @engram-ai-memory/mcp
 ```
 
-Installs two binaries: `engram-mcp` (the stdio server) and
-`engram-store-session` (writes a session summary, used by the Claude Code
-session-end hook).
+The stdio server is `engram-mcp` (also available as `mcp`). Claude Code hooks use `engram-session-start` for recall, `engram-store-session` for summaries, and `engram-store-memory-file` to mirror a project memory file from its path. All three use the local database directly.
 
 ### Smithery (1-click — recommended for Claude Desktop)
 
@@ -37,6 +35,8 @@ one of them:
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 
 `engram setup --source <claude-code\|cursor\|windsurf>` writes the right one for you.
+
+After connecting, the server refreshes the global memory rules for the client named by `ENGRAM_SOURCE`. Set `ENGRAM_GLOBAL_RULES=0` in the server environment to opt out. CLI setup also installs a marked block in supported clients' global instruction files. `engram update` refreshes it. Both commands accept `--no-global-rules`. Local CLI setup for Claude Code includes a PostToolUse hook that mirrors project memory Markdown files (excluding `MEMORY.md`) and a SessionEnd hook that captures `/clear` and skips `resume`. See [CLI integration details](../../docs/INTEGRATIONS.md#setup).
 
 ```json
 {

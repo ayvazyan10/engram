@@ -108,6 +108,8 @@ The MCP server runs as a stdio process — it shares a database file with the RE
 
 The CLI does not read `ENGRAM_DB_PATH` or `ENGRAM_INDEX_PATH` itself — it reads `${ENGRAM_HOME}/config.json` and **exports** those variables into the server process it starts.
 
+`engram setup` and `engram update` manage a marked block in supported clients' global instruction files by default. Pass `--no-global-rules` to skip the CLI write. MCP startup also refreshes the rules for its configured `ENGRAM_SOURCE`. Set `ENGRAM_GLOBAL_RULES=0` in the server environment to disable that refresh. Setup records this setting when given the flag. In a local Claude Code setup, PostToolUse mirrors project memory files after edits, and SessionEnd captures summaries on `/clear` and skips `resume`. See [client paths and hook details](INTEGRATIONS.md#setup).
+
 **`${ENGRAM_HOME}` layout**
 
 | Path | Contents |

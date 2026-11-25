@@ -12,6 +12,10 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./global-rules": {
+      "types": "./dist/globalRules.d.ts",
+      "default": "./dist/globalRules.js"
     }
   },
   "scripts": {

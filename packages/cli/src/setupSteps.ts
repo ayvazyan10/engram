@@ -13,6 +13,7 @@
  */
 
 import fs from 'fs';
+import { withGlobalRules } from '@engram-ai-memory/core/global-rules';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { buildStatus, serializeBuildStamp } from './buildState.js';
@@ -21,7 +22,7 @@ import {
   CLAUDE_DIR, CLAUDE_SETTINGS, CLAUDE_JSON, CLAUDE_HOOKS,
   readJson, readConfigText, configObject, updateJsonConfig, writeConfigFile, installHookScript, registerHook, hasClaudeHooks,
 } from './claudeSetup.js';
-import { resolveMcpClient, manualSnippet, supportedClientList, mcpServerConfig, upsertCodexMcp, hasCodexMcp } from './mcpClients.js';
+import { resolveMcpClient, manualSnippet, supportedClientList, mcpServerConfig, upsertCodexMcp, hasCodexMcp, globalRulesFiles } from './mcpClients.js';
 import { setupRequirements, unmet } from './preflight.js';
 import { reportConfigRefusal, reportBackup } from './reporters.js';
 import { C, D, R, X, ok, fail, warn, detail } from './ui.js';
@@ -174,6 +175,18 @@ export function hasMcpClientConfig(target: Extract<McpClientTarget, { kind: 'fil
   return Boolean(configObject(readJson(target.path)[target.key], target.key).engram);
 }
 
+export function writeGlobalRules(home: string, skipped: string[], source?: string): void {
+  for (const file of globalRulesFiles(home, source)) {
+    try {
+      const original = readConfigText(file);
+      reportBackup(writeConfigFile(file, withGlobalRules(original ?? ''), undefined, original));
+      ok(`Global memory rules: ${file}`);
+    } catch (err) {
+      reportConfigRefusal(err, `Global memory rules in ${file}`, skipped);
+    }
+  }
+}
+
 export function claudePluginEnabled(settings: Record<string, unknown>): boolean {
   return configObject(settings.enabledPlugins, 'enabledPlugins')['engram@engram'] === true;
 }
@@ -235,8 +248,8 @@ export function configureMcpClient(
 /**
  * Wire Engram into Claude Code as automatic memory: register the MCP server at
  * user scope (loads in every session with no manual approval — a project-scope
- * ~/.mcp.json entry does not) and, for a full local install, install the recall
- * session-start and session-end hooks. Best-effort: a malformed Claude config is reported and
+ * ~/.mcp.json entry does not) and, for a full local install, install the
+ * automatic memory hooks. Best-effort: a malformed Claude config is reported and
  * left untouched rather than aborting setup — or being overwritten.
  */
 export interface ClaudePaths {
@@ -257,7 +270,7 @@ export const CLAUDE_PATHS: ClaudePaths = {
 
 export function setupClaudeCode(
   config: EngramConfig,
-  engramServer: Record<string, unknown>,
+  engramServer: Record<string, unknown> & { env?: Record<string, string> },
   withHooks: boolean,
   hooksDir: string,
   paths: ClaudePaths,
@@ -269,7 +282,7 @@ export function setupClaudeCode(
     return;
   }
   if (!shouldConfigureClaudeCode(paths.settings, skipped)) return;
-  const mcpEnv = mcpServerConfig(config, 'claude-code').env;
+  const mcpEnv = { ...(engramServer.env ?? mcpServerConfig(config, 'claude-code').env), ENGRAM_SOURCE: 'claude-code' };
   if (withMcp) {
     try {
       reportBackup(writeJsonMcpConfig(paths.userJson, 'mcpServers', { ...engramServer, env: mcpEnv }));
@@ -281,7 +294,7 @@ export function setupClaudeCode(
   }
 
   if (!withHooks) {
-    warn('npx mode has no local server — skipping recall/session-start/session-end hooks');
+    warn('npx mode has no local server — skipping Claude Code hooks');
     warn('Restart Claude Code (or run /mcp) to activate.');
     return;
   }
@@ -293,7 +306,7 @@ export function setupClaudeCode(
 export function restHookDependencyIssue(): string | undefined {
   const missing = ['jq', 'curl'].filter((cmd) =>
     spawnSync(cmd, ['--version'], { stdio: 'ignore', timeout: 2000 }).status !== 0);
-  return missing.length ? `Install ${missing.join(' and ')} to enable prompt recall and session-end capture.` : undefined;
+  return missing.length ? `Install ${missing.join(' and ')} to enable prompt recall, memory mirroring and session-end capture.` : undefined;
 }
 
 /** Shared by local setup and updates of an existing hook installation. */
@@ -310,8 +323,8 @@ export function installClaudeHooks(
         config.repoPath, config.dbPath, mcpEnv),
     }));
     reportBackup(updateJsonConfig(paths.settings, (current) => installed.reduce(
-      (next, h) => registerHook(next, h.event, h.command, h.timeout), current)));
-    ok('Recall + session-start + session-end hooks installed (~/.engram/hooks/)');
+      (next, h) => registerHook(next, h.event, h.command, h.timeout, h.matcher), current)));
+    ok('Recall, session-start, session-end and memory-mirror hooks installed (~/.engram/hooks/)');
     const issue = restHookDependencyIssue();
     if (issue) { warn(issue); skipped.push(issue); }
   } catch (err) {
@@ -321,14 +334,14 @@ export function installClaudeHooks(
 
 /** Refresh existing Claude MCP registrations and previously installed hooks. */
 export function refreshClaudeHooks(
-  config: EngramConfig, hooksDir: string, paths: ClaudePaths, skipped: string[],
+  config: EngramConfig, hooksDir: string, paths: ClaudePaths, skipped: string[], globalRules = true,
 ): void {
   try {
     const withHooks = hasClaudeHooks(paths.settings);
     const servers = configObject(readJson(paths.userJson).mcpServers, 'mcpServers');
     if (!withHooks && !servers.engram) return;
     if (!shouldConfigureClaudeCode(paths.settings, skipped)) return;
-    const server = mcpServerConfig(config, 'claude-code');
+    const server = mcpServerConfig(config, 'claude-code', false, globalRules);
     if (servers.engram) {
       reportBackup(writeJsonMcpConfig(paths.userJson, 'mcpServers', server));
       ok('Claude Code MCP refreshed (~/.claude.json)');
