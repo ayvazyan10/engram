@@ -37,7 +37,7 @@ export type NamespaceEnv = Readonly<Record<string, string | undefined>>;
  * An unrecognised mode throws instead of falling back: silently downgrading
  * `isolated` to `none` would publish memories the user asked to keep separate.
  */
-export function resolveNamespaceSettings(env: NamespaceEnv, cwd = process.cwd()): NamespaceSettings {
+export function resolveNamespaceSettings(env: NamespaceEnv, cwdArg?: string): NamespaceSettings {
   const namespace = env['ENGRAM_NAMESPACE'] || undefined;
   const raw = env['ENGRAM_NAMESPACE_MODE'] || 'project';
 
@@ -47,6 +47,13 @@ export function resolveNamespaceSettings(env: NamespaceEnv, cwd = process.cwd())
 
   if (raw === 'project') {
     if (namespace) return { namespaceMode: 'filter', namespace };
+    let cwd: string;
+    try {
+      cwd = cwdArg ?? process.cwd();
+    } catch {
+      // The working directory was deleted (uv_cwd ENOENT): fall back to the global namespace.
+      return { namespaceMode: 'filter', namespace: undefined };
+    }
     const git = (...args: string[]) => execFileSync('git', args, {
       encoding: 'utf8', timeout: 500, stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
