@@ -9,6 +9,25 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-11-25
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.15.0, and the Claude Desktop extension bundle 0.15.0. Private workspace versions unchanged.
+
+### Added
+
+- **`engram setup` and `engram update` write global memory rules for configured or detected clients.** The rules go between `<!-- engram:start -->` and `<!-- engram:end -->` in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`, Windsurf’s `~/.codeium/windsurf/memories/global_rules.md` or Cline’s `~/Documents/Cline/Rules/engram.md`. On startup, the MCP server refreshes the block for the client named by `ENGRAM_SOURCE`. Pass `--no-global-rules` to setup or update to skip the CLI write, or set `ENGRAM_GLOBAL_RULES=0` to disable writes by the CLI and server.
+- **Claude Code mirrors project memory files into Engram.** Local setup and the plugin register a `PostToolUse` hook for `Write|Edit|MultiEdit`. The hook skips the `MEMORY.md` index, and the plugin invokes `engram-store-memory-file` for matching Markdown files. Saving the same file again updates its existing memory.
+
+### Changed
+
+- **MCP instructions explain that a tool’s own memory is visible only to that tool on that machine.** They direct tools to save durable facts in Engram so other tools can recall them.
+- **Claude Code’s SessionEnd hook now captures session summaries on `/clear`.** Both the locally installed hook and the plugin skip only `resume` when checking why the session ended.
+- **The next Claude Code session finishes hook setup after an update by an older CLI.** If the memory-mirror script is missing, SessionStart runs the rebuilt CLI to install the hook and refresh local integrations.
+
+### Fixed
+
+- **Contradiction detection requires a shared subject for temporal, change-phrase and opposite-sentiment signals.** Temporal cues and change phrases require overlapping content words across the two memories. Opposite sentiments require overlap near the opposing words, so those cues alone no longer flag unrelated memories. Engram suggests a destructive resolution only when confidence exceeds 0.7.
+
 ## [0.14.0] — 2026-11-25
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.14.0, and the Claude Desktop extension bundle 0.14.0. Private workspace versions unchanged.
