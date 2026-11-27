@@ -4,7 +4,7 @@ Base URL: `http://localhost:4901`
 
 Interactive Swagger UI: `http://localhost:4901/docs`
 
-All request and response bodies are JSON. All endpoints return standard HTTP status codes.
+REST bodies are JSON except for the recall event stream and responses with no body. The server uses Fastify’s default 1 MiB request-body limit. Each REST `GET` also accepts `HEAD` for headers only.
 
 ---
 
@@ -14,13 +14,13 @@ Everything in this section applies to `/api/*` on every endpoint below.
 
 ### API key
 
-Authentication is **off by default** — the local-first shape. Set `ENGRAM_API_KEY` on the server to turn it on; every `/api/*` route then requires the key, and so do `/docs/json` and `/docs/yaml`.
+Authentication is **off by default** — the local-first shape. Set `ENGRAM_API_KEY` on the server to turn it on; every `/api/*` route then requires the key, and so do `/mcp`, `/docs/json` and `/docs/yaml`.
 
 | | |
 |---|---|
 | **Header** | `X-API-Key: <key>` or `Authorization: Bearer <key>` |
-| **Exempt** | `GET /api/health` (so container probes keep working) |
-| **Also exempt** | The dashboard bundle and the SPA fallback — a browser cannot attach a header to a top-level navigation, so gating them would make the page that lets a user supply a key unreachable. No data is served outside `/api/` |
+| **Exempt** | `GET` and `HEAD /api/health` (so container probes keep working) |
+| **Also exempt** | The dashboard bundle and the SPA fallback — a browser cannot attach a header to a top-level navigation, so gating them would make the page that lets a user supply a key unreachable. |
 | **WebSocket** | Same key as `auth.token` in the Socket.io handshake: `io('/neural', { auth: { token: '<key>' } })` |
 
 **Response `401`**
@@ -44,19 +44,19 @@ Ports are stripped before matching and comparison is case-insensitive, so list b
 }
 ```
 
-Only `/api/*` is guarded — the dashboard shell and `/docs` stay reachable under any Host, because they hold no data.
+The Host check covers `/api/*`, `/mcp` and Socket.io handshakes. The dashboard shell and `/docs` are outside this Host guard.
 
 ### CORS and WebSocket origins
 
-Browser origins are allowlisted, not reflected. Defaults cover `http://localhost:{PORT}`, `http://127.0.0.1:{PORT}`, `:4902` and the Vite dev server on `:5173`; override with `ENGRAM_ALLOWED_ORIGINS`. Requests with **no** `Origin` (CLI, MCP, curl) are allowed. A disallowed origin is refused at the Socket.io handshake with a 403 before any transport exists.
+Browser origins are allowlisted, not reflected. Defaults cover `http://localhost:{PORT}`, `http://127.0.0.1:{PORT}`, `:4902` and the Vite dev server on `:5173`; override with `ENGRAM_ALLOWED_ORIGINS`. Requests with **no** `Origin` (CLI, MCP, curl) are allowed. A disallowed origin is refused at the Socket.io handshake with a 403 before any transport exists. `/mcp` and non-GET `/api/*` requests with a disallowed Origin return `403` with `{ "error": "Forbidden origin" }`.
 
 ### Rate limits
 
-Per-client-address fixed windows on `/api/*`. Static assets and the SPA fallback are exempt. A request is charged against every tier it matches, so a heavy call also spends global budget.
+Per-client-address fixed windows on `/api/*` and `/mcp`. Static assets and the SPA fallback are exempt. A request is charged against every tier it matches, so a heavy call also spends global budget.
 
 | Tier | Default limit | Applies to |
 |---|---|---|
-| `global` | 1000 / 60s | Every `/api/*` request |
+| `global` | 1000 / 60s | Every `/api/*` and `/mcp` request |
 | `heavy` | 300 / 60s | `POST /api/memory`, `/api/memory/batch`, `/api/memory/bulk/tag`, `/api/memory/bulk/archive`, `/api/contradictions/bulk/resolve`, `POST /api/search`, `POST /api/recall`, `POST /api/recall/explain`, `GET /api/recall/stream`, and `POST /api/memory/:id/redact`. `GET /api/memory` is a plain list and stays global-only |
 | `whole-store` | 30 / 60s | `POST /api/consolidate`, `/api/decay`, `/api/embeddings/backfill`, `/api/embeddings/re-embed`, `/api/index/rebuild`, `/api/index/save`, `/api/sync/trigger`, `/api/map/rebuild`, and all `GET`/`HEAD /api/review/*` reads |
 
@@ -74,7 +74,7 @@ Sent with `Retry-After` (seconds), `X-RateLimit-Limit`, `X-RateLimit-Remaining: 
 
 ### Single-flight whole-store operations
 
-The whole-store routes above hold a process-wide guard: starting one while the same operation is running returns `409` rather than interleaving two passes over the store.
+The whole-store writes above hold a process-wide guard for each operation. Starting the same operation while it is running returns `409`. Decay and consolidation share a guard, including scheduled decay and the HTTP MCP `decay_sweep` tool. HTTP MCP `re_embed` shares the REST re-embed guard.
 
 ```json
 {
@@ -94,13 +94,13 @@ Every response — including the dashboard bundle and the SPA fallback — carri
 
 ### `GET /api/health`
 
-Check if the server is running.
+Check if the server is running. `version` comes from the server package.
 
 **Response `200`**
 ```json
 {
   "status": "ok",
-  "version": "0.5.0",
+  "version": "0.9.0",
   "uptime": 268.962066517
 }
 ```
@@ -109,7 +109,7 @@ Check if the server is running.
 
 ### `GET /api/stats`
 
-Brain memory statistics.
+Brain memory statistics. `dbPath` abbreviates the home directory as `~`. When at least two named embedding models are present, `mixedEmbeddingModels` gives `counts` (model/count pairs) and a `remediation` string.
 
 **Response `200`**
 ```json
@@ -126,6 +126,8 @@ Brain memory statistics.
     "custom-agent": 12,
     "demo": 34
   },
+  "byNamespace": [{ "namespace": null, "count": 101 }],
+  "dbPath": "~/.engram/engram.db",
   "indexSize": 101,
   "graphNodes": 101,
   "graphEdges": 350,
@@ -150,8 +152,10 @@ Consolidate episodic memories into semantic summaries. Clusters similar episodes
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `minClusterSize` | integer | — | Min episodes to form a cluster (default: 3) |
+| `minClusterSize` | number ≥ 2 | — | Min episodes to form a cluster (default: 3) |
 | `threshold` | number 0–1 | — | Similarity threshold for clustering (default: 0.6) |
+
+Returned `content` is limited to the first 200 characters.
 
 **Response `200`**
 ```json
@@ -179,15 +183,16 @@ Every number under `windowed` is computed over `window` — the last `days` UTC 
 
 `excludesArchived` is `true` for the whole payload: archived memories are counted nowhere, including in the past days of the growth series.
 
-> **Breaking change.** Before this release the response was flat, and it mixed two scopes without saying so: `dailyGrowth` and `hourlyActivity` were windowed while `total`, `byType`, `bySource` and `topConcepts` were all-time. On a live store the windowed aggregates summed to 87 against a `total` of 651 in the same payload. Every field has moved under `window` / `windowed` / `allTime`, and **`byType`, `bySource` and `topConcepts` are now windowed** where they used to be all-time. Read `allTime.total` for the old `total`.
+> **Breaking change in v0.7.0.** In earlier versions the response was flat, and it mixed two scopes without saying so: `dailyGrowth` and `hourlyActivity` were windowed while `total`, `byType`, `bySource` and `topConcepts` were all-time. On a live store the windowed aggregates summed to 87 against a `total` of 651 in the same payload. Every field has moved under `window` / `windowed` / `allTime`, and **`byType`, `bySource` and `topConcepts` are now windowed** where they used to be all-time. Read `allTime.total` for the old `total`.
 
 **Query parameters**
 
 | Param | Type | Description |
 |---|---|---|
 | `days` | integer 1–365 | Length of the window in UTC calendar days, default 30 |
+| `global` | `true` | Only null-namespace memories; rejected in isolated mode |
 
-`days` is the **only** accepted query parameter. Any other key is a `400` rather than being ignored — `?day=90`, one letter short, used to return `200` with a 30-day window the caller read as 90.
+Any other key is a `400` rather than being ignored — `?day=90`, one letter short, used to return `200` with a 30-day window the caller read as 90.
 
 ```
 GET /api/analytics?day=90
@@ -195,7 +200,7 @@ GET /api/analytics?day=90
 ```json
 {
   "error": "Bad Request",
-  "message": "Unknown query parameter: day. Allowed: days."
+  "message": "Unknown query parameter: day. Allowed: days, global."
 }
 ```
 
@@ -313,11 +318,11 @@ Sparse over a fixed 7×24 grid the client already knows, so an absent cell is un
 ### `POST /api/memory`
 
 Store a new memory. The brain automatically:
-- Generates a 384-dim embedding
+- Generates an embedding with the active model
 - Adds to vector index and knowledge graph
-- **Auto-links** to top-3 most similar existing memories (creates `relates_to` edges)
+- **Auto-links** to up to three namespace-scoped neighbors with cosine similarity ≥ 0.5 (creates `relates_to` edges)
 - **Auto-extracts** a concept label if none provided
-- **Contradiction detection** — checks for conflicting memories and returns any found
+- **Contradiction detection** — returns heuristic candidates for verification
 
 The Claude Code PostToolUse hook posts semantic memories with source `claude-code`, the `memory-file` and `memory-file:<basename>` tags, and the file path relative to `~/.claude/projects/` in `metadata.claudeMemoryFile`. Saving the same file in the same namespace replaces its content and returns the existing memory ID with `deduplicated: true`.
 
@@ -325,14 +330,16 @@ The Claude Code PostToolUse hook posts semantic memories with source `claude-cod
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `content` | string | yes | The memory text |
+| `content` | nonempty string | yes | The memory text |
 | `type` | `episodic` \| `semantic` \| `procedural` | — | Defaults to `episodic` |
-| `source` | string | — | Originating system (e.g. `claude-code`) |
-| `importance` | number 0–1 | — | Manual importance override |
+| `source` | string | — | Originating system, default `rest-api` |
+| `importance` | number 0–1 | — | Defaults for episodic/semantic/procedural are 0.5/0.7/0.5, or 0.75/0.85/0.8 for `claude-code` and `ollama` |
 | `concept` | string | — | Semantic memories: concept label |
 | `tags` | string[] | — | Categorization tags |
 | `sessionId` | string | — | Group related episodic memories |
 | `metadata` | object | — | Arbitrary JSON metadata |
+| `triggerPattern`, `actionPattern` | string | — | Procedural trigger and action |
+| `namespace` | string or null | — | Override the write namespace (`null` for global). Isolated mode returns `400` for a conflicting override |
 
 **Request**
 ```json
@@ -354,32 +361,34 @@ The Claude Code PostToolUse hook posts semantic memories with source `claude-cod
     "content": "User prefers dark mode in all applications",
     "concept": "user preferences",
     "importance": 0.8,
-    "tags": ["ui", "preferences"],
-    "source": null,
+    "tags": "[\"ui\",\"preferences\"]",
+    "source": "rest-api",
     "createdAt": "2026-03-21T10:00:00.000Z"
   },
+  "deduplicated": false,
   "contradictions": {
-    "count": 1,
-    "items": [
-      {
-        "id": "contra-uuid",
-        "existingMemoryId": "existing-uuid",
-        "newMemoryId": "a1b2c3d4-...",
-        "confidence": 0.82,
-        "explanation": "Conflicts with existing preference for light mode"
-      }
-    ]
+    "hasContradictions": true,
+    "candidatesChecked": 3,
+    "latencyMs": 4,
+    "contradictions": [{
+      "newMemoryId": "a1b2c3d4-...",
+      "existingMemoryId": "existing-uuid",
+      "similarity": 0.85,
+      "confidence": 0.82,
+      "signals": [{ "type": "negation", "description": "Opposing statements", "weight": 0.5 }],
+      "suggestedStrategy": "keep_newest"
+    }]
   }
 }
 ```
 
-Store/check heuristic results are unverified candidates, never confirmed conflicts. Use the MCP verification tools to judge them. When no candidates are detected, `contradictions` is `{ "count": 0, "items": [] }`.
+`memory` is the stored row without its embedding (selected fields shown). `deduplicated` indicates reuse of an existing record. For ordinary stores, an eligible nearest match of the same type and namespace merges tags and keeps the higher importance. `ENGRAM_DEDUP_THRESHOLD` sets the cosine threshold (greater than 0 and at most 1, default 0.97). `StoreResult` can also carry `discarded: true` for a record archived during storage. Heuristic results are unverified candidates. With no candidates, `hasContradictions` is false and the inner `contradictions` array is empty.
 
 ---
 
 ### `POST /api/memory/batch`
 
-Bulk store memories in a single transaction. High-throughput path.
+Bulk store memories in order. Each store commits separately.
 
 **Request body**
 ```json
@@ -403,13 +412,15 @@ Bulk store memories in a single transaction. High-throughput path.
 
 The legacy `contradictions` field reports how many stored memories nominated candidates across the batch. MCP `get_contradiction_tasks` returns pending pairs; `GET /api/contradictions` returns only confirmed pairs.
 
-The batch is embedded in one call and stored in order; `memories` accepts at most **1000** items and `ids` come back in submission order.
+Each item requires nonempty `content`. Optional fields are `type` (default `episodic`), `source`, `importance` (0–1), `tags` (string array), `concept`, and `namespace` (string). Isolated mode checks the entire batch for a conflicting namespace before writing and returns `400` on a mismatch.
+
+The batch is embedded together and stored in order; `memories` accepts at most **1000** items and `ids` come back in submission order.
 
 ---
 
 ### `GET /api/memory`
 
-List memories with optional filters.
+List live memories newest first. `count` is the page length. Unknown query keys or invalid values return `400`.
 
 **Query parameters**
 
@@ -418,7 +429,7 @@ List memories with optional filters.
 | `type` | `episodic` \| `semantic` \| `procedural` | Filter by type |
 | `source` | string | Filter by source |
 | `namespace` | string | Exact namespace; intersects the brain's configured scope |
-| `global` | `true` | Only memories with a null namespace; intersects `namespace` |
+| `global` | `true` | Only memories with a null namespace; bypasses the active filter namespace, intersects the explicit `namespace`, and returns `400` in isolated mode |
 | `before` | ISO date-time | Exclusive `createdAt < before`; timezone offsets normalize to UTC |
 | `tag` | string | Exact tag membership (case-sensitive) |
 | `limit` | integer 1–200 | Default: 50 |
@@ -432,7 +443,7 @@ GET /api/memory?type=semantic&source=claude-code&limit=10&offset=0
 **Response `200`**
 ```json
 {
-  "count": 10,
+  "count": 1,
   "memories": [
     {
       "id": "uuid",
@@ -441,7 +452,7 @@ GET /api/memory?type=semantic&source=claude-code&limit=10&offset=0
       "concept": "TypeScript",
       "importance": 0.8,
       "source": "claude-code",
-      "tags": ["programming"],
+      "tags": "[\"programming\"]",
       "createdAt": "2026-03-21T10:00:00.000Z"
     }
   ]
@@ -452,7 +463,7 @@ GET /api/memory?type=semantic&source=claude-code&limit=10&offset=0
 
 ### `GET /api/memory/:id`
 
-Get a single memory by ID. Returns the full memory record including all fields.
+Get a visible memory by exact ID, including archived records. This and the list, store, patch, search, graph and tag-read routes omit `embedding` from memory rows. `tags` and `metadata` are JSON-encoded strings. The row also includes `summary`, `embeddingDim`, `embeddingModel`, `confidence`, `accessCount`, `lastAccessedAt`, `eventAt`, `triggerPattern`, `actionPattern`, `namespace`, `updatedAt` and `deviceId`.
 
 **Response `200`**
 ```json
@@ -463,9 +474,9 @@ Get a single memory by ID. Returns the full memory record including all fields.
   "concept": "user preferences",
   "importance": 0.8,
   "source": "claude-code",
-  "tags": ["ui", "preferences"],
+  "tags": "[\"ui\",\"preferences\"]",
   "sessionId": null,
-  "metadata": {},
+  "metadata": "{}",
   "createdAt": "2026-03-21T10:00:00.000Z",
   "archivedAt": null
 }
@@ -482,7 +493,7 @@ Get a single memory by ID. Returns the full memory record including all fields.
 
 ### `DELETE /api/memory/:id`
 
-Archive (soft-delete) a memory. Sets `archivedAt` timestamp; the memory remains in the database but is excluded from search and recall.
+Archive (soft-delete) a memory by exact ID. An unknown, inaccessible or already archived ID returns `404` with `{ "error": "Memory not found" }`. Sets `archivedAt` timestamp; the memory remains in the database but is excluded from search and recall.
 
 **Response `204`** — no body.
 
@@ -492,7 +503,7 @@ Archive (soft-delete) a memory. Sets `archivedAt` timestamp; the memory remains 
 
 Edit a memory in place.
 
-**Request body** — every field optional; unknown keys are rejected.
+**Request body** — supply at least one of these fields. The schema strips extra keys.
 
 | Field | Type | Description |
 |---|---|---|
@@ -567,17 +578,20 @@ Unknown or already-archived ids are counted as not archived and fire no webhook.
 
 ### `POST /api/search`
 
-Semantic vector search across all memories. Returns memories ranked by cosine similarity to the query embedding.
+Search visible memories by retrieval relevance. Each result is a memory row plus `score` (cosine similarity). With hybrid search enabled, keyword matches can rank even below `threshold`.
 
 **Request body**
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `query` | string | yes | Natural language search query |
-| `topK` | integer (max 50) | — | Number of results, default 10 |
+| `query` | string | yes | Nonempty natural language search query |
+| `topK` | integer 1–50 | — | Number of results, default 10 |
 | `threshold` | number 0–1 | — | Minimum similarity score, default 0.3 |
 | `types` | string[] | — | Filter to specific memory types |
 | `sources` | string[] | — | Filter to specific sources |
+| `since`, `until` | date-time string | — | Inclusive bounds on `eventAt`, falling back to `createdAt` |
+| `tags` | string[] | — | Require every exact tag |
+| `crossNamespace` | boolean | — | Search across projects in filter mode, default false; `400` in isolated mode if true |
 | `namespace` | string | — | Narrow results to one exact project path |
 | `global` | true | — | Narrow results to memories with namespace NULL |
 
@@ -596,7 +610,7 @@ Omit both project fields for all results allowed by the brain's current scope. S
 **Response `200`**
 ```json
 {
-  "count": 3,
+  "count": 1,
   "latencyMs": 28,
   "results": [
     {
@@ -604,7 +618,7 @@ Omit both project fields for all results allowed by the brain's current scope. S
       "type": "procedural",
       "content": "For Drizzle ORM: always use drizzle-kit generate → migrate...",
       "importance": 0.9,
-      "similarity": 0.87
+      "score": 0.87
     }
   ]
 }
@@ -629,11 +643,17 @@ Assemble working memory context for AI injection. This is the primary endpoint u
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `query` | string | yes | The user's message or question |
-| `maxTokens` | integer | — | Token budget for context, default 2000 |
+| `query` | string | yes | Nonempty message or question |
+| `maxTokens` | integer | — | Token budget 1–32000, default 2000 |
 | `types` | string[] | — | Restrict to memory types |
 | `sources` | string[] | — | Restrict to sources |
-| `sessionId` | string | — | Include session-specific memories |
+| `sessionId` | string | — | Session ID for recall history |
+| `source` | string | — | Source for recall history, default `rest-api` |
+| `touch` | boolean | — | Update access statistics and record the recall, default true |
+| `since`, `until` | date-time string | — | Inclusive event/creation date bounds |
+| `tags` | string[] | — | Require every exact tag |
+| `crossNamespace` | boolean | — | Default false; rejected in isolated mode if true |
+| `namespace`, `global` | string, literal `true` | — | Select one exact namespace or only global memories. Sending both returns `400` |
 
 **Request**
 ```json
@@ -646,11 +666,12 @@ Assemble working memory context for AI injection. This is the primary endpoint u
 **Response `200`**
 ```json
 {
-  "context": "## Relevant memories\n\n[PROCEDURAL] Database migration workflow...\n[SEMANTIC] Drizzle ORM...",
-  "memories": [
-    { "id": "uuid", "type": "procedural", "score": 0.91 },
-    { "id": "uuid2", "type": "semantic", "score": 0.78 }
-  ],
+  "context": "[NEURAL MEMORY CONTEXT]\n\n[KNOWLEDGE]\n• [a1b2c3d4 · 2026-03-21] Use migrations.\n\n[END MEMORY CONTEXT]",
+  "memories": [{
+    "id": "a1b2c3d4-...", "type": "semantic", "content": "Use migrations.",
+    "summary": null, "score": 0.91, "similarity": 0.87,
+    "source": "rest-api", "createdAt": "2026-03-21T10:00:00.000Z"
+  }],
   "latencyMs": 43
 }
 ```
@@ -671,7 +692,7 @@ User: {user_message}
 
 ### `POST /api/recall/explain`
 
-Preview the exact context that recall would assemble, with ranking, context positions and budget decisions. Uses the same retrieval, graph expansion, filters and hybrid-search setting as `/api/recall`. Embeds the query but performs no database writes: access counts, last-access timestamps and recall audit rows stay unchanged, and recall plugin hooks are not called. Uses the same `heavy` rate-limit tier as `/api/recall` (300 requests per 60 seconds by default, shared with other heavy endpoints).
+Preview the context assembled before `onRecall` plugins can modify it, with ranking, context positions and budget decisions. Uses the same retrieval, graph expansion, filters and hybrid-search setting as `/api/recall`. Embeds the query but performs no database writes: access counts, last-access timestamps and recall audit rows stay unchanged, and recall plugin hooks are not called. Uses the same `heavy` rate-limit tier as `/api/recall` (300 requests per 60 seconds by default, shared with other heavy endpoints).
 
 **Request body**
 
@@ -680,7 +701,7 @@ Preview the exact context that recall would assemble, with ranking, context posi
 | `query` | string | yes | Nonempty recall query |
 | `maxTokens` | integer | — | 1–32000, default 2000 |
 | `types` | string[] | — | `episodic`, `semantic`, `procedural` |
-| `sources` | string[] | — | Restrict sources; source-null memories still pass, as in recall |
+| `sources` | string[] | — | Restrict sources; a null source matches an empty string |
 | `since`, `until` | string | — | Inclusive ISO date-time bounds on `eventAt`, falling back to `createdAt` |
 | `tags` | string[] | — | Require every exact tag |
 | `namespace` | string | — | Narrow to this exact project within the configured access scope |
@@ -735,7 +756,13 @@ Server-Sent Events (SSE) endpoint for streaming recall results as they become av
 | Param | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | The recall query |
-| `maxTokens` | integer | — | Token budget, default 2000 |
+| `maxTokens` | integer | — | Token budget 1–32000, default 2000 |
+| `types`, `sources` | string | — | Comma-separated memory types or sources |
+| `since`, `until` | date-time string | — | Inclusive event/creation date bounds |
+| `tags` | string[] | — | Repeat `tags` for each required tag |
+| `crossNamespace` | boolean | — | Default false; rejected in isolated mode if true |
+
+Unknown query keys return `400`.
 
 **Example**
 ```
@@ -746,20 +773,18 @@ GET /api/recall/stream?query=deployment+best+practices&maxTokens=1500
 
 ```
 event: vector
-data: {"memories":[{"id":"uuid","type":"procedural","score":0.91}],"count":5}
-
-event: graph
-data: {"memories":[{"id":"uuid3","type":"semantic","score":0.72}],"count":2}
+data: {"phase":"vector","memory":{"id":"uuid","type":"procedural","content":"Run migrations","summary":null,"score":0.91,"similarity":0.87,"source":"rest-api","createdAt":"2026-03-21T10:00:00.000Z"},"rank":1,"contextSoFar":"…"}
 
 event: complete
-data: {"context":"## Relevant memories\n\n...","totalMemories":7,"latencyMs":62}
+data: {"phase":"complete","context":"…","memories":[{"id":"uuid","type":"procedural","content":"Run migrations","summary":null,"score":0.91,"similarity":0.87,"source":"rest-api","createdAt":"2026-03-21T10:00:00.000Z"}],"latencyMs":62}
 ```
 
 | Event | Description |
 |---|---|
 | `vector` | Fired when vector search results are ready |
-| `graph` | Fired when graph expansion results are ready |
+| `graph` | One frame per selected graph-expansion memory, with the same fields as `vector` |
 | `complete` | Final assembled context with all pipeline steps applied |
+| `error` | If streaming fails after headers, `{"error":"Recall stream failed"}` ends the stream |
 
 ---
 
@@ -767,7 +792,7 @@ data: {"context":"## Relevant memories\n\n...","totalMemories":7,"latencyMs":62}
 
 ### `POST /api/decay`
 
-Run a decay sweep across all memories. Reduces importance scores based on time since last access, memory type, and access frequency. Memories that fall below the archive threshold are soft-deleted.
+Run a decay sweep over live memories in scope. Protection rules and the `pending-distill` tag exempt memories. Unprotected memories below the retention threshold are archived; other eligible memories lose importance according to elapsed time and the decay policy.
 
 **Request body**
 
@@ -785,25 +810,18 @@ Run a decay sweep across all memories. Reduces importance scores based on time s
 **Response `200`**
 ```json
 {
-  "decayed": 8,
-  "archived": 2,
-  "dryRun": true,
-  "details": [
-    {
-      "id": "uuid",
-      "previousImportance": 0.6,
-      "newImportance": 0.42,
-      "archived": false
-    },
-    {
-      "id": "uuid2",
-      "previousImportance": 0.15,
-      "newImportance": 0.05,
-      "archived": true
-    }
-  ]
+  "scannedCount": 15,
+  "archivedCount": 2,
+  "archivedIds": ["uuid-1", "uuid-2"],
+  "decayedCount": 8,
+  "protectedCount": 5,
+  "consolidatedCount": 0,
+  "newSemanticIds": [],
+  "durationMs": 12
 }
 ```
+
+A preview computes counts and archive IDs without writing or running consolidation. An omitted body runs a live sweep. Unknown fields or a non-boolean `dryRun` return `400`.
 
 ---
 
@@ -814,15 +832,17 @@ Retrieve the current decay policy configuration.
 **Response `200`**
 ```json
 {
-  "enabled": true,
-  "halfLifeDays": {
-    "episodic": 14,
-    "semantic": 90,
-    "procedural": 180
-  },
+  "halfLifeDays": 7,
   "archiveThreshold": 0.05,
-  "accessBoost": 0.1,
-  "cronSchedule": "0 3 * * *"
+  "decayIntervalMs": 3600000,
+  "batchSize": 200,
+  "importanceDecayRate": 0.01,
+  "importanceFloor": 0.05,
+  "consolidation": {
+    "enabled": true, "minClusterSize": 3,
+    "similarityThreshold": 0.6, "minEpisodicAgeMs": 86400000
+  },
+  "protectionRuleCount": 5
 }
 ```
 
@@ -835,21 +855,17 @@ Update the decay policy configuration.
 **Request body**
 ```json
 {
-  "enabled": true,
-  "halfLifeDays": {
-    "episodic": 7,
-    "semantic": 60,
-    "procedural": 120
-  },
-  "archiveThreshold": 0.1
+  "halfLifeDays": 14,
+  "archiveThreshold": 0.1,
+  "consolidation": { "enabled": false }
 }
 ```
 
-All fields are optional; only provided fields are updated.
+All fields are optional. `halfLifeDays` accepts 1–36500. `archiveThreshold`, `importanceDecayRate` and `importanceFloor` accept 0–1. `batchSize` is an integer from 1–100000. `decayIntervalMs` is 0 (disable) or an integer from 1000–2147483647. Changing it reschedules the timer. Inside `consolidation`, `enabled` is boolean, `minClusterSize` an integer from 2–10000, `similarityThreshold` a number from 0–1 and `minEpisodicAgeMs` a number from 0 through `Number.MAX_SAFE_INTEGER`. Invalid bounds return `400`.
 
 `protectionRules` is **refused** rather than ignored: a rule carries a predicate function, which JSON cannot express. Configure protection rules in-process.
 
-**Response `200`** — the updated policy object (same shape as `GET`).
+**Response `200`** — the serialized policy plus `"message": "Decay policy updated"`.
 
 **Response `400`**
 ```json
@@ -894,23 +910,14 @@ Unknown/repeated query parameters or invalid bounds return 400. Archived memorie
 
 ### `POST /api/contradictions/check/:id`
 
-Run heuristic checking for a specific memory against all other memories. Results are unverified suggestions, not confirmed contradictions.
+Check a specific memory for unverified candidates. `200` returns the inner check result from `POST /api/memory`.
 
 **Response `200`**
 ```json
-{
-  "memoryId": "uuid",
-  "contradictions": [
-    {
-      "id": "contra-uuid",
-      "conflictingMemoryId": "uuid-2",
-      "confidence": 0.78,
-      "explanation": "Conflicting information about preferred framework"
-    }
-  ],
-  "count": 1
-}
+{ "hasContradictions": false, "contradictions": [], "candidatesChecked": 3, "latencyMs": 4 }
 ```
+
+**Response `404`** — `{ "error": "Memory not found" }` for a missing, archived or inaccessible memory. A record without an embedding raises an internal error (`500`).
 
 ---
 
@@ -954,7 +961,7 @@ Resolve a contradiction between two memories using the core resolution path.
 }
 ```
 
-`keptId` and `archivedId` are omitted when no memory is archived. An already archived endpoint or `manual` returns `resolved: false`.
+`keep_both` returns `keptId` without `archivedId`. Resolution requires a confirmed edge and two live, accessible memories. With a live candidate edge, an archived endpoint, or `manual`, `resolved` is false. Identical IDs return `400`; a missing live contradiction edge returns `404` (`Contradiction not found`). If the edge exists but core cannot access an endpoint, its exception goes through the generic `500` handler.
 
 ---
 
@@ -971,7 +978,7 @@ Resolve up to 500 contradiction pairs. Items run sequentially in request order t
 | `items[].targetId` | string | yes | Exact ID of the other memory |
 | `items[].strategy` | string | yes | One of the five strategies listed above |
 
-Uses pair IDs, not `edgeId`. Both memories must be visible under the brain's namespace configuration, just like single resolution and bulk memory writes. Hidden and missing memories both return `Memory not found` per item. Uses existing API authentication and the `heavy` plus `global` rate tiers: this is a bounded batch of writes like bulk archive/tag, rather than a whole-store scan. Normal `401`/`429` responses apply.
+Uses pair IDs, not `edgeId`. Both memories must be visible under the brain's namespace configuration, just like single resolution and bulk memory writes. A missing live edge returns `Contradiction not found` per item; equal IDs return `sourceId and targetId must differ`. If a live edge exists but a memory is missing or inaccessible, the item reports `Memory not found`. Uses existing API authentication and the `heavy` plus `global` rate tiers: this is a bounded batch of writes like bulk archive/tag, rather than a whole-store scan. Normal `401`/`429` responses apply.
 
 **Request**
 ```json
@@ -988,7 +995,7 @@ Uses pair IDs, not `edgeId`. Both memories must be visible under the brain's nam
 {
   "results": [
     { "ok": true },
-    { "ok": false, "error": "Memory not found" }
+    { "ok": false, "error": "Contradiction not found" }
   ],
   "summary": { "total": 2, "resolved": 1, "failed": 1 }
 }
@@ -1006,10 +1013,11 @@ Retrieve the contradiction detection configuration.
 ```json
 {
   "enabled": true,
-  "confidenceThreshold": 0.7,
-  "autoResolve": false,
-  "autoResolveStrategy": "keep_newest",
-  "checkOnStore": true
+  "similarityThreshold": 0.65,
+  "confidenceThreshold": 0.4,
+  "maxCandidates": 10,
+  "defaultStrategy": "keep_both",
+  "autoResolve": false
 }
 ```
 
@@ -1025,11 +1033,11 @@ Update contradiction detection configuration.
   "enabled": true,
   "confidenceThreshold": 0.8,
   "autoResolve": true,
-  "autoResolveStrategy": "keep_important"
+  "defaultStrategy": "keep_important"
 }
 ```
 
-All fields are optional; only provided fields are updated.
+Supply at least one field from `GET`. `enabled` and `autoResolve` are booleans, both thresholds are numbers from 0–1, `maxCandidates` is an integer from 1–50 and `defaultStrategy` accepts the five resolution strategies above. Unknown keys or invalid bounds return `400`. The legacy `autoResolve` flag does not resolve an unverified candidate.
 
 **Response `200`** — the updated config object (same shape as `GET`).
 
@@ -1039,17 +1047,19 @@ All fields are optional; only provided fields are updated.
 
 ### `GET /api/embeddings/status`
 
-Check the status of the embedding model and memory coverage.
+Check the status of embeddings on live memories in scope. `mixedEmbeddingModels` has the same optional shape as in `GET /api/stats`. `dimensionMismatchCount` counts vectors whose stored length differs from the active dimension.
 
 **Response `200`**
 ```json
 {
-  "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
-  "dimensions": 384,
-  "totalMemories": 101,
-  "embeddedMemories": 101,
-  "pendingMemories": 0,
-  "status": "ready"
+  "currentModel": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  "currentDimension": 384,
+  "totalEmbedded": 101,
+  "currentModelCount": 101,
+  "staleCount": 0,
+  "legacyCount": 0,
+  "dimensionMismatchCount": 0,
+  "needsReEmbed": false
 }
 ```
 
@@ -1057,7 +1067,7 @@ Check the status of the embedding model and memory coverage.
 
 ### `POST /api/embeddings/re-embed`
 
-Re-generate embeddings for all memories. Useful after switching embedding models.
+Re-generate existing embeddings for live memories in scope. Useful after switching embedding models.
 
 **Request body**
 ```json
@@ -1068,35 +1078,29 @@ Re-generate embeddings for all memories. Useful after switching embedding models
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `batchSize` | integer | — | Memories per batch, default 50 |
+| `batchSize` | integer 1–100 | — | Memories per batch, default 32 |
+| `onlyStale` | boolean | — | Default true: repair missing/different model labels or mismatched dimensions. False processes every existing embedding in scope |
 
-**Response `202`**
+**Response `200`** — returned when processing finishes.
 ```json
 {
-  "status": "started",
-  "totalMemories": 101,
-  "estimatedTimeMs": 5200
+  "total": 3, "processed": 3, "failed": 0, "failedIds": [], "durationMs": 150,
+  "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+  "message": "Re-embedded 3 memories in 150ms"
 }
 ```
 
 Progress is reported via the `embedding:progress` WebSocket event.
 
-Once the run finishes, the refreshed vectors are written to the persisted index file, so a restart cannot fall back to the pre-re-embed vectors. When several processes share one `ENGRAM_DB_PATH` they also share the default `<db>.index` path — give each its own `ENGRAM_INDEX_PATH` so they do not overwrite each other's index.
+After updating vectors, the server attempts to save the refreshed index when persistence is configured. The completed re-embed still succeeds if that cache write fails. When several processes share one `ENGRAM_DB_PATH` they also share the default `<db>.index` path — give each its own `ENGRAM_INDEX_PATH` so they do not overwrite each other's index.
 
 ---
 
 ### `POST /api/embeddings/backfill`
 
-Generate embeddings only for memories that are missing them.
+Stamp live rows in scope whose model label is null with the current model ID. The operation does not generate vectors.
 
-**Response `200`**
-```json
-{
-  "backfilled": 3,
-  "alreadyEmbedded": 98,
-  "latencyMs": 150
-}
-```
+**Response `200`** — the embedding status object plus `message` (`Backfilled legacy memories with model: <model>`).
 
 ---
 
@@ -1116,14 +1120,17 @@ startup.
   "loadedFrom": "disk",
   "entryCount": 568,
   "dimension": 384,
-  "indexPath": "/data/engram.db.index",
+  "persisted": true,
+  "indexFileName": "engram.db.index",
   "indexFileExists": true,
   "incrementalCount": 0,
   "initDurationMs": 62,
   "externalSyncCount": 1,
   "externalAdded": 27,
   "externalRemoved": 0,
-  "externalSkipped": 0
+  "externalRefreshed": 0,
+  "externalSkipped": 0,
+  "dimensionMismatched": 0
 }
 ```
 
@@ -1131,6 +1138,9 @@ startup.
 |---|---|
 | `loadedFrom` | `disk` (cache hit), `database` (full rebuild) or `not_loaded` |
 | `entryCount` | Vectors in the index right now |
+| `persisted`, `indexFileName` | Whether persistence is configured, and the filename (null when disabled) |
+| `externalRefreshed` | Entries refreshed after their stored vector changed |
+| `dimensionMismatched` | Vectors rejected for incompatible dimensions since the last full index pass |
 | `incrementalCount` | Memories added at startup on top of the disk cache |
 | `initDurationMs` | How long initialization took |
 | `externalSyncCount` | Reconciles that pulled in another process's work |
@@ -1143,14 +1153,7 @@ startup.
 
 Rebuild the vector index from scratch using all current embeddings.
 
-**Response `200`**
-```json
-{
-  "status": "rebuilt",
-  "size": 101,
-  "latencyMs": 820
-}
-```
+**Response `200`** — current index status plus `message` (`Index rebuilt: <count> entries in <ms>ms`).
 
 ---
 
@@ -1160,14 +1163,7 @@ Persist the current in-memory index to disk.
 
 The write is asynchronous and atomic — it goes to a temporary file that is renamed over the target, so an interrupted save leaves the previous index readable rather than truncated.
 
-**Response `200`**
-```json
-{
-  "status": "saved",
-  "path": "data/brain.hnsw",
-  "sizeBytes": 158720
-}
-```
+**Response `200`** — current index status plus `"message": "Index saved"`.
 
 ---
 
@@ -1226,7 +1222,7 @@ Subscribe a new webhook endpoint.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `url` | string | yes | The URL to receive POST callbacks |
-| `events` | string[] | yes | One or more of `stored`, `forgotten`, `decayed`, `consolidated`, `contradiction`, `reflected` |
+| `events` | string[] | yes | Array of `stored`, `forgotten`, `decayed`, `consolidated`, `contradiction`, `reflected` |
 | `secret` | string | — | Shared secret for the `X-Engram-Signature` HMAC. Write-only |
 | `description` | string | — | Free-text label |
 
@@ -1279,7 +1275,7 @@ Get a single webhook subscription by ID.
 
 ### `DELETE /api/webhooks/:id`
 
-Remove a webhook subscription.
+Remove a webhook subscription. An unknown ID returns `404` with `{ "error": "Webhook not found" }`.
 
 **Response `204`** — no body.
 
@@ -1287,7 +1283,7 @@ Remove a webhook subscription.
 
 ### `POST /api/webhooks/:id/test`
 
-Send a test payload to the webhook endpoint to verify connectivity. Retries follow the normal delivery policy, so a failing endpoint is contacted up to three times before the result comes back.
+Send a test payload to the webhook endpoint to verify connectivity. Retryable failures (including HTTP 408, 429 and 5xx) get up to three attempts. Other non-2xx HTTP responses end the test immediately.
 
 **Response `200`**
 ```json
@@ -1297,7 +1293,7 @@ Send a test payload to the webhook endpoint to verify connectivity. Retries foll
   "success": false,
   "statusCode": 405,
   "error": "HTTP 405: Method Not Allowed",
-  "attempts": 3
+  "attempts": 1
 }
 ```
 
@@ -1324,10 +1320,11 @@ List all tags in use, with memory counts.
 **Response `200`**
 ```json
 {
+  "count": 3,
   "tags": [
     { "tag": "programming", "count": 24 },
     { "tag": "preferences", "count": 8 },
-    { "tag": "architecture", "count": 12 }
+    { "tag": "architecture", "count": 6 }
   ]
 }
 ```
@@ -1336,13 +1333,13 @@ List all tags in use, with memory counts.
 
 ### `GET /api/tags/:tag`
 
-List all memories with a specific tag.
+List visible live memories with a specific tag (selected row fields shown). The optional integer query parameters are `limit` (1–200, default 50) and `offset` (≥ 0, default 0). Unknown keys or invalid bounds return `400`. `count` is the page length.
 
 **Response `200`**
 ```json
 {
   "tag": "programming",
-  "count": 24,
+  "count": 1,
   "memories": [
     {
       "id": "uuid",
@@ -1358,16 +1355,18 @@ List all memories with a specific tag.
 
 ### `GET /api/collections`
 
-List all collections (named groupings of tags).
+List tag groups by prefix before the first colon. Unprefixed tags belong to `default`. `totalMemories` counts each memory once per group.
 
 **Response `200`**
 ```json
 {
+  "count": 1,
   "collections": [
     {
-      "name": "dev-tools",
-      "tags": ["programming", "tooling", "editor"],
-      "memoryCount": 38
+      "name": "project",
+      "prefix": "project",
+      "tags": [{ "tag": "project:engram", "count": 38 }],
+      "totalMemories": 38
     }
   ]
 }
@@ -1377,12 +1376,12 @@ List all collections (named groupings of tags).
 
 ### `POST /api/memory/:id/tags`
 
-Add tags to a memory.
+Add one tag to a memory. A missing or inaccessible memory returns `404` with `{ "error": "Memory not found" }`.
 
 **Request body**
 ```json
 {
-  "tags": ["new-tag", "another-tag"]
+  "tag": "new-tag"
 }
 ```
 
@@ -1390,7 +1389,7 @@ Add tags to a memory.
 ```json
 {
   "id": "uuid",
-  "tags": ["existing-tag", "new-tag", "another-tag"]
+  "tags": ["existing-tag", "new-tag"]
 }
 ```
 
@@ -1398,7 +1397,7 @@ Add tags to a memory.
 
 ### `DELETE /api/memory/:id/tags/:tag`
 
-Remove a single tag from a memory.
+Remove a single tag from a memory. A missing or inaccessible memory returns `404` with `{ "error": "Memory not found" }`.
 
 **Response `200`**
 ```json
@@ -1419,12 +1418,14 @@ List all registered plugins.
 **Response `200`**
 ```json
 {
+  "count": 1,
   "plugins": [
     {
       "id": "custom-agent-memory",
       "name": "Custom Agent Memory Plugin",
       "version": "1.0.0",
-      "active": true,
+      "description": "Optional plugin description",
+      "registeredAt": "2026-03-24T09:00:00.000Z",
       "hooks": ["onStore", "onRecall"]
     }
   ]
@@ -1437,13 +1438,13 @@ List all registered plugins.
 
 Get details for a specific plugin.
 
-**Response `200`** — plugin object (same shape as list items, plus `config` field).
+**Response `200`** — plugin object (same shape as list items). An unknown ID returns `404` with `{ "error": "Plugin not found" }`.
 
 ---
 
 ### `DELETE /api/plugins/:id`
 
-Unregister a plugin.
+Unregister a plugin. An unknown ID returns `404` with `{ "error": "Plugin not found" }`.
 
 **Response `204`** — no body.
 
@@ -1451,7 +1452,7 @@ Unregister a plugin.
 
 ## Atlas Review
 
-All Review reads honour `namespace` and `global=true` exactly as the memory list, intersected with the brain's namespace visibility. Pair queues require **both** ends in scope. Archived memories and tombstoned edges are excluded. These endpoints use the existing authentication; all Review GET/HEAD requests consume the `whole-store` and `global` rate tiers because reads share a whole-store scan. Dismiss uses `global`; redact uses `heavy` and `global`. Normal 401/429 responses apply.
+Review reads accept `namespace` and `global=true`. The global selector bypasses the active filter namespace and returns `400` in isolated mode. Pair queues require **both** ends in scope. Archived memories and tombstoned edges are excluded. These endpoints use the existing authentication; all Review GET/HEAD requests consume the `whole-store` and `global` rate tiers because reads share a whole-store scan. Dismiss uses `global`; redact uses `heavy` and `global`. Normal 401/429 responses apply.
 
 ### `GET /api/review/summary`
 
@@ -1530,7 +1531,7 @@ Detected spans in **every Review queue's** content, concept, and summary are rep
 | `keyword-assignment` | Password, passwd, passphrase, pass, secret, API key, token, access key, or пароль assignments; values of at least six characters |
 | `keyword-entropy` | 32+ character runs, at least ten distinct characters and entropy >= 3.5 bits/character, within 40 characters of a secret keyword |
 
-Placeholders such as `your-api-key`, `your_api_key`, `xxx`, `<token>`, `${TOKEN}`, `***`, `example`, `sk-...`, `[REDACTED]`, and `user:password@` are excluded. UUIDs are excluded from generic detection; git SHAs and other high-entropy strings require a nearby keyword. Overlapping matches report the specific rule once.
+Placeholders such as `your-api-key`, `your_api_key`, `xxx`, `<token>`, `${TOKEN}`, `***`, `example`, `sk-...`, `[REDACTED]`, and `user:password@` are excluded. UUIDs are excluded from generic detection; git SHAs and other high-entropy strings require a nearby keyword. Findings retain overlapping rule matches; redaction replaces an overlapping span once.
 
 ### `POST /api/review/dismiss`
 
@@ -1580,7 +1581,7 @@ Returns a cached 2D map of live memories visible to this brain. Coordinates lie 
 | `namespace` | string | Exact project namespace, intersected with the brain's configured scope |
 | `global` | `true` | Select only memories with a null namespace, as on `GET /api/memory` |
 
-Unknown query parameters and invalid values return `400`. Combining `namespace` and `global=true` intersects both filters and returns an empty map.
+Unknown query parameters and invalid values return `400`. In isolated mode `global=true` returns `400`. Otherwise combining `namespace` and `global=true` intersects both filters and returns an empty map.
 
 **Response `200`**
 ```json
@@ -1610,7 +1611,7 @@ Unknown query parameters and invalid values return `400`. Combining `namespace` 
 
 `method` is `pca2+knn` or `fallback`; `explainedVariance` contains the two PCA variance fractions. `embeddingModel`, `source`, `namespace` and `lastAccessedAt` can be null. Labels are at most 80 characters. Retention and protection use core's active decay policy and are refreshed on each response. `degree` counts incident visible live connections; `contradictCount` counts only confirmed contradiction edges. Unverified candidates (including legacy edges with no status) are excluded from graph, map, and scene data.
 
-Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. The ID is the member nearest the region centroid (the squared-distance medoid). Names rank terms within the visible scope, preferring tags and concepts and falling back to content when those provide no usable words. They ignore stopwords, short and numeric tokens, and `reflection*` / `mc:*` metadata. A dominant two-word phrase keeps its reading order; otherwise the top two terms are joined. Labels use title case, with suffixes to distinguish duplicate names. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
+Regions use Louvain communities, with communities smaller than eight merged into their nearest neighbour. On a full layout, the ID is the member nearest the region centroid (the squared-distance medoid). Between full layouts, a surviving previous region ID is reused when possible. Names rank terms within the visible scope, preferring tags and concepts and falling back to content when those provide no usable words. They ignore stopwords, short and numeric tokens, and `reflection*` / `mc:*` metadata. A dominant two-word phrase keeps its reading order; otherwise the top two terms are joined. Labels use title case, with suffixes to distinguish duplicate names. `name` equals `autoName`; custom names belong to the client and are never persisted by the server. `contradictions` counts distinct incident contradiction edges once per region, and `newThisWeek` covers the trailing seven days.
 
 The layout is cached per project scope. New memories below the recompute threshold are placed at their similarity-weighted neighbour centroid without moving existing points. Unlinked inserts use deterministic fallback positions. A full layout runs when the count changes by at least 10% relative to its last full run, or on rebuild; recomputes use previous positions and Procrustes alignment. `generatedAt` and `computeMs` describe the last layout update, not the current request.
 
@@ -1643,7 +1644,9 @@ Get the knowledge graph neighborhood for a memory node.
 
 | Param | Type | Description |
 |---|---|---|
-| `depth` | integer (max 4) | Traversal depth, default 2 |
+| `depth` | integer 1–4 | Traversal depth in either direction, default 2 |
+
+An unknown query key or invalid depth returns `400`. A missing or inaccessible root returns `404` with `{ "error": "Memory not found" }`. `node` and `neighbors` contain memory rows without embeddings (selected fields shown).
 
 **Response `200`**
 ```json
@@ -1678,11 +1681,11 @@ Get the knowledge graph neighborhood for a memory node.
 
 One 3D coordinate per memory, derived from that memory's stored embedding by a PCA projection into three components. This endpoint remains available to API clients; the Atlas dashboard uses the 2D projection from `GET /api/map`.
 
-The projection is computed server-side (the vectors live there, and 651 × 384 floats is about a megabyte a browser has no reason to download) and cached on a fingerprint of the memory set — row count plus the newest `createdAt`/`updatedAt` plus the active namespace — so any store, edit, archive or delete invalidates it and nothing else does.
+The projection is computed server-side (the vectors live there, and 651 × 384 floats is about a megabyte a browser has no reason to download) and cached on a fingerprint of the memory set — row count, newest creation/update timestamps, summed access counts, active namespace and global selector. A recall that increments an access count can refresh the layout.
 
 Nodes are scoped exactly as `GET /api/memory` scopes its list: archived memories are excluded, and the configured namespace applies.
 
-No query parameters. Unknown ones are ignored.
+The only query parameter is optional `global=true`, which selects null-namespace memories. An unknown key, invalid value or global request in isolated mode returns `400`.
 
 **Response `200`**
 ```json
@@ -1693,7 +1696,7 @@ No query parameters. Unknown ones are ignored.
   "projected": 651,
   "unprojected": 0,
   "explainedVariance": [0.24093698985178116, 0.09472036395954171, 0.046422251410887],
-  "fingerprint": "m:651:2026-09-04T12:59:20.787Z:2026-09-04T11:27:59.722Z:-",
+  "fingerprint": "m:651:2026-09-04T12:59:20.787Z:2026-09-04T11:27:59.722Z:812:-:global=false",
   "generatedAt": "2026-09-04T16:23:26.925Z",
   "embeddingModel": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
   "computeMs": 157,
@@ -1720,15 +1723,15 @@ No query parameters. Unknown ones are ignored.
 
 | Field | Type | Description |
 |---|---|---|
-| `method` | `pca3` \| `fallback` | `fallback` when the store is too small to fit three components, or holds no usable embeddings at all |
-| `halfExtent` | number | Half-width of the world box every coordinate is scaled into. Fixed at `42` so camera framing is stable across refits |
+| `method` | `pca3` \| `fallback` | `fallback` with fewer than four usable vectors, inconsistent dimensions or zero variance in the fit |
+| `halfExtent` | number | Half-width of the box used for the PCA projection. Fixed at `42` so camera framing is stable across refits |
 | `count` | integer | Nodes returned |
 | `projected` | integer | Nodes placed by the projection |
 | `unprojected` | integer | Nodes with no usable embedding, parked on a shell just outside the box (`projected: false` on the node). `count === projected + unprojected` |
 | `explainedVariance` | number[3] | Fraction of total variance each component captures. `[0.24, 0.09, 0.05]` above is 38.1% in three components |
 | `fingerprint` | string | Cache key for this projection. Unchanged between two calls means the same coordinates |
 | `generatedAt` | ISO instant | When the cached projection was computed — not when this request was served |
-| `embeddingModel` | string \| null | The model the vectors were produced with |
+| `embeddingModel` | string \| null | The active embedding model reported by the brain |
 | `computeMs` | integer | Wall time of the projection that filled the cache. `157` cold on 651 memories; a cache hit returns in ~4 ms and reports the same number |
 
 **Nodes**
@@ -1737,14 +1740,14 @@ No query parameters. Unknown ones are ignored.
 |---|---|---|
 | `id`, `type`, `importance`, `source`, `accessCount`, `createdAt`, `lastAccessedAt` | — | Straight from the memory record |
 | `label` | string | `concept` if set, otherwise `content`, whitespace-collapsed and cut to 80 characters |
-| `x`, `y`, `z` | number | Coordinates in `[-halfExtent, halfExtent]` |
+| `x`, `y`, `z` | number | Projected coordinates in `[-halfExtent, halfExtent]`; shell coordinates can extend beyond the box |
 | `projected` | boolean | `false` when the position is a deterministic placeholder rather than a projection |
 
-The projection is deterministic for a given store but **not invariant**: the basis is fitted, so adding a memory perturbs every coordinate by O(1/N). Sign is canonicalised so a refit cannot mirror the scene.
+The projection is deterministic for a given store but **not invariant**: the basis is fitted, so adding a memory can change existing coordinates. Each fitted component uses a canonical sign.
 
 **`fallback`**
 
-When `pca3` cannot fit — fewer usable vectors than components, or none at all — `method` is `fallback`, `projected` is `0`, `unprojected` equals `count`, `explainedVariance` is `[0, 0, 0]`, and every node gets a stable hash-derived position inside the box. The response shape is otherwise identical.
+When `pca3` cannot fit, `method` is `fallback`, `projected` is `0`, `unprojected` equals `count`, `explainedVariance` is `[0, 0, 0]`, and every node gets a stable hash-derived position inside the box. The response shape is otherwise identical.
 
 ---
 
@@ -1759,9 +1762,10 @@ The response reports its own denominators, so a client can state what it is not 
 | Param | Type | Description |
 |---|---|---|
 | `minStrength` | number 0–1 | Keep only edges at or above this strength. Default `0` |
+| `global` | `true` | Only null-namespace endpoints; rejected in isolated mode |
 | `limit` | integer 1–20000 | Maximum edges returned. Default `20000` |
 
-Unlike `GET /api/analytics`, an unrecognised query key here is silently ignored rather than refused.
+An unrecognised query key returns `400`.
 
 **Response `200`**
 ```json
@@ -1797,17 +1801,17 @@ Unlike `GET /api/analytics`, an unrecognised query key here is silently ignored 
 | Field | Type | Description |
 |---|---|---|
 | `total` | integer | **Renderable** edges in the store, before this request's filter |
-| `stored` | integer | Non-deleted connection rows, **including** edges onto archived memories |
+| `stored` | integer | Non-deleted graph-visible connection rows before endpoint filtering, including edges onto archived or out-of-scope memories |
 | `matching` | integer | Edges passing `minStrength` |
 | `returned` | integer | Edges in `edges` |
 | `truncated` | boolean | `true` when `limit` cut the result — `returned < matching` |
 | `minStrength`, `limit` | — | Echoed back as applied |
 
-`stored - total` is the honest gap: on the store above, 3,099 of 8,492 connections are renderable and the remaining 5,393 point at archived memories, which have no node to draw an edge to. Self-loops are also excluded. A client showing an edge count should say which of the two numbers it means.
+`stored - total` is the number of non-renderable edges: 5,393 in the example. This includes edges with archived or out-of-scope endpoints and self-loops. A client showing an edge count should say which of the two numbers it means.
 
 Ordering is by `strength` descending, then `id`, so a `limit` drops the weakest edges rather than an arbitrary slice of insertion order.
 
-Results are cached on a fingerprint combining the memory set and the connection set, so any write to either invalidates the cache.
+Results are cached on a fingerprint combining the memory set and the connection set, using row counts and timestamps. Memory access counts and scope are also part of the key.
 
 **Response `400`** — `minStrength` outside `0..1`, or `limit` outside `1..20000`.
 
@@ -1874,7 +1878,7 @@ Create a typed connection between two memories.
 
 ### `POST /api/sessions`
 
-Create a new session to group episodic memories.
+Create a new session to group episodic memories. `source` (string) is required; `context` (JSON object) is optional.
 
 **Request body**
 ```json
@@ -1898,31 +1902,153 @@ Create a new session to group episodic memories.
 
 ### `GET /api/sessions`
 
-List all sessions, ordered by most recent.
+List up to 100 sessions, newest `startedAt` first. A configured namespace selects that project's sessions, plus null-namespace sessions in filter mode.
 
 **Response `200`**
 ```json
+[{
+  "id": "session-uuid",
+  "source": "claude-code",
+  "context": "{\"project\":\"neuralCore\",\"task\":\"architecture review\"}",
+  "namespace": null,
+  "startedAt": "2026-03-24T09:00:00.000Z",
+  "endedAt": null,
+  "updatedAt": "2026-03-24T09:00:00.000Z",
+  "deletedAt": null,
+  "deviceId": "device-uuid"
+}]
+```
+
+---
+
+## Reflections
+
+### `GET /api/reflections`
+
+List stored insights in scope. Optional query parameters are `limit` (integer 1–200, default 20) and `type` (`pattern`, `knowledge_gap`, `trend`, `contradiction_summary`). Unknown keys or invalid values return `400`.
+
+**Response `200`** — `{ count, reflections }`. Each item has `id`, `type`, `content`, `importance`, `tags` (string array), `createdAt`, and `confidence` when present in metadata.
+
+---
+
+### `GET /api/reflection/status`
+
+Get the reflection scheduler state. The connected MCP client generates the insights.
+
+**Response `200`**
+```json
+{ "enabled": true, "due": false, "counter": 0, "threshold": 10 }
+```
+
+---
+
+### `GET /api/reflection/config`
+
+Get the active reflection configuration.
+
+**Response `200`** (defaults)
+```json
 {
-  "sessions": [
-    {
-      "id": "session-uuid",
-      "source": "claude-code",
-      "context": {
-        "project": "neuralCore",
-        "task": "architecture review"
-      },
-      "memoryCount": 12,
-      "createdAt": "2026-03-24T09:00:00.000Z"
-    }
-  ]
+  "enabled": true, "storeCountThreshold": 10, "triggerOnDecay": true,
+  "types": ["pattern", "knowledge_gap", "trend", "contradiction_summary"],
+  "maxMemoriesToAnalyze": 50, "minImportance": 0.3
 }
 ```
 
 ---
 
+### `PUT /api/reflection/config`
+
+**Request body** — supply one or more fields from `GET`. `enabled` and `triggerOnDecay` are booleans. `storeCountThreshold` is an integer from 1–1000000 and `maxMemoriesToAnalyze` an integer from 1–100000. `minImportance` is a number from 0–1. `types` is a nonempty array of distinct reflection types.
+
+**Response `200`** — the updated config. Unknown fields, an empty object or invalid values return `400`.
+
+---
+
+## Cloud Sync
+
+### `GET /api/sync/status`
+
+**Response `200`** — `{ "enabled": false }` without a sync engine. When enabled, the object also includes `state` (`idle`, `pushing`, `pulling`, `error`), `deviceId`, `pendingPushCount`, and nullable strings `lastSyncAt`, `lastError`, `pullCursor` and `embeddingModel`.
+
+---
+
+### `POST /api/sync/trigger`
+
+Run one push/pull cycle. No parameters.
+
+**Response `200`**
+```json
+{
+  "success": true,
+  "pushed": { "memories": 1, "connections": 0, "sessions": 0 },
+  "pulled": { "memories": 0, "connections": 0, "sessions": 0 },
+  "conflicts": 0, "durationMs": 42
+}
+```
+
+**Errors** — `404` with `{ "error": "Cloud sync is not configured" }` without a sync engine, `409` for an overlapping manual trigger, or `500` with `{ "error": "Sync failed. See the server log for details." }` on a sync failure.
+
+---
+
+## MCP
+
+### `POST /mcp`
+
+Stateless Streamable HTTP MCP over the REST server’s brain. Send a JSON-RPC 2.0 request with `Content-Type: application/json` and `Accept: application/json, text/event-stream`. After initialization, send the negotiated `MCP-Protocol-Version`. There is no session ID.
+
+**Request**
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": "list_tags", "arguments": {} } }
+```
+
+**Response `200`** — JSON-RPC response. `tools/list` returns `result.tools`. A tool call returns a text item in `result.content`; object outputs below are JSON encoded in its `text`. A tool error can set `result.isError`. An accepted notification returns `202` with no body. Invalid JSON-RPC or an unsupported protocol version can return `400`, an incompatible `Accept` header `406`, and an unsupported content type `415`. A transport failure before headers can return `500` with JSON-RPC error `-32603`.
+
+`GET /mcp` and `DELETE /mcp` return `405`, `Allow: POST` and `{ "jsonrpc": "2.0", "id": null, "error": { "code": -32000, "message": "Method not allowed" } }`. The Host, Origin, API key and global rate checks apply first.
+
+### MCP tools
+
+The stdio and HTTP transports share the following 15 default tools. For `search_memory` and `recall_context`, `since`/`until` are inclusive on event time (creation time if absent), all supplied tags must match, and `crossNamespace: true` is refused in isolated mode. `?` marks optional input or output fields. Memory types are `episodic`, `semantic` and `procedural`. Reflection types and resolution strategies are the values listed under Reflections and Contradiction Detection above. Source attribution defaults to `ENGRAM_SOURCE`, then the MCP client's name, then `mcp-client`.
+
+| Tool | Parameters | Returns |
+|---|---|---|
+| `store_memory` | `content` nonempty string; `type?` memory type (episodic), `source?`, `concept?`, `sessionId?`, `namespace?` strings, `tags?` string[], `importance?` number 0–1 (same defaults as REST store), `global?` boolean | `{ id, type, importance, deduplicated, message, contradictionCandidates? }`. Global true overrides namespace; conflicting writes are refused in isolated mode. Candidates have `count` and `items` with `existingMemoryId`, `content` (first 500 characters), `createdAt`, `confidence`, signal names and `suggestedStrategy`. |
+| `update_memory` | `id` string (full ID or unique prefix ≥ 8 characters), plus at least one of `content?` nonempty string, `importance?` number 0–1, `tags?` string[], `concept?` string | `{ id, content, importance, tags, concept, message }` with the replacement values and parsed tags |
+| `search_memory` | `query` string; `topK?` integer 1–50 (10), `threshold?` number 0–1 (0.3), `types?` memory type[], `since?`, `until?` ISO date-time strings with timezone, `tags?` string[], `crossNamespace?` boolean (false) | `{ count, results }`. Each hit has `id`, `type`, `content` (first 500 characters), `summary`, `importance`, `source`, `createdAt`. |
+| `recall_context` | `query` string; `maxTokens?` integer 100–8000 (2000), `types?` memory type[], `sources?`, `tags?` string[], `since?`, `until?` ISO date-time strings with timezone, `crossNamespace?`, `progressive?` booleans (false) | Formatted context text, or `No relevant memories found.` Progressive mode assembles the final text from streaming recall. |
+| `add_knowledge` | `concept`, `content` strings; `tags?` string[], `importance?` number 0–1 (0.7) | `{ id, concept, message }` for a semantic memory |
+| `forget` | `ids` string[] (full IDs or unique prefixes ≥ 8 characters), `reason?` string (reported as `not specified` if omitted) | `{ archived, notFound, reason, message }`. Valid IDs are archived once. Missing or ambiguous IDs set `isError`. |
+| `list_tags` | `tag?` string, `limit?` number 1–200 (50) | Tag cloud `{ count, tags: [{ tag, count }], message }`. With a tag: `{ tag, count, memories }` with `id`, `type`, `content` (first 200 characters), `importance`, `source`. |
+| `tag_memory` | `memoryId`, `tag` strings; `action?` string (`add` by default, or `remove`) | `{ id, tags, message }` |
+| `get_contradiction_tasks` | `limit?` integer 1–100 (20) | `{ tasks }` with `source` and `target` (`id`, `content` up to 500 characters, `truncated`, `createdAt`, `source`), `confidence`, signal names and optional `suggestedStrategy` |
+| `complete_contradiction_check` | `sourceId`, `targetId` nonempty strings, `verdict` string (`contradiction` or `none`), `strategy?` resolution strategy (only with `contradiction`) | `{ sourceId, targetId, verdict, resolution? }`; `resolution` has `resolved`, `keptId?`, `archivedId?` |
+| `get_distill_tasks` | `limit?` integer 1–100 (20) | Text with a JSON array of `{ id, date, namespace, content }` (up to 6000 characters each), or `No pending sessions to distill.` |
+| `complete_distill` | `id` nonempty session ID string, `facts` array (0–100). Each fact takes nonblank `content` string, `type?` memory type (semantic), `importance?` number 0–1, `tags?` string[], `global?` boolean. | `{ id, storedIds, discardedIds, archived: true, message }`. Stores facts before archiving the pending session. An empty array archives it without facts. |
+| `request_reflection` | None | Text with a JSON array of `{ type, relatedMemoryIds, prompt }` tasks, or a message when too few memories qualify |
+| `store_reflection` | `type` reflection type, `insight` nonempty string, `relatedMemoryIds?` string[] (empty), `confidence?` number 0–1 (computed if omitted) | Text with the stored ID, or a message when no insight was stored (including blank or `NO_INSIGHT` text) |
+| `get_reflections` | `limit?` integer 1–100 (20), `type?` reflection type | Text with a count and `[type]` insights, or `No reflection insights found.` |
+
+Set `ENGRAM_ADMIN_TOOLS=1` on the server for these 11 additional tools.
+
+| Tool | Parameters | Returns |
+|---|---|---|
+| `memory_stats` | None | The core stats object as in `GET /api/stats`, with the database path as returned by core |
+| `decay_sweep` | `dryRun?` boolean (false) | The `POST /api/decay` result plus `mode` (`dry-run` or `live`) and `message` |
+| `decay_policy` | `action` string (`get` or `update`); `halfLifeDays?` number 1–36500, `archiveThreshold?`, `importanceDecayRate?`, `importanceFloor?` numbers 0–1, `consolidationEnabled?` boolean | `{ policy, message }`, with the policy fields from `GET /api/decay/policy` |
+| `check_contradictions` | `memoryId?` string | With ID: `POST /api/contradictions/check/:id` result plus `message`. Without: `{ count, contradictions, message }` for confirmed pairs; each has `confidence`, `metadata`, `source` and `target` (`id`, `type`, `content` up to 200 characters). |
+| `resolve_contradiction` | `sourceId`, `targetId` strings, `strategy` resolution strategy | `{ resolved, keptId?, archivedId?, strategy, message }` |
+| `plugin_list` | None | `{ count, plugins, message }`; items match `GET /api/plugins` |
+| `webhook_subscribe` | `url` HTTP(S) URL string, `events` string[] of webhook event names, `secret?`, `description?` strings | Public subscription as in `POST /api/webhooks`, plus `message` |
+| `webhook_list` | None | `{ count, webhooks }`; each entry has `id`, `url`, `events`, `active`, `failCount`, `description` |
+| `index_status` | None | Core index status with `indexPath` (string or null) and `message`. The other counters match `GET /api/index/status`; `persisted` and `indexFileName` are REST fields. |
+| `embedding_status` | None | `GET /api/embeddings/status` fields plus `message` |
+| `re_embed` | `onlyStale?` boolean (true), `batchSize?` number 1–100 (32) | `{ total, processed, failed, failedIds, durationMs, model, message }` |
+
+---
+
 ## WebSocket Events
 
-Connect to the `/neural` namespace via Socket.io:
+Connect to the `/neural` namespace via Socket.io. Broadcasts reach all connected sockets in that namespace, including clients using different project scopes:
 
 ```javascript
 import { io } from 'socket.io-client';
@@ -1934,14 +2060,14 @@ const socket = io('http://localhost:4901/neural');
 
 | Event | Direction | Payload | Description |
 |---|---|---|---|
-| `memory:stored` | server → client | `{ id, type, source }` | A new memory was stored |
-| `memory:contradiction` | server → client | `{ contradictionId, memoryA, memoryB, confidence }` | No longer emitted: stores only queue unverified candidates, which the MCP client confirms |
-| `memory:contradiction_resolved` | server → client | `{ contradictionId, strategy, kept, archived }` | A contradiction was resolved |
-| `memory:decayed` | server → client | `{ id, previousImportance, newImportance, archived }` | A memory's importance was reduced by decay |
-| `recall:chunk` | server → client | `{ memories, phase }` | Partial recall results (vector or graph phase) |
-| `recall:complete` | server → client | `{ context, totalMemories, latencyMs }` | Full recall pipeline finished |
-| `embedding:progress` | server → client | `{ processed, total, percent }` | Batch re-embedding progress update |
-| `embedding:complete` | server → client | `{ total, latencyMs }` | Batch re-embedding finished |
+| `memory:stored` | server → client | Memory row without `embedding` | `POST /api/memory` completed |
+| `memory:contradiction` | — | — | No longer emitted; stores queue candidates for verification |
+| `memory:contradiction_resolved` | server → client | `{ sourceId, targetId, strategy, keptId?, archivedId? }` | REST single or bulk resolution succeeded |
+| `memory:decayed` | server → client | Decay sweep result | Scheduled sweep archived or consolidated memories |
+| `recall:chunk` | server → client | `{ phase, memory, rank, contextSoFar }` | One memory from a streaming recall |
+| `recall:complete` | server → client | `{ phase: "complete", context, memories, latencyMs }` | Streaming recall finished |
+| `embedding:progress` | server → client | `{ processed, total, failed, failedIds, durationMs }` | Batch re-embedding progress |
+| `embedding:complete` | server → client | Same fields as `embedding:progress` | REST re-embedding finished |
 
 ### Example
 
@@ -1954,20 +2080,20 @@ socket.on('memory:stored', ({ id, type, source }) => {
   console.log(`New ${type} memory from ${source}: ${id}`);
 });
 
-socket.on('memory:contradiction', ({ contradictionId, confidence }) => {
-  console.log(`Contradiction detected (${confidence}): ${contradictionId}`);
+socket.on('memory:contradiction_resolved', ({ sourceId, targetId, strategy }) => {
+  console.log(`Resolved ${sourceId} / ${targetId} via ${strategy}`);
 });
 
-socket.on('recall:chunk', ({ memories, phase }) => {
-  console.log(`Recall ${phase}: ${memories.length} memories`);
+socket.on('recall:chunk', ({ memory, phase }) => {
+  console.log(`Recall ${phase}: ${memory.id}`);
 });
 
 socket.on('recall:complete', ({ context, latencyMs }) => {
   console.log(`Recall complete in ${latencyMs}ms`);
 });
 
-socket.on('embedding:progress', ({ processed, total, percent }) => {
-  console.log(`Re-embedding: ${percent}% (${processed}/${total})`);
+socket.on('embedding:progress', ({ processed, total }) => {
+  console.log(`Re-embedding: ${processed}/${total}`);
 });
 ```
 
@@ -1975,9 +2101,9 @@ socket.on('embedding:progress', ({ processed, total, percent }) => {
 
 ## Error Format
 
-There are two error bodies, and which one you get depends on where the error was raised.
+REST errors use the framework or route-specific forms below. A NUL character in a synchronized text column (for example, memory `content` or session `source`) returns `400` and names the column. `/mcp` protocol errors use JSON-RPC.
 
-**Framework errors** — schema validation, an unmatched route, anything that reaches the error handler with a status code:
+**Framework errors** — schema validation or an exception that reaches the error handler with a status code:
 
 ```json
 {
@@ -1995,15 +2121,15 @@ There are two error bodies, and which one you get depends on where the error was
 }
 ```
 
-Some handler errors add a `message` alongside `error` (the `403`, `429` and strict-query `400` bodies above do). There is **no** `code` field on any response — machine-readable dispatch goes on the HTTP status.
+With the dashboard installed, unmatched API routes return `404` with `{ "error": "Not Found", "statusCode": 404 }`. Some handler errors add a `message` alongside `error` (the `403`, `429` and strict-query `400` bodies above do). These REST errors have no `code` field — machine-readable dispatch goes on the HTTP status.
 
 | Field | Type | Description |
 |---|---|---|
-| `statusCode` | integer | HTTP status code. Present on framework errors only |
+| `statusCode` | integer | HTTP status code. Present on framework errors and the dashboard’s unmatched API route response |
 | `error` | string | HTTP status text on framework errors; a short human-readable summary on handler errors |
 | `message` | string | Human-readable description. Not always present on handler errors |
 
-4xx messages are passed through, because they describe the caller's own input and are the only way to know what to fix. **5xx messages are not**: an internal failure always answers with the same fixed string, with the real detail written to the server log instead.
+4xx messages are passed through, because they describe the caller's own input and are the only way to know what to fix. **5xx messages are not**: an exception reaching the error handler answers with the same fixed string, with the real detail written to the server log instead.
 
 ```json
 {
@@ -2017,11 +2143,12 @@ Some handler errors add a `message` alongside `error` (the `403`, `429` and stri
 
 | Status | Meaning |
 |---|---|
-| `400` | Schema validation failed, an unknown query key or body key was sent, or a value the handler rejects |
+| `400` | Schema validation failed or a handler rejected the input (including unknown keys on strict routes) |
 | `401` | `ENGRAM_API_KEY` is set and the request did not present it |
-| `403` | The `Host` header is not allowlisted |
-| `404` | The memory, contradiction, webhook, plugin or session does not exist — or exists outside the configured namespace |
-| `409` | A whole-store operation is already running, or a duplicate connection was posted |
-| `413` | Body over the size limit (Ollama proxy only) |
+| `403` | The Host or Origin is refused |
+| `404` | Resource or route not found, or cloud sync is not configured for a manual trigger |
+| `409` | A whole-store operation is already running, a connection already exists or there is nothing to redact |
+| `413` | Request body exceeds the server’s body limit |
 | `429` | A rate-limit tier was exhausted |
-| `500` | Unexpected server error. The body never carries detail — read the server log |
+| `500` | Unexpected server error; details go to the server log |
+| `503` | Atlas map computation is pending or busy |

@@ -2,9 +2,9 @@
 
 Engram exposes multiple integration surfaces:
 
-1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 26 tools)
+1. **MCP Server** — for any MCP-compatible AI client (Claude Code, Cursor, Windsurf, Cline — 15 tools by default, 26 with admin tools enabled)
 2. **Claude Desktop Extension** — 1-click install via Smithery or `.mcpb` bundle
-3. **REST API** — for everything else (Ollama, custom apps, 53 endpoints)
+3. **REST API** — for everything else (Ollama, custom apps, 62 `/api` method/path pairs)
 4. **CLI** — terminal workflows and scripting
 5. **Webhooks** — push notifications to external systems on memory events
 6. **Plugin System** — extend Engram with lifecycle hooks
@@ -19,7 +19,7 @@ The easiest way to get Engram into Claude Desktop — no manual JSON editing or 
 
 [![Install on Smithery](https://smithery.ai/badge/ayvazyan10/engram)](https://smithery.ai/skills/ayvazyan10/engram)
 
-Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan10/engram) and click **Install**. Smithery automatically configures Claude Desktop and prompts for optional settings (database path, namespace).
+Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan10/engram) and click **Install**. Smithery automatically configures Claude Desktop and prompts for optional settings. The Smithery launcher accepts `dbPath`, `namespace`, `namespaceMode` (`none` by default, `filter` or `isolated`), `embeddingModel`, `syncUrl` and `syncMode` (`auto` by default, `manual` or `off`). It runs `npx -y -p @engram-ai-memory/mcp@latest engram-mcp`.
 
 ### Via .mcpb Desktop Extension
 
@@ -27,23 +27,28 @@ Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan
 2. Open Claude Desktop → File → Open Extension
 3. Select the `.mcpb` file
 
-On first launch the extension installs `@engram-ai-memory/mcp` to `~/.engram/mcp/` via npm (requires npm to be available). Subsequent launches skip the install step and start immediately.
+The extension requires Node.js 22+ and npm. It installs `@engram-ai-memory/mcp@0.15.1` under `~/.engram/mcp/`. The launcher skips installation when the version marker, installed package version and server entry point all match.
 
 **User config options (set during installation):**
 
 | Option | Description | Default |
 |---|---|---|
-| `db_path` | SQLite database path | `~/.engram/engram.db` |
-| `namespace_mode` | `project`, `none`, `filter`, or `isolated` | `project` |
-| `namespace` | Namespace used by filter/isolated mode; overrides project detection | *(empty)* |
+| `db_path` | `ENGRAM_DB_PATH`; blank uses `~/.engram/engram.db` | *(empty)* |
+| `namespace_mode` | `ENGRAM_NAMESPACE_MODE`: `project`, `none`, `filter`, or `isolated` | `project` |
+| `namespace` | `ENGRAM_NAMESPACE`; required in isolated mode, overrides project detection | *(empty)* |
+| `admin_tools` | `ENGRAM_ADMIN_TOOLS`; the launcher converts true to `1` to expose 11 extra tools | `false` |
+| `sync_url` | `ENGRAM_SYNC_URL`; PostgreSQL connection string | *(empty)* |
+| `sync_mode` | `ENGRAM_SYNC_MODE`; `auto`, `manual` or `off` | `auto` |
+| `sync_encryption_key` | `ENGRAM_SYNC_ENCRYPTION_KEY`; shared encryption passphrase | *(empty)* |
 
 **How the bootstrap launcher works:**
 
 ```
-Claude Desktop  →  node ~/.engram/mcp/server/index.js
+Claude Desktop  →  node <extension directory>/server/index.js
                       │
-                      ├─ First run:  npm install @engram-ai-memory/mcp → ~/.engram/mcp/
-                      └─ All runs:   spawn node packages/mcp/dist/server.js  (stdio)
+                      ├─ Install:    npm install --prefix ~/.engram/mcp @engram-ai-memory/mcp@0.15.1
+                      └─ All runs:   spawn the same Node executable with
+                                     ~/.engram/mcp/node_modules/@engram-ai-memory/mcp/dist/server.js (stdio)
 ```
 
 ---
@@ -53,7 +58,7 @@ Claude Desktop  →  node ~/.engram/mcp/server/index.js
 ### Remote MCP over HTTP
 
 The REST server exposes Streamable HTTP MCP at `http(s)://<host>:<port>/mcp`.
-It provides the same tools as stdio MCP, using the same brain as the REST API.
+It accepts stateless JSON-RPC POST requests and provides the same tool set as stdio MCP, using the REST server’s brain and `ENGRAM_ADMIN_TOOLS` setting.
 When `ENGRAM_API_KEY` is configured, send `X-API-Key: <ENGRAM_API_KEY>` or
 `Authorization: Bearer <ENGRAM_API_KEY>`. Otherwise, omit the auth headers.
 
@@ -81,9 +86,11 @@ Run these commands in Claude Code:
 /plugin install engram@engram
 ```
 
-The plugin connects Engram's MCP tools and recalls project memory automatically at SessionStart. SessionEnd saves a transcript summary on exit or `/clear` and skips `resume`. After a Write, Edit or MultiEdit to a Claude project memory Markdown file, PostToolUse mirrors its contents into the same local database. Both hooks run in the background. Edits reuse the file’s Engram record, and the mirror skips `MEMORY.md`. Node.js 22 or newer and npm are required.
+The marketplace points to `plugins/engram/`. Its `.claude-plugin/plugin.json` declares version `0.15.1`, `.mcp.json` launches `engram-mcp` via `npx` at `@latest`, and `hooks/hooks.json` registers three command hooks. SessionStart runs `engram-session-start` and returns project context when available.
 
-Global rules arrive on the next MCP launch through the plugin’s `@latest` entry. Hook changes arrive with the versioned plugin. Claude Code defaults to manual updates for third-party marketplaces. Run `claude plugin update engram@engram` and start a new session, or enable marketplace auto-update. [Claude Code plugin updates](https://code.claude.com/docs/en/plugins/host-marketplace#keep-users-up-to-date)
+SessionEnd saves a transcript summary on exit or `/clear` and skips `resume`. After a Write, Edit or MultiEdit to a Claude project memory Markdown file, PostToolUse mirrors its contents into the same local database. SessionEnd launches `engram-store-session` and PostToolUse launches `engram-store-memory-file` in the background. SessionStart runs in the foreground. The plugin MCP entry defaults `ENGRAM_SOURCE` to `claude-code`, `ENGRAM_NAMESPACE_MODE` to `project` and `ENGRAM_ADMIN_TOOLS` to `0`. Edits reuse the file’s Engram record, and the mirror skips `MEMORY.md`. Node.js 22 or newer and npm are required.
+
+With the default `ENGRAM_SOURCE=claude-code` and global rules enabled, the plugin’s `@latest` MCP entry refreshes `~/.claude/CLAUDE.md` on launch. Hook changes arrive with the versioned plugin. Claude Code defaults to manual updates for third-party marketplaces. Run `claude plugin update engram@engram` and start a new session, or enable marketplace auto-update. [Claude Code plugin updates](https://code.claude.com/docs/en/plugins/host-marketplace#keep-users-up-to-date)
 
 The MCP server exposes Engram as native tools inside any MCP-compatible AI client. No API calls needed — your AI uses `store_memory`, `recall_context`, etc. directly as tool calls.
 
@@ -96,12 +103,15 @@ If you are not using the Claude Code plugin, add to the config file your client 
 | Client | Config file |
 |---|---|
 | Claude Code (user scope) | `~/.claude.json` |
-| Claude Code (project scope) | `.mcp.json` in the project directory |
+| Claude Code (manual project scope) | `.mcp.json` in the project directory |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Codex CLI | `~/.codex/config.toml` |
+| OpenCode | `~/.config/opencode/opencode.json` |
 
-`engram setup --source <client>` writes the right one for you. Any other client
-reads its own file — check its documentation and paste the same block there.
+`engram setup --source <client>` writes the user config for these five clients. An unknown source (including the default `mcp-client`) gets a manual snippet. `--no-mcp` skips registration. With Claude Code detected, setup also configures its user entry and local hooks unless `--no-claude-hooks` is set or the plugin is enabled. `--npx` skips the local build and hooks. Generated npx entries use `npx -y @engram-ai-memory/mcp@latest`; local entries use `node` and the absolute built `server.js` path. Setup creates `config.json` if missing in `ENGRAM_HOME` (default `~/.engram`). Changed client config files get timestamped backups. Claude user-config writes respect `~/.claude.json.lock` and refuse concurrent edits.
+
+Both entry styles set `ENGRAM_DB_PATH`, `ENGRAM_SOURCE`, `ENGRAM_NAMESPACE_MODE` (fresh config: `project`) and `ENGRAM_NAMESPACE` when configured. Relative `dbPath` values in CLI settings resolve from the user’s home directory.
 
 `engram setup` also installs the Engram memory rules in the following global instruction files for configured or detected clients. `engram update` refreshes the text between `<!-- engram:start -->` and `<!-- engram:end -->`. Pass `--no-global-rules` to either command to skip this step.
 
@@ -111,11 +121,13 @@ reads its own file — check its documentation and paste the same block there.
 | Codex | `$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) |
 | OpenCode | `~/.config/opencode/AGENTS.md` |
 | Windsurf, when detected | `~/.codeium/windsurf/memories/global_rules.md` |
-| Cline, when detected | `~/Documents/Cline/Rules/engram.md` |
+| Cline, when `~/Documents/Cline`, `~/.cline` or `~/Cline` exists | `~/Documents/Cline/Rules/engram.md` |
 
-Each MCP server also refreshes the block for its own `ENGRAM_SOURCE` after connecting. This covers existing `@latest` configurations when the client next launches MCP. With an unrecognized or unset source, the server skips the global file.
+The block directs clients to store durable facts in Engram even when they also save them privately, recall and verify earlier decisions, and correct or retire stale memories with `update_memory` or `forget`. Explicit user instructions take precedence. The writer appends a missing block, replaces its contents on refresh and preserves surrounding text.
 
-To opt out, set `ENGRAM_GLOBAL_RULES=0` in the MCP server environment. Setup with `--no-global-rules` writes this setting into each entry it configures, including in npx mode. To remove existing instructions, delete the marked block after opting out and pass the flag on subsequent setup or update runs.
+Each stdio MCP server also refreshes the block for its own `ENGRAM_SOURCE` after connecting. This covers existing `@latest` configurations when the client next launches MCP. With an unrecognized or unset source, the server skips the global file.
+
+Set `ENGRAM_GLOBAL_RULES=0` in the CLI environment to skip setup/update rule writes, and in a stdio server’s environment to skip its startup write. Either the CLI environment setting or `--no-global-rules` also puts `ENGRAM_GLOBAL_RULES=0` into MCP entries the command writes. Update refreshes an existing Claude Code entry; other existing clients need the environment setting in their own entries. To remove existing instructions, delete the marked block after opting out and pass the flag on subsequent setup or update runs.
 
 ```json
 {
@@ -132,7 +144,7 @@ To opt out, set `ENGRAM_GLOBAL_RULES=0` in the MCP server environment. Setup wit
 }
 ```
 
-Set `ENGRAM_SOURCE` to your client: `claude-code`, `cursor`, `windsurf`, `cline`, or any custom identifier.
+Set `ENGRAM_SOURCE` to your client: `claude-code`, `cursor`, `codex`, `opencode`, `windsurf`, `cline`, or any custom identifier. For cloud sync, stdio also accepts `ENGRAM_SYNC_URL`, `ENGRAM_SYNC_MODE` (`auto`, `manual`, `off`), `ENGRAM_SYNC_INTERVAL` (1–2147483647 ms, default 30000) and `ENGRAM_SYNC_ENCRYPTION_KEY`.
 
 **Option B — local build**
 
@@ -156,7 +168,7 @@ pnpm turbo run build --filter=@engram-ai-memory/mcp
 }
 ```
 
-**Restart your AI client** — 26 tools will appear automatically.
+**Restart your AI client** — 15 tools appear by default. Set `ENGRAM_ADMIN_TOOLS=1` in the server environment to enable all 26. The MCP package exposes `engram-mcp` and its `mcp` alias.
 
 ### Claude Code
 
@@ -202,7 +214,7 @@ claude mcp add engram -s user -e ENGRAM_DB_PATH=$HOME/.engram/engram.db -e ENGRA
 }
 ```
 
-Cursor ignores MCP server instructions, so add `.cursor/rules/engram.mdc`:
+Cursor ignores MCP server instructions, so add `.cursor/rules/engram.mdc` manually, or run `engram init --client cursor` to write the project’s `.cursorrules`:
 
 ```
 At the start of each task call recall_context; store decisions with store_memory
@@ -276,10 +288,10 @@ Manual fallback in `~/.codex/config.toml`:
 [mcp_servers.engram]
 command = "node"
 args = ["/path/to/neuralcore/packages/mcp/dist/server.js"]
-env = { "ENGRAM_DB_PATH" = "~/.engram/engram.db", "ENGRAM_SOURCE" = "codex", "ENGRAM_NAMESPACE_MODE" = "none" }
+env = { "ENGRAM_DB_PATH" = "~/.engram/engram.db", "ENGRAM_SOURCE" = "codex", "ENGRAM_NAMESPACE_MODE" = "project" }
 ```
 
-Add to `AGENTS.md`:
+For project-local instructions, `engram init --client codex` writes `AGENTS.md`. For a manual setup, add to `AGENTS.md`:
 
 ```
 At the start of each task call recall_context; store decisions with store_memory
@@ -325,7 +337,7 @@ Manual fallback in `~/.config/opencode/opencode.json`:
       "environment": {
         "ENGRAM_DB_PATH": "~/.engram/engram.db",
         "ENGRAM_SOURCE": "opencode",
-        "ENGRAM_NAMESPACE_MODE": "none"
+        "ENGRAM_NAMESPACE_MODE": "project"
       },
       "enabled": true
     }
@@ -389,9 +401,13 @@ mcpServers:
 
 ### Auto-store conversations (optional)
 
-Local `engram setup` installs four Claude Code hooks. SessionStart loads context from the local MCP script. UserPromptSubmit recalls up to three memories with a default minimum similarity of 0.5. PostToolUse reads the final text after Write, Edit or MultiEdit to `~/.claude/projects/*/memory/*.md`, excluding `MEMORY.md`. It creates or updates one semantic Engram memory per file in the configured namespace. SessionEnd saves a summary at importance 0.3 when a session ends, including on `/clear`, and skips `resume`. Both storage hooks use the configured namespace. `engram update` refreshes the existing Claude MCP entry and installed hooks.
+Local `engram setup` writes four scripts under `$ENGRAM_HOME/hooks/` (default `~/.engram/hooks/`) and registers their commands in `~/.claude/settings.json`. SessionStart (`engram-session-start.sh`, 10s) reads up to three distinct memories in the exact project, ranking pinned entries, handovers, importance and recency. In `project` mode the namespace follows the common Git repository or the current directory outside Git; home, filesystem root or a deleted working directory fall back to global scope. Without a project, SessionStart can still return a version notice.
 
-To remove the mirror manually, delete its `engram-memory-mirror.sh` command from the `PostToolUse` hooks in `~/.claude/settings.json`. A subsequent update reinstalls it if other Engram hooks are still registered.
+UserPromptSubmit (`engram-recall.sh`, 8s) calls `/api/search` for eligible prompts and injects up to three matches that meet `ENGRAM_RECALL_MIN_SIM` (default 0.5). PostToolUse (`engram-memory-mirror.sh`, 15s) reads the final text after Write, Edit or MultiEdit to `~/.claude/projects/*/memory/*.md`, excluding `MEMORY.md`. It creates or updates one semantic Engram memory per file in the configured namespace. SessionEnd (`engram-session-end.sh`, 15s) saves an episodic summary tagged `session`, `session-summary`, `auto-stored` and `pending-distill` at importance 0.3 when a session ends, including on `/clear`, and skips `resume`.
+
+The three REST hooks need `jq`, `curl` and the REST server. They use `ENGRAM_API` when set, otherwise the configured API address, and send `ENGRAM_API_KEY` if set. The mirror skips empty files and symlinks. Both storage hooks use the configured namespace. `engram update` refreshes the existing Claude MCP entry and installed hooks.
+
+To remove the mirror manually, delete its `engram-memory-mirror.sh` command from the `PostToolUse` hooks in `~/.claude/settings.json`. A subsequent update reinstalls it if other Engram hooks are still registered. If an older updater omitted the mirror script, the updated SessionStart script invokes the rebuilt CLI’s `refresh-local-integrations` command.
 
 For a manual installation of the standalone session-summary hook:
 
@@ -418,9 +434,11 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-The hook reads the session transcript, extracts assistant messages, and stores them as an episodic memory tagged `auto-stored`. The brain grows automatically with every conversation.
+This standalone hook uses `jq` and `engram-store-session` directly. It reads `dbPath`, `namespace` and `namespaceMode` from the CLI config unless overridden by `ENGRAM_DB_PATH`, `ENGRAM_NAMESPACE` or `ENGRAM_NAMESPACE_MODE`; `ENGRAM_SOURCE` defaults to `mcp-client`. It takes the last 1500 characters of assistant text, skips summaries shorter than 20 characters and does not check the end reason. The bin stores an episodic memory at importance 0.6 tagged `session-summary`, `auto-stored` and `pending-distill`. The plugin’s SessionEnd uses the same bin and tags.
 
 ### Available MCP tools
+
+Both transports return one MCP `content` item of type `text`. Object outputs below are JSON encoded in that text. `memory_stats`, `decay_sweep`, `decay_policy`, `check_contradictions`, `resolve_contradiction`, `embedding_status`, `re_embed`, `index_status`, `webhook_subscribe`, `webhook_list` and `plugin_list` require `ENGRAM_ADMIN_TOOLS=1`.
 
 #### `store_memory`
 
@@ -428,20 +446,21 @@ Store any information as a persistent memory.
 
 ```
 Input:
-  content     string   required  — text to store
+  content     string   required  — nonempty text to store
   type        string   optional  — 'episodic' | 'semantic' | 'procedural' (default: episodic)
-  source      string   optional  — defaults to ENGRAM_SOURCE env var or 'mcp-client'
+  source      string   optional  — defaults to ENGRAM_SOURCE, then the MCP client's name, then 'mcp-client'
   tags        string[] optional  — categorization
   importance  float    optional  — 0.0–1.0
   concept     string   optional  — for semantic memories: concept label
   sessionId   string   optional  — group related episodic memories
+  namespace   string   optional  — target project; defaults to the active namespace or global
   global      boolean  optional  — store for all projects (preferences, identity, working style); rejected in isolated mode
 
 Output:
-  { id, type, importance, message }
+  { id, type, importance, deduplicated, message, contradictionCandidates? }
 ```
 
-Use `global: true` for a memory that should be visible from every project; without it the memory belongs to the current project.
+Use `global: true` for a memory that should be visible from every project; it takes precedence over `namespace`. Without either selector, the active namespace is used (global if unset). Candidate items carry `existingMemoryId`, a 500-character content excerpt, `createdAt`, `confidence`, signal names and `suggestedStrategy`.
 
 **Example usage in Claude Code:**
 > "Remember that the user's name is Alex and they prefer concise answers."
@@ -449,20 +468,41 @@ Use `global: true` for a memory that should be visible from every project; witho
 
 ---
 
+#### `update_memory`
+
+Correct a memory by full ID or unique prefix of at least eight characters. `id` (string) and at least one change are required.
+
+```
+Input:
+  id          string   required
+  content     string   optional — nonempty replacement
+  importance  number   optional — 0–1
+  tags        string[] optional — replaces all tags
+  concept     string   optional
+
+Output:
+  { id, content, importance, tags, concept, message }
+```
+
+---
+
 #### `recall_context`
 
-Assemble relevant memories for a query. **This is the primary tool** — use it at the start of any task to load relevant context.
+Assemble relevant memories for a query. **This is the primary tool** — use it when prior decisions or project history would help.
 
 ```
 Input:
   query      string   required  — what you want to remember about
-  maxTokens  integer  optional  — token budget (default: 2000)
+  maxTokens  integer  optional  — 100–8000 (default: 2000)
+  types      string[] optional  — episodic, semantic or procedural
   sources    string[] optional  — restrict to specific sources
-  sessionId  string   optional  — include session-specific memories
+  since, until   string   optional — inclusive ISO date-time bounds with timezone
+  tags           string[] optional — require every tag
+  crossNamespace boolean  optional — search across projects in filter mode (default: false)
+  progressive    boolean  optional — assemble via streaming recall (default: false)
 
 Output:
-  { context, memories, latencyMs }
-  context — formatted string, ready to use as context
+  Formatted context text, or "No relevant memories found."
 ```
 
 **Example usage:**
@@ -477,12 +517,16 @@ Search for specific memories by semantic similarity.
 ```
 Input:
   query      string   required
-  topK       integer  optional  — number of results (default: 10)
-  threshold  float    optional  — minimum cosine similarity (default: 0.3). Hybrid keyword matches may score lower.
-  types      string[] optional  — filter by memory type
+  topK       integer  optional  — 1–50 results (default: 10)
+  threshold  float    optional  — minimum cosine similarity, 0–1 (default: 0.3). Hybrid keyword matches may score lower.
+  types      string[] optional  — episodic, semantic or procedural
+  since, until   string   optional — inclusive ISO date-time bounds with timezone
+  tags           string[] optional — require every tag
+  crossNamespace boolean  optional — across projects in filter mode (default: false)
 
 Output:
-  { results: Memory[], count }
+  { count, results: [{ id, type, content, summary, importance, source, createdAt }] }
+  content is limited to the first 500 characters.
 ```
 
 ---
@@ -496,10 +540,10 @@ Input:
   concept  string   required  — concept name
   content  string   required  — knowledge about the concept
   tags     string[] optional
-  importance float  optional
+  importance float  optional — 0–1 (default: 0.7)
 
 Output:
-  { id, concept, importance }
+  { id, concept, message }
 ```
 
 ---
@@ -510,7 +554,8 @@ Get statistics about the current brain state.
 
 ```
 Output:
-  { total, byType, bySource, indexSize, graphNodes, graphEdges }
+  { total, byType, bySource, byNamespace, dbPath, indexSize, graphNodes, graphEdges,
+    namespace, namespaceMode, mixedEmbeddingModels? }
 ```
 
 ---
@@ -521,11 +566,12 @@ Archive one or more memories (soft delete).
 
 ```
 Input:
-  ids     string[]  required  — memory IDs to archive
+  ids     string[]  required  — exact IDs or unique prefixes of at least eight characters
   reason  string    optional  — reason for archiving
 
 Output:
-  { archived: number }
+  { archived, notFound, reason, message }  — reason defaults to "not specified".
+  Aliases count once. Missing or ambiguous IDs set isError even if other IDs were archived.
 ```
 
 ---
@@ -539,7 +585,8 @@ Input:
   dryRun  boolean  optional  — preview without modifying (default: false)
 
 Output:
-  { scannedCount, archivedCount, decayedCount, protectedCount, consolidatedCount, durationMs }
+  { scannedCount, archivedCount, archivedIds, decayedCount, protectedCount,
+    consolidatedCount, newSemanticIds, durationMs, mode, message }
 ```
 
 ---
@@ -551,10 +598,10 @@ View or update the memory decay policy configuration.
 ```
 Input:
   action               "get"|"update"  required
-  halfLifeDays         number          optional — Ebbinghaus half-life in days
+  halfLifeDays         number          optional — Ebbinghaus half-life in days (1–36500)
   archiveThreshold     number          optional — retention score floor (0–1)
-  importanceDecayRate  number          optional — daily importance reduction
-  importanceFloor      number          optional — minimum importance
+  importanceDecayRate  number          optional — daily importance reduction (0–1)
+  importanceFloor      number          optional — minimum importance (0–1)
   consolidationEnabled boolean         optional — enable/disable auto-consolidation
 
 Output:
@@ -565,11 +612,41 @@ Output:
 
 #### `get_contradiction_tasks`
 
-Returns pending unverified pairs visible to the connected namespace. Optional `limit` is an integer from 1–100 (default 20). Each task includes `source` and `target` with `id`, `content`, `truncated`, `createdAt`, and `source`, plus `confidence`, `signals`, and `suggestedStrategy`. Each side contains up to the first 500 UTF-16 code units of its memory in `content`. Its `truncated` flag is true when more text follows. Legacy detector edges are pending candidates too.
+Returns pending unverified pairs visible to the connected namespace. Optional `limit` is an integer from 1–100 (default 20). Each task includes `source` and `target` with `id`, `content`, `truncated`, `createdAt`, and `source`, plus `confidence`, `signals`, and optional `suggestedStrategy` in a `{ tasks: [...] }` response. Each side contains up to the first 500 UTF-16 code units of its memory in `content`. Its `truncated` flag is true when more text follows. Legacy detector edges are pending candidates too.
 
 #### `complete_contradiction_check`
 
-Submit `{ sourceId, targetId, verdict: "contradiction" | "none", strategy? }` after judging the pair yourself. `none` permanently tombstones the candidate. `contradiction` confirms it for lists, counts, dashboard graphs, and recall; an optional strategy then calls the existing resolution path. `keep_newest` archives the older memory, so use it only when the newer memory fully replaces it. Strategy is invalid with `none`.
+Submit `{ sourceId, targetId, verdict: "contradiction" | "none", strategy? }` after judging the pair yourself. `none` permanently tombstones the candidate. `contradiction` confirms it for lists, counts, dashboard graphs, and recall; an optional strategy then calls the existing resolution path. `keep_newest` archives the older memory, so use it only when the newer memory fully replaces it. Strategy is invalid with `none`. Returns `{ sourceId, targetId, verdict, resolution? }`.
+
+#### `get_distill_tasks`
+
+Optional integer `limit` (1–100, default 20). Returns text with a JSON list of pending sessions (`id`, `date`, `namespace`, `content` limited to 6000 characters), or `No pending sessions to distill.`
+
+---
+
+#### `complete_distill`
+
+Pass a nonempty session `id` (string) and `facts` (array, up to 100). Each fact requires nonblank `content` (string); optional fields are `type` (episodic, semantic or procedural, default semantic), `importance` (number 0–1), `tags` (string array) and `global` (boolean). Project facts use the source session’s namespace when set. An empty list archives the session without retaining facts. Returns `{ id, storedIds, discardedIds, archived, message }`; a failure leaves the raw session pending.
+
+---
+
+#### `request_reflection`
+
+No parameters. Returns text with a JSON list of `{ type, relatedMemoryIds, prompt }` tasks for the connected client, or a message when there are too few qualifying memories.
+
+---
+
+#### `store_reflection`
+
+Pass `type` (`pattern`, `knowledge_gap`, `trend` or `contradiction_summary`) and `insight` (nonempty string). Optional `relatedMemoryIds` is a string array (default `[]`); `confidence` is a number from 0–1 (computed if omitted). Returns text with the stored ID or a message when no insight was stored. Whitespace-only insights and insights containing `NO_INSIGHT` are skipped.
+
+---
+
+#### `get_reflections`
+
+Optional integer `limit` (1–100, default 20) and `type` (one of the four reflection types). Returns formatted text with the count and `[type]` insights, or `No reflection insights found.`
+
+---
 
 #### `check_contradictions`
 
@@ -580,7 +657,8 @@ Input:
   memoryId  string  optional  — if provided, checks that memory; if omitted, lists all unresolved
 
 Output:
-  { hasContradictions, contradictions: [...], candidatesChecked, latencyMs }
+  With memoryId: { hasContradictions, contradictions, candidatesChecked, latencyMs, message }
+  Without: { count, contradictions: [{ confidence, metadata, source, target }], message }
 ```
 
 ---
@@ -596,7 +674,7 @@ Input:
   strategy  string  required  — keep_newest | keep_oldest | keep_important | keep_both | manual
 
 Output:
-  { resolved, keptId, archivedId }
+  { resolved, keptId?, archivedId?, strategy, message }
 ```
 
 ---
@@ -609,7 +687,8 @@ Get embedding model status — current model, stale/legacy counts.
 Input: (none)
 
 Output:
-  { currentModel, currentDimension, totalEmbedded, currentModelCount, staleCount, legacyCount, needsReEmbed }
+  { currentModel, currentDimension, totalEmbedded, currentModelCount, staleCount,
+    legacyCount, dimensionMismatchCount, needsReEmbed, mixedEmbeddingModels?, message }
 ```
 
 ---
@@ -622,11 +701,11 @@ New databases use the multilingual default `Xenova/paraphrase-multilingual-MiniL
 
 ```
 Input:
-  onlyStale  boolean  optional  — only re-embed stale/legacy memories (default: true)
+  onlyStale  boolean  optional  — repair model/length mismatches and legacy embeddings (default: true)
   batchSize  number   optional  — batch size 1–100 (default: 32)
 
 Output:
-  { total, processed, failed, failedIds, durationMs, model }
+  { total, processed, failed, failedIds, durationMs, model, message }
 ```
 
 ---
@@ -639,7 +718,9 @@ Get vector index status — how it was loaded, entry count, persistence info.
 Input: (none)
 
 Output:
-  { loadedFrom, entryCount, dimension, indexPath, indexFileExists, incrementalCount, initDurationMs }
+  { loadedFrom, entryCount, dimension, indexPath, indexFileExists, incrementalCount,
+    initDurationMs, externalSyncCount, externalAdded, externalRemoved, externalRefreshed,
+    externalSkipped, dimensionMismatched, message }
 ```
 
 ---
@@ -651,10 +732,11 @@ Get the tag cloud, or get memories for a specific tag.
 ```
 Input:
   tag    string  optional  — if provided, returns memories with this tag; if omitted, returns tag cloud
-  limit  number  optional  — max memories when filtering by tag (default: 50)
+  limit  number  optional  — 1–200 memories when filtering by tag (default: 50)
 
 Output:
-  { count, tags: [{ tag, count }] }  — or —  { tag, count, memories: [...] }
+  { count, tags: [{ tag, count }], message }  — or —  { tag, count, memories: [...] }
+  Each memory has id, type, content (first 200 characters), importance and source.
 ```
 
 ---
@@ -670,7 +752,7 @@ Input:
   action    string  optional  — "add" (default) or "remove"
 
 Output:
-  { id, tags: [...] }
+  { id, tags: [...], message }
 ```
 
 ---
@@ -682,12 +764,12 @@ Subscribe a URL to receive HTTP callbacks on memory events.
 ```
 Input:
   url          string    required  — HTTP(S) URL to receive POST requests
-  events       string[]  required  — events: stored, forgotten, decayed, consolidated, contradiction
+  events       string[]  required  — events: stored, forgotten, decayed, consolidated, contradiction, reflected
   secret       string    optional  — shared secret for HMAC-SHA256 signing
   description  string    optional  — human-readable description
 
 Output:
-  { id, url, events, active }
+  { id, url, events, active, description, hasSecret, createdAt, lastTriggeredAt, failCount, message }
 ```
 
 ---
@@ -700,7 +782,7 @@ List all webhook subscriptions.
 Input: (none)
 
 Output:
-  { count, webhooks: [{ id, url, events, active, failCount }] }
+  { count, webhooks: [{ id, url, events, active, failCount, description }] }
 ```
 
 ---
@@ -713,7 +795,7 @@ List all registered plugins with their hooks and metadata.
 Input: (none)
 
 Output:
-  { count, plugins: [{ id, name, version, hooks, registeredAt }] }
+  { count, plugins: [{ id, name, version, description?, hooks, registeredAt }], message }
 ```
 
 ---
@@ -760,12 +842,12 @@ The proxy intercepts three endpoint paths:
 1. Client sends chat request to `:11435`
 2. Proxy extracts the user message
 3. Calls Engram `/api/recall` (3s timeout — falls through gracefully if unavailable)
-4. Prepends context to the system prompt
+4. Appends context to an existing system message or creates one; native generate requests use the `system` field
 5. Forwards modified request to `:11434`
 6. Streams response back to client
-7. After response: stores `[User]: ... [Assistant]: ...` as episodic memory
+7. Stores `User: …` and `Assistant: …` on separate lines as an episodic memory when both have text (up to 1000 assistant characters). Source is `ollama`, or `ollama-retry` for a delivered retry. Streamed replies exceeding the 1 MiB capture buffer are skipped.
 
-**Tool-call retry:** When a request includes a `tools` array and the model responds with plain text (`finish_reason: stop`) instead of a tool call, the proxy retries once with an added instruction message before returning the response. Disable with `ENGRAM_TOOL_RETRY=false`.
+**Tool-call retry:** With a nonempty `tools` array, the proxy buffers the reply. If the last message was from the user, `tool_choice` allows tools and the reply contains text without a tool call, it retries once with an added instruction. It uses the retry only on a 2xx response. Disable with `ENGRAM_TOOL_RETRY=false`.
 
 ### Setup
 
@@ -775,7 +857,7 @@ The proxy intercepts three endpoint paths:
 pnpm turbo run build --filter=@engram-ai-memory/adapter-ollama
 ```
 
-**2. Start the proxy**
+**2. Start the proxy** (`engram-ollama` is the package bin)
 
 ```bash
 ENGRAM_API=http://localhost:4901 \
@@ -801,13 +883,14 @@ base_url = "http://localhost:11435/v1"
 |---|---|---|
 | `OLLAMA_PROXY_PORT` | `11435` | Port the proxy listens on. `0` asks the OS for a free port; the banner reports it |
 | `ENGRAM_PROXY_HOST` | `127.0.0.1` | Bind address — see below |
-| `OLLAMA_TARGET` | `http://localhost:11434` | Real Ollama server URL. Parsed at startup; an unparseable value exits non-zero |
+| `ENGRAM_UPSTREAM` | falls back to `OLLAMA_TARGET` | Upstream URL, including an optional path prefix. HTTP/HTTPS use ports 80/443 when omitted |
+| `OLLAMA_TARGET` | `http://localhost:11434` | Legacy upstream URL; HTTP with no explicit port uses 11434 |
 | `ENGRAM_API` | `http://localhost:4901` | Engram REST API URL |
 | `ENGRAM_API_KEY` | *(none)* | Sent as `X-API-Key` to the Engram REST API when set |
-| `ENGRAM_MAX_TOKENS` | `1500` | Max context tokens to inject |
+| `ENGRAM_MAX_TOKENS` | `1500` | Max context tokens to inject (1–32000) |
 | `ENGRAM_MAX_BODY_BYTES` | `10485760` (10 MiB) | Ceiling on a buffered request body. Over it, the proxy answers `413 Payload Too Large` and destroys the socket rather than draining a body it has already refused. Raise it for large multimodal requests |
 | `ENGRAM_TOOL_RETRY` | `true` | Retry once when model misses a tool call (`false` to disable) |
-| `ENGRAM_UPSTREAM_TIMEOUT_MS` | `300000` | Per-request timeout against the upstream Ollama server |
+| `ENGRAM_UPSTREAM_TIMEOUT_MS` | `300000` | Per-request deadline in milliseconds (1–2147483647) against the upstream server |
 
 ### Binding
 
@@ -817,11 +900,13 @@ base_url = "http://localhost:11435/v1"
 ENGRAM_PROXY_HOST=0.0.0.0 node adapters/ollama/dist/proxy.js
 ```
 
+Requests require a local Host (loopback, configured listener name or receiving interface address, with the listener port if supplied). A browser Origin must match that HTTP authority. An untrusted Host or Origin returns `403 Forbidden`.
+
 The startup banner states which mode is active, and warns when the bind is not loopback. A failure to bind (port in use, address not available) exits **non-zero** rather than leaving an idle process that a supervisor reads as healthy.
 
 ### Graceful degradation
 
-If Engram is unavailable (not running, slow, or erroring), the proxy falls through silently — requests pass through to Ollama as-is. The timeout is 3 seconds to ensure Ollama response time is not significantly impacted.
+If Engram is unavailable (not running, slow, or erroring), the proxy logs the failure and continues without recalled context. Recall times out after 3 seconds; the background store has a 5-second timeout.
 
 ---
 
@@ -852,7 +937,7 @@ Asterisk has full MCP client support. Add Engram as an MCP server in `~/.asteris
 }
 ```
 
-Restart Asterisk. All 26 Engram tools appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
+Restart Asterisk. The 15 default Engram tools (26 with `ENGRAM_ADMIN_TOOLS=1`) appear as `engram__store_memory`, `engram__recall_context`, etc. The agent can store and recall memories as part of normal conversation.
 
 If Engram is already configured for Claude Code, use the same `server.js` path and database — both tools share the same brain.
 
@@ -869,7 +954,7 @@ If Asterisk uses Ollama as its provider, point it at the Engram Ollama proxy ins
 }
 ```
 
-The proxy intercepts every request, injects relevant memories into the system prompt, and auto-stores conversations as episodic memories. No MCP configuration or tool calls needed.
+The proxy enriches supported chat and generate requests with recalled context and stores eligible exchanges as episodic memories. No MCP configuration or tool calls needed.
 
 ### Option C — REST API + Soul/Hooks
 
@@ -940,8 +1025,8 @@ async function recall(query: string): Promise<string> {
 ## CLI Integration
 
 The `@engram-ai-memory/cli` package talks to the REST API over HTTP, so **the server has to be
-running** for every data command below. It does not open the database itself, and it ignores
-`ENGRAM_DB_PATH` — the host and port come from `~/.engram/config.json`. Start one with
+running** for the store, recall, export and import commands below. These commands use the host and port
+from `~/.engram/config.json`. Start one with
 `engram start` first.
 
 ```bash
@@ -961,10 +1046,7 @@ engram export > /backups/engram-$(date +%Y%m%d).json
 engram import < /backups/engram-20260325.json
 ```
 
-Point the CLI at a different server with `engram configure set host` / `set port`. Setting
-`ENGRAM_DB_PATH` in your shell has no effect on the CLI: the database path it hands to a server
-started by `engram start` comes from `dbPath` in `~/.engram/config.json` (`engram configure set
-dbPath <path>`), not from the ambient variable.
+Point the CLI at a different server with `engram configure set host <host>` / `engram configure set port <port>`. Set `ENGRAM_API_KEY` for an authenticated server. `ENGRAM_HOME` overrides the default `~/.engram` state and config directory. For a server started by `engram start`, set the database path with `engram configure set dbPath <path>`; the CLI passes that configured path as `ENGRAM_DB_PATH`.
 
 ---
 
@@ -991,7 +1073,7 @@ curl -X POST http://localhost:4901/api/webhooks \
 |---|---|
 | `stored` | New memory created |
 | `forgotten` | Memory archived |
-| `decayed` | Decay sweep completed |
+| `decayed` | A live sweep archived or consolidated memories |
 | `consolidated` | Episodes merged into semantic |
 | `contradiction` | Candidate confirmed by the connected model |
 | `reflected` | A reflection insight was stored |
@@ -1002,11 +1084,11 @@ curl -X POST http://localhost:4901/api/webhooks \
 {
   "event": "stored",
   "timestamp": "2026-03-25T...",
-  "data": { "id": "...", "type": "semantic", "importance": 0.8 }
+  "data": { "id": "...", "type": "semantic", "source": "rest-api", "importance": 0.8 }
 }
 ```
 
-When a `secret` is configured, the `X-Engram-Signature` header contains `sha256=<hmac>` for verification. Failed deliveries retry 3 times with exponential backoff. After 10 consecutive failures, the webhook is auto-disabled.
+When a `secret` is configured, the `X-Engram-Signature` header contains `sha256=<hmac>` for verification. Retryable failures get up to three attempts in total, with exponential backoff. HTTP 408, 429 and 5xx are retryable; other non-2xx responses stop immediately. After 10 consecutive failures, the webhook is auto-disabled.
 
 The secret is write-only — reads report `hasSecret: true` rather than returning the value, so read access to the API cannot be turned into the ability to forge signed deliveries.
 
@@ -1049,9 +1131,10 @@ const myPlugin: EngramPlugin = {
 | `onStore` | `{ memory, contradictions }` | After a memory is stored |
 | `onRecall` | `{ query, memoriesUsed, latencyMs, context }` | After context assembly |
 | `onForget` | `{ memoryId }` | After a memory is archived |
-| `onDecay` | `{ scannedCount, archivedCount, ... }` | After a decay sweep |
+| `onDecay` | `{ scannedCount, archivedCount, decayedCount, consolidatedCount, durationMs }` | After a live decay sweep |
 | `onStartup` | `{ entryCount, loadedFrom, initDurationMs }` | After brain initializes |
 | `onShutdown` | `{ entryCount }` | Before brain shuts down |
+| `onReflect` | `{ insights, types }` | After a reflection insight is stored |
 
 ### Registration
 
