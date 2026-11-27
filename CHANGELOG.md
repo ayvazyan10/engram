@@ -9,6 +9,18 @@ Versioning: [Semantic Versioning](https://semver.org/)
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-11-27
+
+Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.15.2, and the Claude Desktop extension bundle 0.15.2. Private workspace versions unchanged.
+
+### Fixed
+
+- **The API Docker image builds again.** `apps/server/Dockerfile` now copies `packages/mcp`, which the server needs for `POST /mcp`.
+
+### Changed
+
+- **Documentation matches the code.** The README, package READMEs, SKILL.md and every guide in `docs/` were checked against 0.15.1 and corrected. Among the corrections: 15 default MCP tools plus 11 admin tools, namespace defaults per entry point, hooks and setup behaviour, MCP over HTTP, all 62 REST routes and 26 MCP tools in the API reference, and that namespaces do not separate tenants on a shared sync database.
+
 ## [0.15.1] — 2026-11-25
 
 Published as `@engram-ai-memory/core`, `@engram-ai-memory/mcp` and `@engram-ai-memory/cli` 0.15.1, and the Claude Desktop extension bundle 0.15.1. Private workspace versions unchanged.

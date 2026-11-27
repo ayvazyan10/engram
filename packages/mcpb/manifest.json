@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "engram-mcp",
   "display_name": "Engram AI Memory",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "description": "Shared long-term memory across AI tools, with 15 tools visible by default; explicit user instructions win on conflict.",
   "long_description": "Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user's explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.\n\nOn first launch it installs `@engram-ai-memory/mcp` from npm (requires Node.js ≥ 22 and npm). The multilingual embedding model (paraphrase-multilingual-MiniLM-L12-v2) downloads automatically on first use (~118 MB).\n\n**15 tools visible by default:**\n- **Memory** — `store_memory`, `search_memory`, `recall_context`, `add_knowledge`, `update_memory`, `forget`\n- **Contradictions** — `get_contradiction_tasks`, `complete_contradiction_check`\n- **Tags** — `list_tags`, `tag_memory`\n- **Reflection** — `request_reflection`, `store_reflection`, `get_reflections`\n- **Sessions** — `get_distill_tasks`, `complete_distill`\n\n**11 admin tools are hidden unless ENGRAM_ADMIN_TOOLS=1** (26 tools total when enabled): `decay_sweep`, `decay_policy`, `plugin_list`, `webhook_subscribe`, `webhook_list`, `index_status`, `embedding_status`, `re_embed`, `memory_stats`, `check_contradictions`, `resolve_contradiction`.\n\nRecall when prior decisions or project history would help: `recall_context` returns only context text; `search_memory` finds specific facts. Recalled memories can be stale — verify before relying on them. Store durable facts following the user's wishes. Memories are scoped to the current project by default; `global: true` is only for facts about the user that hold in every project. Correct stale facts with `update_memory` by ID, or retire them with `forget`.\n\nReflection returns prompts for the connected AI to reason over and stores its insights. Engram runs no LLM and needs no LLM API keys. All embeddings run locally.",
   "author": {
@@ -31,7 +31,7 @@
         "ENGRAM_SYNC_URL": "${user_config.sync_url}",
         "ENGRAM_SYNC_MODE": "${user_config.sync_mode}",
         "ENGRAM_SYNC_ENCRYPTION_KEY": "${user_config.sync_encryption_key}",
-        "ENGRAM_PACKAGE_VERSION": "0.15.1"
+        "ENGRAM_PACKAGE_VERSION": "0.15.2"
       }
     }
   },

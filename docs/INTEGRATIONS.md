@@ -27,7 +27,7 @@ Go to [smithery.ai/skills/ayvazyan10/engram](https://smithery.ai/skills/ayvazyan
 2. Open Claude Desktop → File → Open Extension
 3. Select the `.mcpb` file
 
-The extension requires Node.js 22+ and npm. It installs `@engram-ai-memory/mcp@0.15.1` under `~/.engram/mcp/`. The launcher skips installation when the version marker, installed package version and server entry point all match.
+The extension requires Node.js 22+ and npm. It installs `@engram-ai-memory/mcp@0.15.2` under `~/.engram/mcp/`. The launcher skips installation when the version marker, installed package version and server entry point all match.
 
 **User config options (set during installation):**
 
@@ -46,7 +46,7 @@ The extension requires Node.js 22+ and npm. It installs `@engram-ai-memory/mcp@0
 ```
 Claude Desktop  →  node <extension directory>/server/index.js
                       │
-                      ├─ Install:    npm install --prefix ~/.engram/mcp @engram-ai-memory/mcp@0.15.1
+                      ├─ Install:    npm install --prefix ~/.engram/mcp @engram-ai-memory/mcp@0.15.2
                       └─ All runs:   spawn the same Node executable with
                                      ~/.engram/mcp/node_modules/@engram-ai-memory/mcp/dist/server.js (stdio)
 ```
@@ -86,7 +86,7 @@ Run these commands in Claude Code:
 /plugin install engram@engram
 ```
 
-The marketplace points to `plugins/engram/`. Its `.claude-plugin/plugin.json` declares version `0.15.1`, `.mcp.json` launches `engram-mcp` via `npx` at `@latest`, and `hooks/hooks.json` registers three command hooks. SessionStart runs `engram-session-start` and returns project context when available.
+The marketplace points to `plugins/engram/`. Its `.claude-plugin/plugin.json` declares version `0.15.2`, `.mcp.json` launches `engram-mcp` via `npx` at `@latest`, and `hooks/hooks.json` registers three command hooks. SessionStart runs `engram-session-start` and returns project context when available.
 
 SessionEnd saves a transcript summary on exit or `/clear` and skips `resume`. After a Write, Edit or MultiEdit to a Claude project memory Markdown file, PostToolUse mirrors its contents into the same local database. SessionEnd launches `engram-store-session` and PostToolUse launches `engram-store-memory-file` in the background. SessionStart runs in the foreground. The plugin MCP entry defaults `ENGRAM_SOURCE` to `claude-code`, `ENGRAM_NAMESPACE_MODE` to `project` and `ENGRAM_ADMIN_TOOLS` to `0`. Edits reuse the file’s Engram record, and the mirror skips `MEMORY.md`. Node.js 22 or newer and npm are required.
 

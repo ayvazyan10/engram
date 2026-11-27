@@ -285,7 +285,7 @@ GitHub Actions workflows in `.github/workflows/`:
 | `ci.yml` | any branch push / PR targeting `master` | install → typecheck → lint → build → generate/apply SQLite migrations → cache or fetch embedding models → coverage with PostgreSQL 16 → validate the Desktop Extension manifest |
 | `release.yml` | push tag `v*` or manual dispatch | require `NPM_TOKEN`, install, build and verify package names. Tag runs publish missing versions of core, mcp, cli and vis. Both triggers build and validate the Desktop bundle. Tag runs create or update the GitHub release with changelog notes and `engram-mcp.mcpb`. |
 
-The v0.15.1 tag ships core, mcp, cli and the Desktop bundle at 0.15.1. The publish loop checks each package’s own version, including vis at 0.5.0.
+The v0.15.2 tag ships core, mcp, cli and the Desktop bundle at 0.15.2. The publish loop checks each package’s own version, including vis at 0.5.0.
 
 ### Local CI simulation
 
