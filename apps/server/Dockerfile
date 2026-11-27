@@ -9,6 +9,7 @@ RUN npm install -g pnpm@9.15.4
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* .npmrc turbo.json ./
 COPY tooling/ ./tooling/
 COPY packages/core/ ./packages/core/
+COPY packages/mcp/ ./packages/mcp/
 COPY apps/server/ ./apps/server/
 
 # Install deps
@@ -27,10 +28,13 @@ RUN npm install -g pnpm@9.15.4
 COPY --from=builder /app/pnpm-workspace.yaml /app/package.json /app/.npmrc ./
 COPY --from=builder /app/packages/core/package.json ./packages/core/
 COPY --from=builder /app/packages/core/dist/ ./packages/core/dist/
+COPY --from=builder /app/packages/mcp/package.json ./packages/mcp/
+COPY --from=builder /app/packages/mcp/dist/ ./packages/mcp/dist/
 COPY --from=builder /app/apps/server/package.json ./apps/server/
 COPY --from=builder /app/apps/server/dist/ ./apps/server/dist/
 COPY --from=builder /app/node_modules/ ./node_modules/
 COPY --from=builder /app/packages/core/node_modules/ ./packages/core/node_modules/
+COPY --from=builder /app/packages/mcp/node_modules/ ./packages/mcp/node_modules/
 COPY --from=builder /app/apps/server/node_modules/ ./apps/server/node_modules/
 
 # Database migrations

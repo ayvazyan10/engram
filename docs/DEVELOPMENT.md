@@ -308,10 +308,10 @@ After building the Atlas dashboard, `pnpm --filter @engram-ai-memory/web check:b
 
 ## Docker
 
-`docker-compose.yml` defines three services. In v0.15.1, `apps/server/Dockerfile` omits the server’s `packages/mcp` workspace dependency from its build and runtime stages, so a clean API image build is blocked. The standalone web image serves the dashboard.
+`docker-compose.yml` defines three services. The API image builds `packages/core`, `packages/mcp` and `apps/server`; the standalone web image serves the dashboard.
 
 ```bash
-# Start all services once the API image includes its MCP dependency
+# Start all services
 docker-compose up -d
 
 # Services:
