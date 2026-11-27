@@ -20,6 +20,7 @@ Thank you for your interest in contributing! Engram is an open-source project an
 ```bash
 git clone https://github.com/ayvazyan10/engram
 cd engram
+# Node.js 22 or newer, pnpm 9.15.4
 pnpm install
 pnpm turbo run build
 ```
@@ -34,6 +35,7 @@ Start the API server and dashboard for local development:
 
 ```bash
 # Terminal 1 — API server
+mkdir -p ~/.engram
 ENGRAM_DB_PATH=~/.engram/dev.db \
   node apps/server/dist/index.js
 
@@ -46,9 +48,9 @@ pnpm --filter @engram-ai-memory/web dev
 ## Before you open a PR
 
 - [ ] `pnpm turbo run build` passes with no errors
-- [ ] `pnpm turbo run test` passes
-- [ ] New functionality has tests (`src/**/*.test.ts`)
-- [ ] Database schema changes use `drizzle-kit generate` → `drizzle-kit migrate` (never `push`)
+- [ ] `pnpm turbo run typecheck`, `pnpm turbo run lint` and `pnpm turbo run test:coverage` pass, including package coverage thresholds
+- [ ] New functionality has tests (`*.test.ts` or `*.test.tsx`)
+- [ ] SQLite schema changes update `packages/core/src/db/adapter.ts` (`runSqliteMigrations`) and `packages/core/src/db/schema.ts`. Regenerate tooling SQL with `pnpm db:generate` and apply it to a fresh test database with `pnpm db:migrate` (never `push`).
 - [ ] Docs updated if public behavior changed
 
 ---
@@ -86,7 +88,7 @@ Adapters live in `adapters/`. The simplest adapter needs two things:
 1. **Recall** — call `POST /api/recall` with the user query before the AI responds
 2. **Store** — call `POST /api/memory` after the AI responds to persist the exchange
 
-See `adapters/ollama/` for a proxy pattern or call the documented REST API directly.
+See `adapters/ollama/` for a proxy pattern or call the documented REST API directly. If the server has `ENGRAM_API_KEY` set, include it as `X-API-Key` on both requests.
 
 ```typescript
 // Minimal adapter pattern

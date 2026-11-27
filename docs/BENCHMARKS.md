@@ -9,8 +9,8 @@ haystack in a fresh, temporary database and asks `NeuralBrain.search(question)`
 for the top 10 memories. A question is a **hit at k** if any of the top-k
 memories belongs to one of the question's `answer_session_ids`.
 
-- Each conversation turn (one `user:` or `assistant:` message) is stored as one
-  episodic memory, tagged with its session id (`sessionId`).
+- Each conversation turn (`user:` or `assistant:`) is submitted as an episodic
+  memory with its `sessionId`. Batch storage can merge near-duplicates.
 - Abstention questions (`question_id` ending in `_abs`) are skipped, as in the
   LongMemEval paper.
 - Reported: recall@1, recall@5 and recall@10, overall and per `question_type`,
@@ -23,7 +23,7 @@ memories belongs to one of the question's `answer_session_ids`.
 
 - No answer-generation LLM is involved. These numbers are **not** end-to-end QA
   accuracy and are not comparable to LongMemEval QA scores reported elsewhere.
-- No reranker. Ranking is Engram's default retrieval only.
+- No reranker. The benchmark calls `brain.search` and disables contradiction detection and reflection for the temporary brain.
 
 ### Setup
 
@@ -35,7 +35,7 @@ memories belongs to one of the question's `answer_session_ids`.
   the benchmark, so the model must already be cached.
 - Hardware: AMD Ryzen 7 5800X (8 cores / 12 threads), 31 GiB RAM, CPU only,
   WSL2 Linux.
-- Runtime: Node.js v22.22.0, Engram core 0.7.0.
+- Runtime recorded for the original benchmark: Node.js v22.22.0, Engram core 0.7.0.
 
 ### Command
 
@@ -47,10 +47,12 @@ pnpm bench:longmemeval --allow-heavy-load --data /path/to/longmemeval_s_cleaned.
 Flags:
 
 - `--allow-heavy-load`: required. The bench loads every CPU core and has crashed a host with unstable hardware.
-- `--data <path>`: the LongMemEval JSON file.
+- `--data <path>`: required path to the LongMemEval JSON file.
 - `--limit <N>`: evaluate only the first N non-abstention questions. This is a
   smoke-test subset, not a representative sample. The first questions in the
   file are all `single-session-user`.
+- `--per-type <N>`: take the first N eligible questions of each type in file
+  order. Choose either `--limit` or `--per-type`, using a positive integer.
 - `--out <json>`: write the full result (counts, overall, per-type, latency,
   wall time) as JSON.
 
@@ -78,6 +80,6 @@ for the full run: TBD.
 - No reranker and no query rewriting.
 - Retrieval recall@k measures whether the evidence session is retrieved. It does
   not measure whether an answer generated from it is correct.
-- Store latency includes embedding every turn sequentially, so it grows with
-  haystack size and is dominated by the embedder on CPU.
+- Store latency includes batch embedding and ordered stores for the whole
+  haystack. The model warmup counts only toward wall time.
 - Single run, single machine. Latency numbers depend on load and hardware.

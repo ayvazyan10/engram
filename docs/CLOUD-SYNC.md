@@ -6,15 +6,15 @@ Multi-device synchronization for Engram, via a shared PostgreSQL database.
 
 ## 1. Overview
 
-Engram is **local-first**: SQLite is the only primary backend, and every read and write goes through your local `engram.db` file. Nothing about that changes with this feature.
+Engram is **local-first**: SQLite is the primary store for memory records, and searches use a local index. Cloud sync runs alongside local reads and writes.
 
-Cloud sync is an **explicit opt-in** on top of that. When you set `ENGRAM_SYNC_URL`, Engram starts replicating memories, sessions, and memory connections through a shared PostgreSQL instance so multiple devices — your laptop, your desktop, a server — can converge on the same brain over time.
+Cloud sync is an **explicit opt-in** on top of that. In the default `auto` mode, when you set `ENGRAM_SYNC_URL`, Engram starts replicating memories, sessions, and memory connections through a shared PostgreSQL instance so multiple devices — your laptop, your desktop, a server — can converge on the same brain over time.
 
 A few things worth being precise about:
 
 - **Any Postgres provider works.** Neon, Supabase, Railway, Render, a self-hosted instance — Engram needs nothing beyond standard Postgres. It doesn't require `pgvector` or any extension.
-- **No data leaves your machine unless you configure `ENGRAM_SYNC_URL`.** Leave it unset and Engram behaves exactly as it always has — fully local, zero network calls for storage.
-- **Sync is not backup.** It's bidirectional replication: writes from every connected device eventually appear on every other device. There's no separate "backup" copy and no single source of truth other than "whatever the devices converge to." If you want backups, use your Postgres provider's backup/snapshot feature, or `engram export`.
+- **Without a sync URL, storage stays local.** MCP and the REST server create a sync engine only when they receive a URL. The CLI reads its saved `syncUrl` for `engram cloud` commands.
+- **Sync is not backup.** It's bidirectional replication: writes from every connected device eventually appear on every other device. There's no separate "backup" copy and no single source of truth other than "whatever the devices converge to." If you want backups, use your Postgres provider's backup/snapshot feature, or use `engram export` for a portable copy of active memories.
 
 ---
 
@@ -27,14 +27,14 @@ The easiest option is **[Neon](https://neon.tech)** — free tier, connection st
 ### Step 2 — Set `ENGRAM_SYNC_URL`
 
 ```bash
-ENGRAM_SYNC_URL=postgres://user:pass@host/db?sslmode=require
+export ENGRAM_SYNC_URL="postgres://user:pass@host/db?sslmode=require"
 ```
 
-TLS is required by default — keep `?sslmode=require` on the connection string (see [Security](#7-security)).
+Direct connections add `sslmode=require` when the URL omits it. Include it explicitly for `engram cloud connect` (see [Security](#7-security)).
 
 ### Step 3 — Start Engram
 
-The schema is created and migrated automatically on first connection — there's nothing to run by hand. Start whichever surface you use normally:
+The first connection applies pending sync migrations automatically. A PostgreSQL advisory lock serializes upgrades, and each migration’s SQL and journal entry commit together. Start whichever surface you use normally:
 
 **MCP** — add the env block to the config file your client reads (`~/.claude.json` for Claude Code, `~/.cursor/mcp.json` for Cursor, `~/.codeium/windsurf/mcp_config.json` for Windsurf):
 
@@ -61,6 +61,8 @@ engram cloud connect "postgres://user:pass@host/db?sslmode=require"
 engram start
 ```
 
+`engram cloud disconnect` clears the saved sync URL, mode and interval. Restart a running server to pick up the change and unset any separately exported `ENGRAM_SYNC_URL`.
+
 **REST server** — set the same env var before starting `apps/server`:
 
 ```bash
@@ -74,6 +76,7 @@ ENGRAM_SYNC_URL=postgres://user:pass@host/db?sslmode=require \
 |---|---|---|
 | Sync URL | `syncUrl` | `sync_url` |
 | Sync mode | `syncMode` | `sync_mode` |
+| Encryption passphrase | — | `sync_encryption_key` |
 
 Repeat step 2–3 on every device you want in the mesh, pointing at the **same** Postgres database. They'll start converging on the next sync cycle.
 
@@ -81,20 +84,21 @@ Repeat step 2–3 on every device you want in the mesh, pointing at the **same**
 
 ## 3. How Sync Works
 
-Once configured, sync runs in the background:
+In `auto` mode, the REST server starts the scheduler at startup. The stdio MCP server starts it when its brain first initializes.
 
 - **Interval:** a full sync cycle runs every 30 seconds by default (`ENGRAM_SYNC_INTERVAL`).
 - **Debounce:** after a local write, a sync is also triggered a couple of seconds later (independent of the interval), so changes don't sit around for a full 30s before propagating.
+- **Retries:** the interval and debounced writes share an exponential backoff after failures (1 second up to 60 seconds). An explicit sync can retry immediately. Overlapping calls on the same engine share the active cycle.
 - **Push:** local changes are read from SQLite and sent to Postgres, batched 500 rows at a time.
-- **Pull:** remote changes are read from Postgres and applied to local SQLite, also batched 500 rows at a time. Pull uses a **5-minute overlap window** behind the last-seen cursor, so a transaction that started before — but committed after — the previous pull is still picked up rather than silently skipped.
+- **Pull:** remote changes are read from Postgres and applied to local SQLite, also batched 500 rows at a time. Pull uses a **5-minute overlap window** behind the last-seen cursor, to catch late commits whose timestamps still fall in that window.
 
 **What's synced:** memories, sessions, and memory connections (the knowledge graph edges between memories). What stays on the device is the vector index file, the recall audit log, webhook subscriptions, the device identity and the sync cursors.
 
 Decay is not separate state left behind. It lives in fields on the memory row itself — `archived_at`, `access_count` and `last_accessed_at` — and those columns sync with the row, so a memory archived by a decay sweep on one device is archived on all of them. Reflections are memories too, and travel the same way.
 
-**Device identity:** each installation gets a unique `device_id`, generated once (a UUID) and persisted in a local-only table that never itself syncs. It's used purely to break ties during conflict resolution (see below) — it's not a user-facing identifier you need to manage.
+**Device identity:** each installation gets a unique `device_id`, generated once (a UUID) and persisted in a local-only table that never itself syncs. Sync uses it to select local writes, skip echoes on pull and break ties between concurrent edits.
 
-> Copies do not inherit that identity. Each installation also records a fingerprint of the database file its id was minted for (hostname, resolved path, device and inode numbers), so cloning or restoring an `engram.db` onto a second machine — disk image, backup restore, plain `cp` — is detected on first use and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction. Left unhandled, a shared id stalls sync in **both** directions while reporting no error; see [Recovery / Troubleshooting](#10-recovery--troubleshooting) for the mechanism and why it errs toward re-minting.
+> Engram checks whether a copy inherited that identity. Each installation also records a fingerprint of the database file its id was minted for (hostname, resolved path, device and inode numbers), so cloning or restoring a fingerprinted `engram.db` onto a second machine — disk image, backup restore, plain `cp` — is detected on first use and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction. Left unhandled, a shared id stalls sync in **both** directions while reporting no error; see [Recovery / Troubleshooting](#10-recovery--troubleshooting) for the mechanism and why it errs toward re-minting.
 
 You can also drive sync manually instead of waiting on the interval — see [Recovery / Troubleshooting](#10-recovery--troubleshooting).
 
@@ -104,10 +108,10 @@ You can also drive sync manually instead of waiting on the interval — see [Rec
 
 When the same row has changed on two devices, Engram resolves it deterministically — both sides compute the same answer independently, with no coordination required:
 
-- **Last-Write-Wins (LWW) by `updatedAt`.** The row with the newer timestamp wins.
-- **Ties are broken by `device_id`.** If two updates land on the exact same `updatedAt`, the row from the device with the lexicographically greater `device_id` wins. Both devices arrive at the same conclusion without talking to each other.
-- **`access_count` and `last_accessed_at` are MAX-merged, not LWW'd.** These bump on every recall from *any* device, so treating them as a normal LWW field would let one device's read silently erase another's. Instead, Engram always keeps the higher value — access counts never decrease, and the most recent access timestamp always wins, regardless of which side's row "won" the rest of the conflict.
-- **Soft deletes (archival) propagate the same way as edits.** A memory's `archivedAt` (or a connection/session's `deletedAt`) is folded into the LWW comparison as the row's "effective" timestamp. That means an unarchive/undelete on one device beats an archive/delete on another **only if its timestamp is newer** — deletion doesn't automatically win, and neither does un-deletion. Whichever change actually happened later wins.
+- **Last-Write-Wins (LWW) by `updatedAt`.** The row with the newer effective timestamp wins.
+- **Ties are broken by `device_id`.** If two updates have the same effective timestamp, the row from the device with the lexicographically greater `device_id` wins. Both devices arrive at the same conclusion without talking to each other.
+- **`access_count` and `last_accessed_at` are MAX-merged, not LWW'd.** Recalls that record access can update these on any device, so treating them as a normal LWW field would let one device's read silently erase another's. Instead, Engram always keeps the higher value — access counts never decrease, and the most recent access timestamp always wins, regardless of which side's row "won" the rest of the conflict.
+- **Soft deletes (archival) propagate the same way as edits.** A memory's `archivedAt` (or a connection’s or session’s `deletedAt`) is folded into the LWW comparison as the row's "effective" timestamp. That means an unarchive/undelete on one device beats an archive/delete on another **only if its timestamp is newer** — deletion doesn't automatically win, and neither does un-deletion. Whichever change actually happened later wins.
 
 ---
 
@@ -115,9 +119,9 @@ When the same row has changed on two devices, Engram resolves it deterministical
 
 **All devices sharing a sync database must use the same embedding model.** Vectors from different models live in different, incompatible vector spaces — mixing them silently corrupts semantic search.
 
-Engram enforces this automatically: the first time a device connects to a sync target, it compares its local embedding model against the model already recorded in Postgres. If they differ, sync refuses to proceed and fails with a clear error rather than pushing incompatible vectors.
+On connection and after a local model change, normal sync checks the active model against the shared model recorded in Postgres. The first device claims an empty target. A different model, or multiple model labels in a legacy target, stops normal sync.
 
-The MCP `re_embed` tool and REST `POST /api/embeddings/re-embed` update one device's SQLite vectors. Normal sync refuses a model mismatch, so a local re-embed alone cannot migrate a populated Postgres database.
+The MCP admin tool `re_embed` (`ENGRAM_ADMIN_TOOLS=1`) and REST `POST /api/embeddings/re-embed` update one device's SQLite vectors. Normal sync refuses a model mismatch, so a local re-embed alone cannot migrate a populated Postgres database.
 
 If this device has switched models and holds the latest edits, run `engram cloud sync --re-embed` on it. For encrypted sync, supply the usual `ENGRAM_SYNC_ENCRYPTION_KEY`.
 It re-embeds stale local vectors and pushes pending work, including archives and decay, before converting the remaining remote vectors.
@@ -130,7 +134,7 @@ A final sync verifies the new model and pulls the converted rows. Configure the 
 3. Wait for the command to report the number of migrated memories. It checks that every remote vector needing conversion has the source model, including archived memories, and generates replacements on the device. Postgres commits them together after the full count matches. An unexpected model, missing model label, or failed conversion rolls back the vector updates.
 4. Configure the target model on every device before restarting. Set `ENGRAM_EMBEDDING_MODEL` for MCP, REST, and one-shot CLI syncs. For servers launched with `engram start`, run `engram configure set embeddingModel <target>`. Resume writes after the devices have pulled the migrated memories.
 
-See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported models.
+See [CONFIGURATION.md](CONFIGURATION.md#embedder) for known model IDs and how Engram determines vector dimensions.
 
 ---
 
@@ -138,30 +142,30 @@ See [CONFIGURATION.md](CONFIGURATION.md#embedder) for the full list of supported
 
 | Variable | Default | Description |
 |---|---|---|
-| `ENGRAM_SYNC_URL` | *(none)* | PostgreSQL connection string. Unset = sync disabled entirely. |
-| `ENGRAM_SYNC_MODE` | `auto` | `auto` (interval + debounce, background), `manual` (explicit sync calls only), `off` (scheduler never runs) |
+| `ENGRAM_SYNC_URL` | *(none)* | PostgreSQL connection string for the server or MCP. The CLI uses `syncUrl` saved by `engram cloud connect`. |
+| `ENGRAM_SYNC_MODE` | `auto` | `auto` schedules syncs. `manual` and `off` both leave the scheduler stopped. An explicit trigger can still sync a configured target. |
 | `ENGRAM_SYNC_INTERVAL` | `30000` | Background sync interval in ms (`auto` mode only) |
 | `ENGRAM_SYNC_ALLOW_UNENCRYPTED` | `false` | Allow non-TLS Postgres connections. Development only — see [Security](#7-security) |
-| `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for end-to-end encryption of synced data. Unset = data reaches Postgres as plaintext (still TLS-in-transit), **and syncing against an already-encrypted database is refused**. Also read by `engram cloud encrypt` when no passphrase is given on the command line. See [End-to-end encryption](#8-end-to-end-encryption) |
+| `ENGRAM_SYNC_ENCRYPTION_KEY` | *(none)* | Passphrase for end-to-end encryption of synced data. Unset = a fresh target receives plaintext fields (TLS in transit by default), **and syncing against an already-encrypted database is refused**. Also read by `engram cloud encrypt` when no passphrase is given on the command line. See [End-to-end encryption](#8-end-to-end-encryption) |
 
-The passphrase is passed **byte-for-byte and never trimmed** — trimming would derive a different key and orphan every row already encrypted.
+The passphrase is passed **byte-for-byte and never trimmed**. The REST server and one-shot CLI sync reject an empty or whitespace-only value. Stdio MCP treats an empty string as unset and rejects whitespace-only values.
 
-Both the MCP server and the REST API server validate `ENGRAM_SYNC_MODE` and `ENGRAM_SYNC_INTERVAL` and refuse to start on a bad value — an unrecognised mode, or an interval that is not a number of at least 1, is a startup error rather than a silent fallback.
+Both servers reject unknown sync modes and require a whole-number interval from 1 through 2147483647 milliseconds.
 
 ---
 
 ## 7. Security
 
-- **TLS is required by default.** Connection strings must include `?sslmode=require`, or Engram refuses to connect. Set `ENGRAM_SYNC_ALLOW_UNENCRYPTED=true` to bypass this — only do so for a trusted local Postgres during development, never against a real network connection.
-- **Passwords are never exposed.** The password portion of `ENGRAM_SYNC_URL` is redacted before it can reach a log line, a `status` response, or an error message. Every place that would otherwise print the connection string prints a masked version instead.
+- **TLS is required by default.** Direct connections add `sslmode=require` if absent. `engram cloud connect` requires it explicitly by default. Duplicate `sslmode` parameters are rejected. For a trusted development database, set `ENGRAM_SYNC_ALLOW_UNENCRYPTED=true`. The CLI sets this override when the URL explicitly specifies `sslmode=disable`.
+- **URL redaction.** Configuration and sync status output mask the URL password and omit the query string and fragment, which can also contain credentials.
 - **WebSocket auth follows `ENGRAM_API_KEY`.** If you set `ENGRAM_API_KEY` on the REST server, the Socket.io `/neural` namespace requires the same key on connection (passed as `auth.token` in the socket handshake) and checks it with a timing-safe comparison. Exposing a synced Engram server beyond `localhost` without `ENGRAM_API_KEY` set means anyone who can reach it can read and write your memories.
-- **Encryption at rest is your Postgres provider's responsibility, unless you enable Engram's own end-to-end encryption.** By default Engram doesn't add at-rest encryption — use a managed provider (Neon, Supabase, etc.) that encrypts data at rest by default, or configure it yourself on a self-hosted instance. For a stronger guarantee where the Postgres operator never sees plaintext at all, see [End-to-end encryption](#8-end-to-end-encryption).
+- **Encryption at rest is your Postgres provider's responsibility, unless you enable Engram's own end-to-end encryption.** By default Engram doesn't add at-rest encryption — use a managed provider (Neon, Supabase, etc.) that encrypts data at rest by default, or configure it yourself on a self-hosted instance. For a stronger guarantee that keeps newly synced content fields private from the Postgres operator, see [End-to-end encryption](#8-end-to-end-encryption).
 
 ---
 
 ## 8. End-to-end encryption
 
-Cloud sync can optionally encrypt memory data client-side before it ever reaches Postgres, so the database — and whoever administers it — never sees plaintext content.
+Cloud sync can optionally encrypt memory data client-side before it ever reaches Postgres, so the database — and whoever administers it — receives ciphertext for the content fields on encrypted writes.
 
 ### Setup
 
@@ -176,15 +180,15 @@ export ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase"
 ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase" engram start
 ```
 
-`engram cloud encrypt [passphrase]` connects to the configured `ENGRAM_SYNC_URL`, derives a key from the passphrase, and stores the salt, the KDF cost parameters and a verification sentinel in Postgres — all three in one transaction, first-wins, so two devices bootstrapping at once cannot end up with one device's salt and the other's sentinel. It doesn't itself enable encryption on future syncs — that's what `ENGRAM_SYNC_ENCRYPTION_KEY` does, read on every sync connection.
+`engram cloud encrypt [passphrase]` connects to the `syncUrl` in the CLI configuration, derives a key from the passphrase, and stores the salt, the KDF cost parameters and a verification sentinel in Postgres — all three in one transaction, first-wins, so two devices bootstrapping at once cannot end up with one device's salt and the other's sentinel. It doesn't itself enable encryption on future syncs — that's what `ENGRAM_SYNC_ENCRYPTION_KEY` does, read on every sync connection.
 
-**Where the passphrase comes from**, in order: the command-line argument, then `ENGRAM_SYNC_ENCRYPTION_KEY`, then an interactive prompt with the input hidden. Passing it on the command line still works but prints a warning — it lands in your shell history and is visible in `ps` — so prefer the bare command or the environment variable. With no TTY and neither source set, the command exits 1 rather than prompting into the void. The only validation is that it is not empty: there is no minimum length or complexity check.
+**Where the passphrase comes from**, in order: the command-line argument, then `ENGRAM_SYNC_ENCRYPTION_KEY`, then an interactive prompt with the input hidden. Passing it on the command line still works but prints a warning — it lands in your shell history and is visible in `ps` — so prefer the bare command or the environment variable. With no TTY and neither source set, the command exits 1 rather than prompting into the void. The only validation is that it contains at least one non-whitespace character.
 
 `engram cloud encrypt` writes metadata only. It does **not** re-encrypt rows already pushed in plaintext, and it never touches local SQLite. Running it twice with the same passphrase is a safe no-op; with a different one it reports that the database is already configured and exits 1.
 
 ### How it works
 
-- **AES-256-GCM with scrypt key derivation** (`N=2^17`, `r=8`, `p=1`) — a memory-hard KDF that resists brute-forcing on commodity hardware/GPUs. GCM gives both confidentiality and integrity: a tampered ciphertext fails to decrypt rather than silently returning garbage. The cost is **recorded per database** rather than hardcoded, so a database bootstrapped before the cost was raised keeps deriving at its original `N=2^15` — raising it there would invalidate the stored sentinel and lock the owner out of every row already encrypted. Parameters read back from the server are bounded on both sides: the floor is the legacy cost, so a hostile operator cannot publish a cheap `N` and have every client derive a brute-forceable key.
+- **AES-256-GCM with scrypt key derivation** (`N=2^17`, `r=8`, `p=1`) — a memory-hard KDF that resists brute-forcing on commodity hardware/GPUs. GCM gives both confidentiality and integrity: a tampered ciphertext fails to decrypt rather than silently returning garbage. The cost is **recorded per database** rather than hardcoded, so a database bootstrapped before the cost was raised keeps deriving at its original `N=2^15` — raising it there would invalidate the stored sentinel and lock the owner out of every row already encrypted. Engram accepts only these two profiles from Postgres, both with `r=8` and `p=1`.
 - **Per-field encryption.** On a memory row: `content`, `summary`, `metadata`, `tags`, `embedding`, `concept`, `trigger_pattern` and `action_pattern` — the last three hold the actual content of semantic and procedural memories. On a session row: `context`. On a connection row: `metadata`. Everything else stays plaintext because the server filters, cursors or resolves conflicts on it: `namespace`, `session_id`, `source`, `device_id`, `type`, `relationship` and every timestamp. A Postgres operator can therefore see how many memories exist, when they changed, which device wrote them and how they relate — just not what any of them say.
 - **Ciphertext is bound to its row and column.** Every value authenticates the table, row id and column it was produced for (AES-GCM associated data), so a database operator cannot lift one row's `content` into another row, or swap `summary` and `content` inside one row. Either move now fails to decrypt instead of decrypting into the wrong place. The plaintext metadata above is deliberately *not* bound: background maintenance rewrites `updated_at`, `archived_at` and `device_id` without touching content, and binding them would turn routine work into undecryptable rows.
 - **Encrypted text format:** `enc:v2:<base64(nonce || ciphertext || authTag)>`. Encrypted embeddings use the same `nonce || ciphertext || authTag` layout but stay raw bytes (no prefix, no base64) since embeddings are already stored as a byte column. `enc:v1:` values — the earlier format, with no binding — are still read; nothing writes them any more.
@@ -195,31 +199,32 @@ ENGRAM_SYNC_ENCRYPTION_KEY="my-secret-passphrase" engram start
 ### Multi-device setup
 
 1. Run `engram cloud encrypt` on the first device. This generates the salt, the KDF parameters and the sentinel, and stores them in Postgres.
-2. On additional devices, set `ENGRAM_SYNC_ENCRYPTION_KEY` to the **same** passphrase — no need to run `engram cloud encrypt` again on each one.
+2. On every device, including the first, set `ENGRAM_SYNC_ENCRYPTION_KEY` to the **same** passphrase — no need to run `engram cloud encrypt` again on each one.
 3. Each device reads the salt from `sync_metadata`, derives the same key locally, and verifies it against the sentinel on connect. A wrong passphrase fails fast with a clear error rather than corrupting or silently dropping data.
 
-> **Upgrade every device together.** `enc:v2` rows carry the row-and-column binding described above, and an older client cannot read them. A mesh where one device is still on the previous release will see that device fail to decrypt every row written by the upgraded ones. Old `enc:v1` rows keep decrypting on both, so the migration is one-way and safe in that direction only.
+> **Upgrade v1-only clients before writing v2 ciphertext.** `enc:v2` rows carry the row-and-column binding described above, and a client that only supports `enc:v1` cannot read them. A mesh where one device is still on a v1-only release will see that device fail to decrypt newly encrypted rows written by the upgraded ones. Old `enc:v1` rows keep decrypting on both, so the migration is one-way and safe in that direction only.
 
-**A device with no passphrase now refuses to sync** against a database that has encryption established, instead of connecting and pushing plaintext over it. Pushing would have sent that device's whole database in the clear, and the last-write-wins upsert would have overwritten ciphertext rows the encrypted peers had already pushed — silently and irreversibly downgrading the store for everyone. The error names `ENGRAM_SYNC_ENCRYPTION_KEY` as the fix.
+**A device with no passphrase now refuses to sync** against a database that has encryption established, instead of connecting and pushing plaintext over it. Pushing would have sent that device's whole database in the clear, and the last-write-wins upsert would have overwritten ciphertext rows the encrypted peers had already pushed — silently and irreversibly downgrading the store for everyone. The error names `ENGRAM_SYNC_ENCRYPTION_KEY` as the fix. An already-connected plaintext client repeats this check before each push batch.
 
 ### Tradeoffs
 
-- **pgvector search disabled.** Encrypted embeddings are random bytes from Postgres's point of view, so semantic search can never run server-side against them. This is by design, not a missing feature — Engram doesn't rely on server-side vector search anyway; semantic search always runs locally against SQLite + the local vector index, plaintext, on every device.
+- **Search runs locally.** PostgreSQL stores embeddings as bytes. Engram searches its local vector index with either sync encryption setting.
 - **No passphrase recovery.** The passphrase is never stored anywhere, only verified via the sentinel. If it's lost, encrypted rows in Postgres are permanently unreadable — there is no reset or recovery path. Local SQLite data is unaffected either way, since sync only ever encrypts the copy that leaves the device.
-- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is — the encrypted-value check looks for the `enc:v1:` / `enc:v2:` prefix and leaves unprefixed values alone. On pull, a row that fails to decrypt (wrong passphrase, corrupted ciphertext, or data encrypted under a different key) is dropped from the page with a warning, but the pull cursor is pinned before it: the same page is re-pulled every cycle, and later rows in that table do not arrive until the row is fixed or removed.
+- **Mixed content is handled gracefully, not rejected.** If some rows were pushed before encryption was enabled, they remain plaintext in Postgres and are pulled as-is — the encrypted-value check looks for the `enc:v1:` / `enc:v2:` prefix and leaves unprefixed values alone. If a row cannot be decrypted, valid rows can still be applied, but the cycle fails and keeps the previous checkpoint for all three tables. The next pull retries from there.
 - **Metadata is not authenticated.** Timestamps, `archived_at`, `device_id` and `namespace` stay outside the binding for the reason given above, so a Postgres operator can still reorder or re-attribute rows even though they cannot read or move content. Closing that needs a per-row MAC column, which does not exist yet.
 
 ---
 
 ## 9. Namespace / Tenant Isolation
 
-If multiple *people* share a single Postgres database (as opposed to one person's multiple devices), isolation between them is controlled by `ENGRAM_NAMESPACE_MODE` — the same setting that governs local namespace behavior, not something sync-specific.
+`ENGRAM_NAMESPACE_MODE` scopes the local brain. Sync replicates rows across namespaces to the shared database and to peers.
 
-- **`none` (default):** every connected device sees every memory — one shared pool. This is the right default for one person syncing their own devices, and it's what you get if you don't set anything.
-- **`filter`:** memories are tagged with a namespace. Queries default to the caller's namespace, but cross-namespace reads/writes remain possible via explicit overrides.
-- **`isolated`:** a strict boundary. Each namespace only ever sees its own memories, and cross-namespace overrides are rejected outright.
+- **`none`:** local reads see every namespace. A directly launched REST server defaults to `none` without a namespace and to `filter` with one.
+- **`project`:** the default for stdio MCP and CLI setup. MCP resolves the project to a local `filter` scope. `engram start` maps this mode to `none` for the dashboard.
+- **`filter`:** normal searches include the configured project and global memories. Callers can request cross-namespace search and specify a namespace on new memories.
+- **`isolated`:** the local brain requires a fixed namespace and rejects conflicting overrides and cross-namespace searches.
 
-**Important:** with `ENGRAM_NAMESPACE_MODE=none` (the default) and a Postgres database shared by more than one person, every connected device can read and modify every memory in it — there is no isolation. If you're sharing one sync database across multiple people, use `ENGRAM_NAMESPACE_MODE=isolated` with a distinct `ENGRAM_NAMESPACE` per person/tenant. `none` is meant for "my own devices," not "our team's shared database."
+**Separate tenants need separate databases and credentials.** Even an isolated client replicates other namespaces into its local SQLite file. Anyone with access to that file or the shared Postgres credentials can bypass local scoping.
 
 ---
 
@@ -228,7 +233,7 @@ If multiple *people* share a single Postgres database (as opposed to one person'
 **Sync seems stuck**
 - Confirm `ENGRAM_SYNC_URL` is reachable from this machine (`psql "$ENGRAM_SYNC_URL" -c 'select 1'`, or just check your provider's connection status).
 - Check your Postgres provider's logs/dashboard for connection errors or rejected auth.
-- CLI: `engram cloud status` shows last sync time, pending push count, pull cursor, and the last error (if any).
+- CLI: `engram cloud status` shows last sync time, pending push count (up to 500 per synced table), pull cursor, and the last error (if any). `engram cloud devices` prints this device’s full ID and display name.
 
 **"Embedding model mismatch" error**
 - All devices sharing a sync target must use the same embedding model. See [Embedding Model Compatibility](#5-embedding-model-compatibility) for the fix.
@@ -251,12 +256,11 @@ WHERE id = :id AND instr(source, char(0)) > 0;
 Run `engram cloud sync` after the local edit to retry the pending page.
 
 **Data isn't appearing on another device**
-- Verify both devices point at the *exact* same `ENGRAM_SYNC_URL` (same host, same database — a typo'd database name silently creates a second, disconnected mesh).
-- Check sync status on both sides (`engram cloud status`, or `GET /api/sync/status`) to confirm they're both actually syncing and not sitting on `ENGRAM_SYNC_MODE=off`.
+- Verify that both URLs connect to the intended PostgreSQL database. Engram creates tables inside an existing database. A different existing database forms a separate sync target.
+- Check the last sync time and errors on both sides (`engram cloud status` or `GET /api/sync/status`). For background sync, also check that each process was started in `auto` mode.
 - Give it one full interval (default 30s) — or force it immediately, see below.
 
 **Force a sync cycle manually:**
-
 ```bash
 # CLI
 engram cloud sync
@@ -270,16 +274,16 @@ curl http://localhost:4901/api/sync/status
 
 Copying a database to another machine — a backup restore, a disk clone, a plain `cp` — used to duplicate the device id onto both installations. The pull filter is "not written by me", so with a shared id every row from the twin looks like an echo of this device's own push and is skipped, **in both directions**: the two installations sit there exchanging nothing while `engram cloud status` reports no error, because nothing failed.
 
-Each installation now also records a fingerprint of the database file its id was minted for — hostname, resolved path, and the file's device and inode numbers. A fingerprint that no longer matches means this file is not the one the id belongs to, and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction so nothing pending is stranded. Because the resolved path is part of the fingerprint, `mv` to a new path re-mints the id too — even within one filesystem, where device and inode are preserved.
+Each installation now also records a fingerprint of the database file its id was minted for — hostname, resolved path, and the file's device and inode numbers. Older databases without a recorded fingerprint adopt the current fingerprint and keep their ID. A fingerprint that no longer matches means this file is not the one the id belongs to, and a fresh id is minted automatically, with every locally-owned row re-stamped onto it in the same transaction so nothing pending is stranded. Because the resolved path is part of the fingerprint, `mv` to a new path re-mints the id too — even within one filesystem, where device and inode are preserved.
 
 A spurious re-mint costs one new UUID and a log line; a missed collision is silent data divergence, which is why the check errs toward re-minting. `resetDeviceId()` in `@engram-ai-memory/core` triggers the same recovery explicitly.
 
-**Your local data is always safe.** SQLite is the source of truth for that device regardless of what Postgres or the network is doing. If sync breaks, stalls, or the remote database disappears entirely, nothing is lost locally — Engram just stops replicating until sync is working again.
+**You can keep working offline.** A connection failure leaves local SQLite available. Once sync resumes, remote edits and archives are applied using the conflict rules above.
 
 ---
 
 ## 11. Limitations
 
 - **No server-side search.** Sync replicates rows; it doesn't add `pgvector` or any server-side vector search. Semantic search still runs locally, against your local SQLite + vector index, on every device. With encryption enabled this is unavoidable rather than a gap — see [End-to-end encryption](#8-end-to-end-encryption).
-- **Encryption is opt-in.** Without `ENGRAM_SYNC_ENCRYPTION_KEY` set, data is encrypted in transit (TLS) but not at rest — whoever administers your Postgres database can read memory content unless your provider encrypts it for you. Enable [end-to-end encryption](#8-end-to-end-encryption) if you don't trust the Postgres instance with plaintext.
+- **Encryption is opt-in.** With default TLS and no passphrase, content is readable by the Postgres operator, including on an encrypted disk. Enable [end-to-end encryption](#8-end-to-end-encryption) to protect newly synced content fields.
 - **The sync interval has a practical floor.** Every cycle costs a round trip and a transaction against Postgres; pushing `ENGRAM_SYNC_INTERVAL` very low mostly adds load without meaningfully improving propagation latency (the write-triggered debounce already covers the common case of "I just changed something, sync it soon").

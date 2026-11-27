@@ -6,8 +6,8 @@
 
 | Tool | Version | Install |
 |---|---|---|
-| Node.js | 22 LTS | [nodejs.org](https://nodejs.org) |
-| pnpm | 9.15.4+ | `npm install -g pnpm` |
+| Node.js | 22 or newer (CI uses 22.x) | [nodejs.org](https://nodejs.org) |
+| pnpm | 9.15.4 (workspace pin) | `npm install -g pnpm@9.15.4` |
 | Git | any recent | system package manager |
 
 ---
@@ -30,7 +30,7 @@ Engram uses **pnpm workspaces** with **Turborepo** for build orchestration.
 
 ```
 pnpm-workspace.yaml   declares workspaces: apps/*, packages/*, adapters/*, tooling/*
-turbo.json            pipeline: build, test, lint, e2e — with dependency ordering
+turbo.json            tasks: build, dev, test, test:coverage, lint, typecheck, e2e, clean
 ```
 
 ### Build pipeline
@@ -38,16 +38,20 @@ turbo.json            pipeline: build, test, lint, e2e — with dependency order
 Turborepo respects `dependsOn: ["^build"]` — packages are always built in dependency order:
 
 ```
-tooling/tsconfig  →  packages/core  →  packages/mcp
-                                    →  apps/server
-                  →  packages/vis
-apps/web (independent frontend)
-adapters/* (depend on core)
+packages/core → packages/mcp → apps/server (also depends directly on core)
+              → packages/cli
+apps/web, packages/vis and adapters/ollama build independently of core
 ```
 
 ### Useful commands
 
 ```bash
+# Run workspace development scripts (watchers and dev servers)
+pnpm dev
+
+# Pack the Claude Desktop Extension (mcpb validates it; the Python fallback only packs it)
+pnpm pack:mcpb
+
 # Build everything
 pnpm turbo run build
 
@@ -73,17 +77,18 @@ pnpm turbo run typecheck
 
 ### Start the API server
 
-The server needs to be running for the dashboard and all adapters to work.
+The dashboard uses the API server for data. The Ollama adapter uses it to recall and store memories.
 
 ```bash
 # Option A — run compiled dist (after build)
+mkdir -p ~/.engram
 ENGRAM_DB_PATH=~/.engram/dev.db \
   node apps/server/dist/index.js
 
-# Option B — run with tsx (hot reload, no build step)
-cd apps/server
+# Option B — watch the server source (build its workspace dependencies first)
+mkdir -p ~/.engram
 ENGRAM_DB_PATH=~/.engram/dev.db \
-  npx tsx src/index.ts
+  pnpm --filter @engram-ai-memory/server dev
 ```
 
 Server starts at `http://localhost:4901`.
@@ -108,26 +113,25 @@ cd packages/core
 npx tsx scripts/demo.ts
 ```
 
-This loads 67 memories with 34 knowledge graph connections.
+The script writes demo memories and graph connections to `packages/core/engram.db` and prints the resulting memory counts. To view them, start the server with `ENGRAM_DB_PATH="$PWD/packages/core/engram.db"` from the repository root.
 
 ### Reset the database
 
 ```bash
-rm ~/.engram/dev.db
-pnpm db:migrate
-# optionally re-seed
-cd packages/core && npx tsx scripts/demo.ts
+# Stop processes using the dev database first.
+rm -f ~/.engram/dev.db{,-wal,-shm,.index}
+# Restart the server with the same ENGRAM_DB_PATH to create a fresh database.
 ```
 
 ---
 
 ## Database workflow
 
-**Never use `drizzle-kit push`** — it drops and recreates tables, destroying all data.
+**Never use `drizzle-kit push`** — it can drop data. Engram upgrades user databases in `runSqliteMigrations()` each time it opens SQLite. The generated SQLite migrations are for tooling and schema-parity checks.
 
 ```bash
-# 1. Edit the schema
-vim packages/core/src/db/schema.ts
+# 1. Update both the Drizzle schema and the runtime upgrade in runSqliteMigrations()
+vim packages/core/src/db/schema.ts packages/core/src/db/adapter.ts
 
 # 2. Generate migration SQL
 pnpm db:generate
@@ -136,15 +140,15 @@ pnpm db:generate
 # 3. Review the generated SQL before applying
 cat packages/core/src/db/migrations/*.sql
 
-# 4. Apply the migration
-pnpm db:migrate
+# 4. Apply the generated SQL to a fresh tooling database
+ENGRAM_DB_PATH="$(mktemp)" pnpm db:migrate
 ```
 
 Root-level scripts:
 
 ```json
-"db:generate": "pnpm --filter @engram-ai-memory/core exec drizzle-kit generate",
-"db:migrate":  "pnpm --filter @engram-ai-memory/core exec drizzle-kit migrate"
+"db:generate": "pnpm --filter @engram-ai-memory/core drizzle-kit generate",
+"db:migrate":  "pnpm --filter @engram-ai-memory/core drizzle-kit migrate"
 ```
 
 ---
@@ -155,8 +159,8 @@ Shared configs live in `tooling/tsconfig/`:
 
 | Config | Used by | Key settings |
 |---|---|---|
-| `base.json` | all packages | `strict: true`, `exactOptionalPropertyTypes: false` |
-| `node.json` | server, adapters, mcp | `module: NodeNext`, `types: ["node"]` |
+| `base.json` | TypeScript workspaces, via `node.json` or `react.json` | `strict: true`, `exactOptionalPropertyTypes: false` |
+| `node.json` | core, mcp, cli, vis, server, Ollama adapter | `module: NodeNext`, `types: ["node"]` |
 | `react.json` | apps/web | `jsx: react-jsx`, `moduleResolution: Bundler` |
 
 Each package extends the relevant shared config. Add package-specific overrides in the package's own `tsconfig.json`.
@@ -176,6 +180,11 @@ cat > package.json << 'EOF'
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
+  "devDependencies": {
+    "@engram-ai-memory/tsconfig": "workspace:*",
+    "typescript": "5.7.3",
+    "vitest": "^3.1.1"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
@@ -186,7 +195,7 @@ EOF
 cat > tsconfig.json << 'EOF'
 {
   "extends": "@engram-ai-memory/tsconfig/node.json",
-  "compilerOptions": { "outDir": "./dist" },
+  "compilerOptions": { "outDir": "./dist", "rootDir": "./src" },
   "include": ["src"]
 }
 EOF
@@ -221,16 +230,16 @@ pnpm turbo run test:coverage
 
 Every package with a `test` script has a matching `test:coverage` script, and CI runs `test:coverage` in place of `test` — it runs the same suites and additionally fails a package that drops below its own thresholds.
 
-Test files: `src/**/*.test.ts`
+Test files generally live under `src/` as `*.test.ts` or `*.test.tsx`. The web package also tests its bundle checker under `scripts/`.
 
 ### Key test areas
 
 | Test | File | What it checks |
 |---|---|---|
-| Embedder roundtrip | `core/src/embedding/Embedder.test.ts` | embed → pack → unpack → cosine sim > 0.99 |
-| Vector search | `core/src/retrieval/VectorSearch.test.ts` | correct top-1 result |
-| Brain store + recall | `core/src/NeuralBrain.test.ts` | store → recall finds the memory |
-| Graph traversal | `core/src/graph/KnowledgeGraph.test.ts` | BFS depth 2 returns connected nodes |
+| Embedding codec | `packages/core/src/embedding/__tests__/fp16.test.ts` | FP16 pack/unpack, including subnormal values |
+| Vector search | `packages/core/src/retrieval/__tests__/vector-search-topk.test.ts` | topK bounds and result counts |
+| Brain store | `packages/core/src/NeuralBrain.test.ts` | near-duplicate merging and contradiction handling |
+| Graph edges | `packages/core/src/graph/__tests__/graph-edges.test.ts` | edge removal and bidirectional counts |
 
 ---
 
@@ -262,7 +271,7 @@ refactor(mcp): simplify tool registration pattern
 - [ ] `pnpm turbo run lint` passes — it is a hard CI gate, not advisory
 - [ ] `pnpm turbo run test:coverage` passes, including each package's coverage thresholds
 - [ ] New functionality has tests
-- [ ] Database changes use `drizzle-kit generate` + `migrate` (never `push`)
+- [ ] SQLite changes update the runtime migration and the Drizzle schema, regenerate the tooling SQL and pass the schema-parity test
 - [ ] Documentation updated if behavior changed
 
 ---
@@ -273,8 +282,10 @@ GitHub Actions workflows in `.github/workflows/`:
 
 | Workflow | Trigger | Steps |
 |---|---|---|
-| `ci.yml` | push / PR to main | install → typecheck → lint → build → migrations → test with coverage → validate the Desktop Extension manifest |
-| `release.yml` | push tag `v*` | build → publish packages to npm |
+| `ci.yml` | any branch push / PR targeting `master` | install → typecheck → lint → build → generate/apply SQLite migrations → cache or fetch embedding models → coverage with PostgreSQL 16 → validate the Desktop Extension manifest |
+| `release.yml` | push tag `v*` or manual dispatch | require `NPM_TOKEN`, install, build and verify package names. Tag runs publish missing versions of core, mcp, cli and vis. Both triggers build and validate the Desktop bundle. Tag runs create or update the GitHub release with changelog notes and `engram-mcp.mcpb`. |
+
+The v0.15.1 tag ships core, mcp, cli and the Desktop bundle at 0.15.1. The publish loop checks each package’s own version, including vis at 0.5.0.
 
 ### Local CI simulation
 
@@ -283,7 +294,10 @@ pnpm install --frozen-lockfile
 pnpm turbo run typecheck
 pnpm turbo run lint
 pnpm turbo run build
+pnpm db:generate
+ENGRAM_DB_PATH="$(mktemp)" pnpm db:migrate
 pnpm turbo run test:coverage
+npx --yes @anthropic-ai/mcpb validate packages/mcpb/manifest.json
 ```
 
 ESLint runs from the shared config in `tooling/`. `no-console` is off for the CLI, whose stdout *is* its user interface.
@@ -294,15 +308,15 @@ After building the Atlas dashboard, `pnpm --filter @engram-ai-memory/web check:b
 
 ## Docker
 
-`docker-compose.yml` provides a containerised environment:
+`docker-compose.yml` defines three services. In v0.15.1, `apps/server/Dockerfile` omits the server’s `packages/mcp` workspace dependency from its build and runtime stages, so a clean API image build is blocked. The standalone web image serves the dashboard.
 
 ```bash
-# Start all services
+# Start all services once the API image includes its MCP dependency
 docker-compose up -d
 
 # Services:
 #   api:4901        — Engram REST API (SQLite inside the container)
-#   web:4902        — Dashboard (standalone container, optional)
+#   web:4902        — Dashboard (standalone web container)
 #   postgres:5432   — for cloud-sync testing only, never a primary backend
 
 # Logs
