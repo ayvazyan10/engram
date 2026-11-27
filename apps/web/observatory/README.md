@@ -1,16 +1,18 @@
 # Observatory — visualization comparison harness
 
-Throwaway. Three visualizations of the same real store, side by side in one
-click, so the owner can pick one. Delete the whole thing when the choice is
+Throwaway. Switch between fifteen visualizations of the same real store in one
+click, so the owner can compare them. Delete the whole thing when the choice is
 made:
 
 ```
 rm -rf apps/web/observatory
 ```
 
-Nothing outside this directory refers to it.
+The Atlas app does not import this harness.
 
 ## Run it
+
+The 3D demos require the React Three packages listed below to be available in `apps/web`.
 
 ```
 cd apps/web && npx vite --config observatory/vite.config.ts
@@ -18,28 +20,27 @@ cd apps/web && npx vite --config observatory/vite.config.ts
 
 Serves `http://127.0.0.1:4912`, proxying `/api` to the API on `4901`.
 
-It does **not** touch the app's dev server on 4911 or the API on 4901, and it
-does not share a Vite config, a port, or a build with them.
+It runs separately from the app's dev server on 4902 and reads the API on 4901.
+The harness has its own Vite config, port and build.
 
 ## Why it lives here
 
 pnpm keeps each package's dependencies under that package's own
-`node_modules`. Sitting inside `apps/web` is what lets these files resolve
-`react`, `three`, `@react-three/fiber`, `@react-three/drei`,
-`@react-three/postprocessing`, `recharts`, `zustand` and `date-fns` without
-installing anything.
+`node_modules`. Sitting inside `apps/web` lets the harness resolve `react`,
+`three` and `date-fns`. The demos also import `@react-three/fiber`,
+`@react-three/drei` and `@react-three/postprocessing`. A clean workspace
+install does not supply those three packages from `apps/web/package.json`.
 
 It is nonetheless fully separate from the application:
 
 | | scope | sees `observatory/`? |
 |---|---|---|
 | `apps/web/tsconfig.json` | `include: ["src"]` | no |
-| `apps/web/vitest.config.ts` | `include: ['src/**/*.{ts,tsx}']` | no |
+| `apps/web/vitest.config.ts` | coverage includes `src/**/*.{ts,tsx}` | no harness tests or coverage |
 | `pnpm lint` | `eslint src` | no |
 | `pnpm build` | `vite.config.ts`, root `apps/web` | no |
 
-So an agent rebuilding `apps/web/src` and this harness cannot collide, and the
-harness cannot break the app's typecheck, tests, lint or build.
+The application typecheck, lint and build use the app sources. Vitest uses its default test-file discovery.
 
 ## Data
 
@@ -48,11 +49,11 @@ the page says so and draws nothing.
 
 | endpoint | gives |
 |---|---|
-| `GET /api/graph/layout` | 651 memories, each with a PCA coordinate |
-| `GET /api/graph/edges?limit=20000` | 3,099 renderable links, plus the honest totals |
-| `GET /api/decay/policy` | the 7-day half-life retention is computed against |
+| `GET /api/graph/layout` | visible memories with PCA or fallback positions (651 projected in the measured store) |
+| `GET /api/graph/edges?limit=20000` | renderable links and stored totals (3,099 renderable in that store) |
+| `GET /api/decay/policy` | the configured half-life used for retention (7 days in that store) |
 
-`data.ts` joins them and derives, once, what all nine demos share: link
+`data.ts` joins them and derives, once, what all fifteen demos share: link
 endpoints as array indices, per-node degrees split by link kind, connected
 components ranked largest-first, retention and its band.
 
@@ -68,7 +69,7 @@ Numbers worth knowing before you draw (all measured on this store):
   semantic — memory type explains almost nothing about the structure.
 - Mean link span in the projection is **7.08** against a mean random-pair
   distance of **40.81**. Connected memories are already piled together, which
-  is why edges are invisible in the current 3D scene.
+  is why edges were hard to see in the original 3D scene.
 - The 3-component PCA keeps **38%** of the embedding variance.
 - 613 memories are connected, 38 are isolated; 17 components, the largest 538.
 - Retention: 35 vivid, 10 holding, 42 fading, **564 at the archive threshold**.
@@ -86,6 +87,12 @@ Numbers worth knowing before you draw (all measured on this store):
 | `demos/Strata.tsx` | 7 — 3D | equal-count age beds, links leaning across time |
 | `demos/AxesAndChords.tsx` | 8 — 3D | nothing floats: nodes pinned to axes, links as chords |
 | `demos/LinkTerrain.tsx` | 9 — 3D | link density as landform, read across rather than into |
+| `demos/MemoryRiver.tsx` | 10 — Hybrid | memories and links along a timeline |
+| `demos/MemoryGalaxy.tsx` | 11 — 3D | link communities as spiral arms |
+| `demos/MemoryMatrix.tsx` | 12 — 3D | a plane ordered by age and link community |
+| `demos/OrbitalCore.tsx` | 13 — 3D | orbits arranged by age |
+| `demos/MemoryTree.tsx` | 14 — Hybrid | tree branches and the links left out as roots |
+| `demos/MemoryConstellations.tsx` | 15 — 2D | groups joined by their strongest links |
 
 Each file exports a `DemoModule` and owns its own name, dimension and claim.
 `demos/registry.ts` is the only file that knows about more than one demo.

@@ -2,7 +2,7 @@
 
 # @engram-ai-memory/web
 
-**Atlas dashboard for Engram — Map, Review, Timeline, and Insights**
+**Atlas dashboard for Engram — Map, Recall, Review, Timeline, Insights and Settings**
 
 </div>
 
@@ -14,7 +14,7 @@ The Atlas dashboard provides a map of memories, search and recall, a memory
 sheet for inspection and editing, review queues, a timeline, insights, settings,
 and an onboarding guide for connecting an AI.
 
-The Map switcher lazily loads **Sky** (a WebGL memory sky), **Landscape** (retention terrain with a Now / +7 / +30 / +90-day decay preview), **River** (braided history by region, with brush-to-zoom and region following) and **Pulse** (a read-only recall explanation of ranks, graph pulls, token budget and exclusions) at `#/?view=sky|landscape|river|pulse`.
+The Map switcher lazily loads **Sky** (a WebGL memory sky), **Landscape** (retention terrain with a Now / +7 / +30 / +90-day decay preview), **River** (braided history by region, with brush-to-zoom and region following) and **Pulse** (a read-only recall explanation of ranks, graph pulls, token budget and exclusions) using the `view` query parameter, for example `#/?view=sky`.
 
 ## Tech Stack
 
@@ -33,6 +33,10 @@ The Map switcher lazily loads **Sky** (a WebGL memory sky), **Landscape** (reten
 # From the monorepo root
 pnpm install
 
+# Build the workspace dependencies the API imports from dist
+pnpm --filter @engram-ai-memory/core build
+pnpm --filter @engram-ai-memory/mcp build
+
 # Start the API server (required for data)
 pnpm --filter @engram-ai-memory/server dev
 
@@ -49,7 +53,7 @@ The dev server proxies API requests to `http://localhost:4901`.
 pnpm --filter @engram-ai-memory/web build
 ```
 
-The built dashboard is served automatically by the Engram server at `http://localhost:4901` when the `dist/` folder exists.
+The built dashboard is served automatically by the Engram server at `http://localhost:4901` when `apps/web/dist/index.html` exists.
 
 ## Architecture
 
@@ -77,13 +81,23 @@ The dashboard connects to these server endpoints:
 
 | Endpoint | Used by |
 |----------|---------|
-| `GET /api/memory` | Memory list (all views) |
+| `GET /api/memory` | Memory list and Timeline |
+| `POST /api/memory`, `DELETE /api/memory/:id` | Store or archive a memory |
+| `GET /api/map` | Project map and alternate views |
+| `POST /api/search` | Map search pins |
+| `POST /api/recall/explain` | Recall route and Pulse preview |
 | `GET /api/analytics` | Insights |
-| `GET /api/reflections` | Review |
+| `GET /api/reflections` | Insights → Reflections |
 | `GET /api/reflection/status` | Reflection status |
 | `GET /api/graph/:id` | Memory connections |
-| `GET /api/contradictions` | Contradiction highlighting |
+| `GET /api/graph/edges` | Fault lines on the map |
+| `GET /api/review/summary`, `GET /api/review/:queue` | Review counts and queue items |
+| `POST /api/review/dismiss`, `POST /api/memory/:id/redact` | Dismiss a review item or redact detected secrets |
+| `POST /api/contradictions/resolve`, `POST /api/contradictions/bulk/resolve` | Resolve individual or selected conflicts |
 | `PATCH /api/memory/:id` | Inline editing |
+| `POST /api/memory/:id/tags`, `DELETE /api/memory/:id/tags/:tag` | Add or remove a tag in the memory sheet |
 | `POST /api/memory/bulk/tag` | Bulk tagging |
 | `POST /api/memory/bulk/archive` | Bulk archival |
-| `WS /neural` | Real-time events |
+| `GET /api/health`, `GET /api/stats`, `GET /api/sync/status`, `GET /api/embeddings/status`, `GET /api/index/status` | Server and store status |
+| `GET /api/decay/policy` | Retention previews |
+| Socket.IO namespace `/neural` | Real-time events via `/socket.io` |

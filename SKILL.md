@@ -35,15 +35,15 @@ The following 11 admin tools are hidden unless `ENGRAM_ADMIN_TOOLS=1`:
 
 ## Usage
 
-Recall when prior decisions or project history would help. Recalled memories can be stale; verify before relying on them. Store durable decisions and their reasons, conventions, fixes, and user preferences, following the user's wishes about what to store. Routine chatter does not need storing.
+Recall when prior decisions or project history would help. Recalled memories can be stale; verify before relying on them. Store durable decisions and their reasons, conventions, fixes, and user preferences, following the user's wishes about what to store. Routine chatter does not need storing. If you also save a durable fact in a client’s own memory, store it in Engram so other clients can recall it.
 
-Memories are scoped to the current project by default. Use `global: true` only for facts about the user that hold in every project. Correct stale facts with `update_memory` by ID, or retire them with `forget`.
+In the default `project` mode, omitting `namespace` stores in the current project when one is available. On an unscoped client, set `namespace` for a project fact. Use `global: true` only for facts about the user that hold in every project. Isolated mode rejects global writes. Correct stale facts with `update_memory` using `id` and a replacement field, or retire them with `forget({ ids: [...] })`. Both tools accept full IDs or unique prefixes of at least eight characters.
 
 ## Key tools
 
 - **`recall_context`** — assembles relevant memories for a broad query and returns only formatted context text.
 - **`store_memory`** — saves episodic events, semantic facts (`type="semantic"`, `concept="..."`) or procedural patterns (`type="procedural"`).
-- **`search_memory`** — finds specific facts with semantic similarity search; memory content is limited to 500 characters per result.
+- **`search_memory`** — finds specific facts by similarity, with hybrid keyword search when `ENGRAM_HYBRID_SEARCH=1`. Both search and recall accept `since`, `until`, `tags` and `crossNamespace`. Search content is limited to 500 characters per result.
 - **`get_contradiction_tasks`** — returns possible conflicts with each memory's content limited to 500 characters.
 - **`complete_contradiction_check`** — records a judgment and an optional resolution strategy. `keep_newest` archives the older memory and applies when the newer fact fully replaces it.
 - **`get_distill_tasks` / `complete_distill`** — retrieves pending sessions and stores extracted facts before archiving each raw session.
@@ -53,10 +53,11 @@ Memories are scoped to the current project by default. Use `global: true` only f
 | Variable | Default | Description |
 |---|---|---|
 | `ENGRAM_DB_PATH` | `~/.engram/engram.db` | SQLite database path |
-| `ENGRAM_NAMESPACE_MODE` | `project` | Uses the git root, or the current directory outside git, as the project scope; also supports `none`, `filter`, and `isolated` |
-| `ENGRAM_NAMESPACE` | *(project scope)* | Leave unset; the server scopes to the current project. Isolated mode requires an explicit namespace. |
+| `ENGRAM_NAMESPACE_MODE` | `project` | Uses the main git root across worktrees, or the current directory outside git. Home and filesystem roots outside git and an unavailable working directory use global scope. Also supports `none`, `filter` and `isolated` |
+| `ENGRAM_NAMESPACE` | *(unset)* | Overrides project discovery, selects a scope in `filter` mode and is required in `isolated` mode |
 | `ENGRAM_ADMIN_TOOLS` | *(unset)* | Admin tools are hidden unless the value is exactly `1` |
-| `ENGRAM_EMBEDDING_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | Local ONNX embedding model (multilingual; an existing database keeps its model until re-embedded)  |
+| `ENGRAM_EMBEDDING_MODEL` | automatic | New stores use `Xenova/paraphrase-multilingual-MiniLM-L12-v2`. Existing stores use their stored model unless explicitly overridden |
+| `ENGRAM_GLOBAL_RULES` | enabled | Set to `0` to skip refreshing supported clients’ global memory instructions |
 
 ## Links
 

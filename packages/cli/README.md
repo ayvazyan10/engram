@@ -11,10 +11,10 @@ npm install -g @engram-ai-memory/cli
 ## Setup (one command)
 
 ```bash
-# Clone, build, configure, wire up MCP for your AI client
-engram setup
+# Clone, build, configure, and register MCP for Cursor
+engram setup --source cursor
 
-# Start the server (API + 3D dashboard on :4901)
+# Start the server (API + Atlas dashboard on :4901)
 engram start
 
 # Check everything is healthy
@@ -32,23 +32,20 @@ memories **and** the config file that gets written:
 | `codex` | `~/.codex/config.toml` |
 | `opencode` | `~/.config/opencode/opencode.json` |
 
-Any other value — including the default — registers nothing for `--source`:
-setup prints the JSON block for you to paste into your own client's config and
-reports the step as skipped. It never writes `~/.mcp.json`; no MCP client reads
-that path.
+`claude` and `claudecode` alias `claude-code`, `codeium` aliases `windsurf`, and `codex-cli` and `open-code` are also accepted. An unknown source (including the default `mcp-client`) prints a JSON block to paste and reports the client registration as skipped.
 
-If `~/.claude` exists, local setup also registers Engram at user scope in `~/.claude.json` and installs four hooks. SessionStart and UserPromptSubmit recall context. PostToolUse mirrors writes and edits to Claude project memory Markdown files, excluding `MEMORY.md`. Each save updates the same Engram record. SessionEnd captures a summary on `/clear` and skips `resume`. Pass `--no-claude-hooks` to skip the Claude auto-memory integration.
+If `~/.claude` exists and the Engram plugin is inactive, local setup also registers Engram at user scope in `~/.claude.json` and installs four hooks. SessionStart selects up to three pinned, handover or high-importance memories from the exact project and reports available updates or stale servers. UserPromptSubmit searches the running REST server. PostToolUse mirrors writes and edits to Claude project memory Markdown files, excluding `MEMORY.md`. Each save updates the same Engram record. SessionEnd captures a summary on `/clear` and skips `resume`. Pass `--no-claude-hooks` to skip the Claude auto-memory integration.
 
-`engram setup` writes a marked block to each supported, configured or detected client's global instruction file. `engram update` refreshes the block. Pass `--no-global-rules` to either command to skip that step. MCP also refreshes its client’s block at startup. Setup with the flag records `ENGRAM_GLOBAL_RULES=0` in its MCP entries, including with `--npx`. See [global instruction paths](../../docs/INTEGRATIONS.md#setup).
+`engram setup` writes a marked block to each supported, configured or detected client's global instruction file. `engram update` refreshes the block. Pass `--no-global-rules` to either command to skip that step. MCP also refreshes its client’s block at startup. Setup with the flag records `ENGRAM_GLOBAL_RULES=0` in its MCP entries, including with `--npx`. See [global instruction paths](https://github.com/ayvazyan10/engram/blob/master/docs/INTEGRATIONS.md#setup). Use `--no-mcp` during setup to skip client registration.
 
 ## Server Management
 
 ```bash
-engram setup                 # First-time setup wizard
+engram setup                 # Clone, build and configure without prompting
 engram setup --npx           # Fast setup — npx-based MCP config, no clone/build
 engram init                  # Write memory instructions into CLAUDE.md, .cursorrules, …
-engram init --client cursor  # Just one client (claude, cursor, windsurf, cline, all)
-engram update                # Pull, rebuild, re-link the CLI, restart the server
+engram init --client cursor  # Just one client (claude, cursor, windsurf, cline, codex, opencode, all)
+engram update                # Pull, rebuild, re-link the CLI, restart a running server after rebuilding
 engram update --force        # Same, but set local repo changes aside first
 engram update --no-restart   # Update without restarting the server
 engram start                 # Start server (detached)
@@ -67,11 +64,10 @@ be used in scripts:
 - **`stop`** waits for the process to exit and returns 1 if it may still be
   running. It refuses to signal a PID that does not own the configured port —
   after a reboot a stale pidfile can point at an unrelated process of yours.
-- **`doctor`** returns 1 when any check fails.
+- **`doctor`** returns 1 when the report counts an issue.
 - **`update`** returns 1 when the repository moved but the build, the global CLI
-  refresh or the restart did not complete. It keys on a build stamp as well as
-  git state, so the first run after upgrading always rebuilds rather than
-  reporting "already up to date" over a stale `dist/`.
+  refresh or the restart did not complete. A missing artifact, missing stamp or
+  stamp for a different revision also triggers a rebuild.
 
 `start --foreground` writes a pidfile too, so `status` and `stop` can see a
 server running in another terminal.
@@ -94,7 +90,7 @@ engram recall "what languages does the user prefer?" --raw
 engram stats
 
 # Forget
-engram forget a1b2c3d4-...
+engram forget a1b2c3d4-1111-4000-8000-000000000001  # Use the full ID from search --json
 
 # Export / Import
 engram export > backup.json
@@ -139,9 +135,11 @@ Multi-device sync against your own PostgreSQL database. See
 engram cloud connect <postgres-url>  # Configure sync
 engram cloud status                  # Sync state, last sync, pending pushes
 engram cloud sync                    # Run one push + pull now
+engram cloud sync --re-embed       # Sync local edits and convert cloud vectors to this device’s model
+engram cloud migrate-model <source> <target> # Convert the shared model after all devices sync and stop
 engram cloud devices                 # This device's sync identity
 engram cloud encrypt                 # Turn on end-to-end encryption
-engram cloud disconnect              # Stop syncing; the local database is untouched
+engram cloud disconnect              # Remove sync settings for future launches
 ```
 
 `cloud encrypt` takes the passphrase from the argument, then
@@ -152,8 +150,7 @@ other source set, it exits 1 rather than guessing.
 
 ## Reflection
 
-Engram never calls a model itself — the AI connected over MCP does the
-reasoning. These commands show what came of it:
+The AI connected over MCP does the reasoning for reflection. These commands show what came of it:
 
 ```bash
 engram reflect-status                # Is a reflection cycle due?
@@ -171,7 +168,7 @@ Config file: `~/.engram/config.json` (mode `0600` — it can hold a Postgres pas
 | `port` | `4901` | API server port |
 | `host` | `127.0.0.1` | Bind address |
 | `namespace` | `null` | Memory namespace |
-| `namespaceMode` | `none` | `none`, `filter`, or `isolated` |
+| `namespaceMode` | `project` | `project`, `none`, `filter`, or `isolated`. `start` maps `project` to `none` for the REST server |
 | `embeddingModel` | `''` (automatic) | Empty string selects the default `Xenova/paraphrase-multilingual-MiniLM-L12-v2` for new databases |
 | `indexPath` | `~/.engram/engram.db.index` | Vector index path |
 | `repoPath` | `~/.engram/repo` | Cloned repo path |
@@ -181,7 +178,7 @@ Config file: `~/.engram/config.json` (mode `0600` — it can hold a Postgres pas
 | `deviceName` | *(unset)* | Name for this device in sync status (defaults to the hostname) |
 
 Every key is settable with `engram configure set <key> <value>`. `port`,
-`namespaceMode`, `syncMode` and `syncInterval` are checked, and a bad value is
+`host`, `namespaceMode`, `syncMode` and `syncInterval` are checked, and a bad value is
 refused rather than written.
 
 ## Environment Variables
@@ -190,6 +187,8 @@ refused rather than written.
 |---|---|---|
 | `ENGRAM_HOME` | `~/.engram` | Root of the CLI's own state directory (config, pidfile, logs, build stamp, repo) |
 | `ENGRAM_SYNC_ENCRYPTION_KEY` | *(unset)* | Cloud-sync passphrase — read by `cloud encrypt`, and passed through to the server `start` launches |
+| `ENGRAM_API_KEY` | *(unset)* | Sent with CLI memory requests and by the installed REST hooks |
+| `ENGRAM_GLOBAL_RULES` | enabled | Set to `0` to skip global instruction updates |
 
 The CLI does not read `ENGRAM_DB_PATH` or `ENGRAM_INDEX_PATH` itself. It reads
 `${ENGRAM_HOME}/config.json` and **exports** those variables into the server
@@ -206,4 +205,4 @@ process it starts — change them with `engram configure set`.
 
 MIT
 
-Local setup scopes stored memories to the absolute git project root and recalls both project and shared memories. Outside git, storage uses the shared pool and recall is unscoped. SessionStart runs the local MCP context script; `engram update` refreshes previously installed hooks.
+In the default `project` mode, worktrees share their main repository’s namespace. Outside git, the current directory supplies the namespace, with global scope at home and filesystem roots. The prompt hook also searches shared semantic and procedural memories. SessionStart reads the local database, and `engram update` refreshes previously installed hooks. After an update from an older CLI, SessionStart can restore a missing memory-mirror hook.

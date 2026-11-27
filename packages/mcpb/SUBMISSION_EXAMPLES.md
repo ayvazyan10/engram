@@ -1,7 +1,7 @@
 # Engram MCP — Submission Examples
 
 Three worked examples for the official Claude MCP Directory submission.
-Each example shows the tool name, input, and expected output.
+Each example shows the tool name, input, and an illustrative result. IDs, dates, matches and confidence scores depend on the store and embedding model.
 
 Engram is the shared long-term memory for every AI tool this user works with — the same memories in Claude Code, Codex, Cursor and others. Store durable facts here so every tool can use them. When a recalled memory conflicts with the user's explicit instructions (CLAUDE.md, AGENTS.md, rules), the instructions win.
 There are 15 tools visible by default and 11 admin tools hidden
@@ -27,13 +27,17 @@ recalls relevant context and verifies any stale facts before relying on them.
 
 **Expected output:**
 ```text
-## Knowledge
-- [a1b2c3d4 · 2026-03-28] Node.js 22 + Fastify 5 + Drizzle ORM + SQLite (WAL mode)
-- [d4e5f6a7 · 2026-03-28] PM2 on Ubuntu 22.04 VPS, reverse-proxied by Caddy
+[NEURAL MEMORY CONTEXT]
 
-## Recent events
-- [a7b8c9d0 · 2026-03-28] Decided to drop Redis in favour of SQLite WAL for the job queue — simpler ops
-- [e0f1a2b3 · 2026-03-27] Migrated auth from JWT to session cookies after security review
+[KNOWLEDGE]
+• [a1b2c3d4 · 2026-03-28] Node.js 22 + Fastify 5 + Drizzle ORM + SQLite (WAL mode)
+• [d4e5f6a7 · 2026-03-28] PM2 on Ubuntu 22.04 VPS, reverse-proxied by Caddy
+
+[PAST EVENTS & CONVERSATIONS]
+• [a7b8c9d0 · 2026-03-28] [claude-code] Decided to drop Redis in favour of SQLite WAL for the job queue — simpler ops
+• [e0f1a2b3 · 2026-03-27] [claude-code] Migrated auth from JWT to session cookies after security review
+
+[END MEMORY CONTEXT]
 ```
 
 ---
@@ -61,9 +65,10 @@ decisions before suggesting an approach.
 **Expected output:**
 ```json
 {
-  "id": "m3n4o5p6-...",
+  "id": "a3b4c5d6-0000-4000-8000-000000000001",
   "type": "procedural",
   "importance": 0.95,
+  "deduplicated": false,
   "message": "Memory stored successfully"
 }
 ```
@@ -87,9 +92,10 @@ decisions before suggesting an approach.
   "count": 1,
   "results": [
     {
-      "id": "m3n4o5p6-...",
+      "id": "a3b4c5d6-0000-4000-8000-000000000001",
       "type": "procedural",
       "content": "We use drizzle-kit generate + drizzle-kit migrate for all schema changes. Never use drizzle-kit push — it bypasses migration history and broke prod once.",
+      "summary": null,
       "importance": 0.95,
       "source": "claude-code",
       "createdAt": "2026-03-28T10:14:32.000Z"
@@ -123,9 +129,10 @@ returns a possible conflict, which can be reviewed and resolved with the visible
 **Expected output:**
 ```json
 {
-  "id": "q7r8s9t0-...",
+  "id": "27f8a9b0-0d70-4dfd-8d8c-7bec29f372a1",
   "type": "semantic",
   "importance": 0.8,
+  "deduplicated": false,
   "message": "Memory stored successfully"
 }
 ```
@@ -137,7 +144,7 @@ returns a possible conflict, which can be reviewed and resolved with the visible
 **Input:**
 ```json
 {
-  "content": "We migrated production off PostgreSQL last month — it now runs on SQLite WAL with the LiteFS replication layer.",
+  "content": "The production database runs on PostgreSQL 16 with pgvector.",
   "type": "semantic",
   "concept": "production-database",
   "importance": 0.85
@@ -147,7 +154,7 @@ returns a possible conflict, which can be reviewed and resolved with the visible
 **Expected output:**
 ```json
 {
-  "id": "u1v2w3x4-...",
+  "id": "e1f2a3b4-836e-48c2-b20b-51768487a605",
   "type": "semantic",
   "importance": 0.85,
   "deduplicated": false,
@@ -156,12 +163,12 @@ returns a possible conflict, which can be reviewed and resolved with the visible
     "count": 1,
     "items": [
       {
-        "existingMemoryId": "q7r8s9t0-...",
+        "existingMemoryId": "27f8a9b0-0d70-4dfd-8d8c-7bec29f372a1",
         "content": "The production database runs on PostgreSQL 15 with pgvector.",
         "createdAt": "2026-03-01T10:00:00.000Z",
-        "confidence": 0.87,
-        "signals": ["semantic_negation", "concept_conflict"],
-        "suggestedStrategy": "keep_newest"
+        "confidence": 0.61,
+        "signals": ["value_change"],
+        "suggestedStrategy": "keep_both"
       }
     ]
   }
@@ -175,8 +182,8 @@ returns a possible conflict, which can be reviewed and resolved with the visible
 **Input:**
 ```json
 {
-  "sourceId": "u1v2w3x4-...",
-  "targetId": "q7r8s9t0-...",
+  "sourceId": "e1f2a3b4-836e-48c2-b20b-51768487a605",
+  "targetId": "27f8a9b0-0d70-4dfd-8d8c-7bec29f372a1",
   "verdict": "contradiction",
   "strategy": "keep_newest"
 }
@@ -185,13 +192,13 @@ returns a possible conflict, which can be reviewed and resolved with the visible
 **Expected output:**
 ```json
 {
-  "sourceId": "u1v2w3x4-...",
-  "targetId": "q7r8s9t0-...",
+  "sourceId": "e1f2a3b4-836e-48c2-b20b-51768487a605",
+  "targetId": "27f8a9b0-0d70-4dfd-8d8c-7bec29f372a1",
   "verdict": "contradiction",
   "resolution": {
     "resolved": true,
-    "keptId": "u1v2w3x4-...",
-    "archivedId": "q7r8s9t0-..."
+    "keptId": "e1f2a3b4-836e-48c2-b20b-51768487a605",
+    "archivedId": "27f8a9b0-0d70-4dfd-8d8c-7bec29f372a1"
   }
 }
 ```

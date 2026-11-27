@@ -8,7 +8,7 @@
 npm install @engram-ai-memory/vis
 ```
 
-Peer dependencies: `three`, `react`, `react-dom`, `@react-three/fiber`
+The package has no runtime or peer dependencies.
 
 ## Exports
 
@@ -17,6 +17,7 @@ Peer dependencies: `three`, `react`, `react-dom`, `@react-three/fiber`
 | `NeuralGraph` | Force-directed 3D layout — incremental simulation (`addNode` / `addEdge` / `tick`) |
 | `ColorMapper` | Maps an activation value (0–1) to a colour |
 | `AnimationEngine` | Activation decay loop and activity-event emission |
+| `GraphNode`, `GraphEdge`, `LayoutNode`, `ActivityEvent` | TypeScript types for graph data and activation events |
 
 ## Usage
 
@@ -49,15 +50,15 @@ engine.trigger(memoryId, 1.0);
 
 ## View Modes
 
-The Engram dashboard ships with 5 visualization modes:
+The Atlas dashboard’s Map switcher has five views:
 
 | Mode | Layout | Style |
 |---|---|---|
-| **Cosmos** | Fibonacci sphere | Metallic cores, slow rotation |
-| **Nebula** | Fibonacci sphere | Ghost orbs, high bloom |
-| **Neural Net** | Layered columns | Neon green, grid |
-| **Galaxy** | Spiral arms | Tiny stars, fast rotation |
-| **Clusters** | Cloud clusters | Plasma, moderate rotation |
+| **Map** | Memory regions | Meaning, Faults and Time lenses |
+| **Sky** | Meaning and age | WebGL night sky |
+| **Landscape** | Retention terrain | Decay preview |
+| **River** | History by region | Braided streams and time brush |
+| **Pulse** | Recall ranking | Read-only route and token budget |
 
 ## Links
 
